@@ -7,10 +7,11 @@ import { StatBoardView } from "@/components/StatBoardView";
 import { SuggestedMultis } from "@/components/SuggestedMultis";
 import { auth } from "@/lib/auth";
 import {
-  getUserLegsForGame,
+  getUserBetTracker,
   userIdForEmail,
-  type UserGameLeg,
+  type BetTrackerLeg,
 } from "@/lib/data/bets";
+import { teamColors } from "@/lib/afl/teamColors";
 import { getGameById } from "@/lib/data/games";
 import { getStatBoard, type StatBoard } from "@/lib/data/statboard";
 import { STAT_TYPES } from "@/lib/predictions/features";
@@ -32,14 +33,14 @@ export default async function GamePage({ params }: { params: { id: string } }) {
   }
   if (!game) notFound();
 
-  // The signed-in user's own legs on this game (for the live "your legs" panel).
-  let myLegs: UserGameLeg[] = [];
+  // The signed-in user's own legs on this game (for the live "your bets" panel).
+  let myLegs: BetTrackerLeg[] = [];
   try {
     const session = await auth();
     const email = session?.user?.email;
     if (email) {
       const userId = await userIdForEmail(email);
-      if (userId) myLegs = await getUserLegsForGame(userId, game.id);
+      if (userId) myLegs = await getUserBetTracker(userId, game.id);
     }
   } catch {
     myLegs = [];
@@ -107,33 +108,56 @@ export default async function GamePage({ params }: { params: { id: string } }) {
   );
 }
 
-function MyLegsPanel({ legs }: { legs: UserGameLeg[] }) {
+function MyLegsPanel({ legs }: { legs: BetTrackerLeg[] }) {
   const resultClass: Record<string, string> = {
     hit: "text-accent-win",
     miss: "text-accent-loss",
     pending: "text-slate-400",
     void: "text-slate-500",
   };
+  const resultLabel: Record<string, string> = {
+    hit: "✓ hit",
+    miss: "✗ miss",
+    pending: "live",
+    void: "void",
+  };
   return (
-    <section className="card">
+    <section className="card border-accent/40">
       <h2 className="text-sm font-semibold uppercase tracking-wide text-accent">
-        Your legs in this game
+        Your bets in this game
       </h2>
-      <ul className="mt-2 space-y-1">
-        {legs.map((leg, i) => (
-          <li key={i} className="flex items-center justify-between gap-2 text-sm">
-            <span className="text-slate-200">
-              {leg.playerName ? `${leg.playerName} · ` : ""}
-              <span className="capitalize">{leg.statType}</span> over {leg.line}
-            </span>
-            <span className={resultClass[leg.result] ?? "text-slate-400"}>
-              {leg.result}
-            </span>
-          </li>
-        ))}
+      <ul className="mt-3 space-y-2">
+        {legs.map((leg, i) => {
+          const c = teamColors(leg.team ?? "");
+          return (
+            <li key={i} className="flex items-center gap-3">
+              <span
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-xs font-bold"
+                style={{ background: c.bg, color: c.fg }}
+              >
+                {leg.jumper ?? "–"}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium text-white">
+                  {leg.playerName ?? "Player"}
+                </div>
+                <div className="text-xs text-slate-400">
+                  <span className="capitalize">{leg.statType}</span> over {leg.line}
+                  {leg.prediction != null
+                    ? ` · we predict ${leg.prediction.toFixed(1)}`
+                    : ""}
+                </div>
+              </div>
+              <span className={`text-sm font-semibold ${resultClass[leg.result] ?? "text-slate-400"}`}>
+                {resultLabel[leg.result] ?? leg.result}
+              </span>
+            </li>
+          );
+        })}
       </ul>
-      <p className="mt-2 text-xs text-slate-500">
-        Results fill in automatically once the game&apos;s player stats are published.
+      <p className="mt-3 text-xs text-slate-500">
+        Live running counts aren&apos;t available, but each leg ticks to ✓ or ✗
+        automatically once the game&apos;s player stats are published.
       </p>
     </section>
   );

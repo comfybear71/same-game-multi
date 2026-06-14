@@ -1,7 +1,8 @@
-import { and, asc, desc, eq, gte, lt, lte, ne } from "drizzle-orm";
+import { and, asc, desc, eq, gte, lt, lte, ne, or } from "drizzle-orm";
 
 import { db } from "@/db";
 import { games, type Game } from "@/db/schema";
+import { canonicalTeam } from "@/lib/afl/teams";
 
 // Read helpers for the UI. Server-only.
 
@@ -62,6 +63,28 @@ export async function getRecentResults(limit = 9): Promise<Game[]> {
 export async function getGameById(id: number): Promise<Game | null> {
   const rows = await db.select().from(games).where(eq(games.id, id)).limit(1);
   return rows[0] ?? null;
+}
+
+/** Find a game by its two team names (any order) — most recent match. */
+export async function findGameByTeams(
+  teamA: string | null,
+  teamB: string | null,
+): Promise<number | null> {
+  const a = canonicalTeam(teamA);
+  const b = canonicalTeam(teamB);
+  if (!a || !b) return null;
+  const rows = await db
+    .select({ id: games.id })
+    .from(games)
+    .where(
+      or(
+        and(eq(games.home, a), eq(games.away, b)),
+        and(eq(games.home, b), eq(games.away, a)),
+      ),
+    )
+    .orderBy(desc(games.commenceTime))
+    .limit(1);
+  return rows[0]?.id ?? null;
 }
 
 /** Games for a given round (for round-level dashboards). */

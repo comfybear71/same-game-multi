@@ -108,6 +108,7 @@ export function BetForm({ games }: { games: GameOption[] }) {
       };
       if (s.totalOdds != null) setTotalOdds(String(s.totalOdds));
       if (s.totalStake != null) setTotalStake(String(s.totalStake));
+      if (json.matchedGameId) setGameId(String(json.matchedGameId));
       const mapped = s.legs
         .filter((l) => l.statType)
         .map((l) => ({

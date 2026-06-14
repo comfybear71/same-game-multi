@@ -26,15 +26,18 @@ export interface ExtractedLeg {
 export interface ExtractedSlip {
   totalOdds: number | null;
   totalStake: number | null;
+  homeTeam: string | null;
+  awayTeam: string | null;
   legs: ExtractedLeg[];
 }
 
 const PROMPT = `You are reading a screenshot of an AFL (Australian Football League) same-game multi bet slip from a bookmaker (e.g. Sportsbet, TAB, Ladbrokes).
 
 Extract the bet into JSON. Respond with ONLY a JSON object — no prose, no code fences — matching exactly:
-{"totalOdds": number|null, "totalStake": number|null, "legs": [{"player": string, "statType": "disposals"|"marks"|"tackles"|"goals"|null, "line": number|null, "odds": number|null, "selection": "over"|"under"|null}]}
+{"totalOdds": number|null, "totalStake": number|null, "homeTeam": string|null, "awayTeam": string|null, "legs": [{"player": string, "statType": "disposals"|"marks"|"tackles"|"goals"|null, "line": number|null, "odds": number|null, "selection": "over"|"under"|null}]}
 
 Rules:
+- "homeTeam"/"awayTeam": the two clubs in the match (e.g. "St Kilda" and "Greater Western Sydney"), if shown.
 - One entry in "legs" per player selection on the slip.
 - "player" is the player's full name as shown.
 - "statType": map the market to one of disposals, marks, tackles, goals. If it's a different market (e.g. goal scorer, fantasy points), use null.
@@ -101,6 +104,8 @@ export async function readBetSlip(imageUrl: string): Promise<ExtractedSlip> {
   return {
     totalOdds: typeof parsed.totalOdds === "number" ? parsed.totalOdds : null,
     totalStake: typeof parsed.totalStake === "number" ? parsed.totalStake : null,
+    homeTeam: typeof parsed.homeTeam === "string" ? parsed.homeTeam : null,
+    awayTeam: typeof parsed.awayTeam === "string" ? parsed.awayTeam : null,
     legs: Array.isArray(parsed.legs)
       ? parsed.legs.map((l) => ({
           player: String(l.player ?? "").trim(),
