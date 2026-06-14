@@ -1,0 +1,77 @@
+import { desc, eq } from "drizzle-orm";
+
+import { db } from "@/db";
+import { betLegs, bets, users, type Bet, type BetLeg } from "@/db/schema";
+
+export interface BetWithLegs extends Bet {
+  legs: BetLeg[];
+}
+
+/** Resolve our internal user id from the session email. */
+export async function userIdForEmail(email: string): Promise<number | null> {
+  const rows = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.email, email.toLowerCase()))
+    .limit(1);
+  return rows[0]?.id ?? null;
+}
+
+/** All of a user's bets with their legs, newest first. */
+export async function getBetsForUser(userId: number): Promise<BetWithLegs[]> {
+  const slips = await db
+    .select()
+    .from(bets)
+    .where(eq(bets.userId, userId))
+    .orderBy(desc(bets.createdAt));
+
+  if (slips.length === 0) return [];
+
+  const result: BetWithLegs[] = [];
+  for (const slip of slips) {
+    const legs = await db
+      .select()
+      .from(betLegs)
+      .where(eq(betLegs.betId, slip.id));
+    result.push({ ...slip, legs });
+  }
+  return result;
+}
+
+export interface BetSummary {
+  total: number;
+  pending: number;
+  won: number;
+  lost: number;
+  staked: number;
+  returned: number;
+  roi: number | null;
+}
+
+export function summarise(slips: BetWithLegs[]): BetSummary {
+  let staked = 0;
+  let returned = 0;
+  const counts = { pending: 0, won: 0, lost: 0 };
+  for (const s of slips) {
+    staked += s.totalStake ?? 0;
+    if (s.status === "won") {
+      counts.won++;
+      returned += (s.totalStake ?? 0) * (s.totalOdds ?? 0);
+    } else if (s.status === "lost") {
+      counts.lost++;
+    } else if (s.status === "pending") {
+      counts.pending++;
+    }
+  }
+  const settledStake = staked; // simple ROI over all staked
+  const roi = settledStake > 0 ? (returned - settledStake) / settledStake : null;
+  return {
+    total: slips.length,
+    pending: counts.pending,
+    won: counts.won,
+    lost: counts.lost,
+    staked,
+    returned,
+    roi,
+  };
+}
