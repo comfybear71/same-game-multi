@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 
 import { GeneratePredictionsButton } from "@/components/GeneratePredictionsButton";
 import { StatBoardView } from "@/components/StatBoardView";
+import { SuggestedMultis } from "@/components/SuggestedMultis";
 import { getGameById } from "@/lib/data/games";
 import { getStatBoard, type StatBoard } from "@/lib/data/statboard";
 import { STAT_TYPES } from "@/lib/predictions/features";
@@ -52,7 +53,10 @@ export default async function GamePage({ params }: { params: { id: string } }) {
       </div>
 
       {hasData && board ? (
-        <StatBoardView board={board} />
+        <>
+          <SuggestedMultis gameId={game.id} />
+          <StatBoardView board={board} />
+        </>
       ) : (
         <div className="card text-sm text-slate-400">
           {upcoming ? (

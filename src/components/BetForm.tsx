@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { StatType } from "@/db/schema";
 
@@ -39,6 +39,36 @@ export function BetForm({ games }: { games: GameOption[] }) {
   const [totalStake, setTotalStake] = useState("");
   const [notes, setNotes] = useState("");
   const [legs, setLegs] = useState<LegInput[]>([emptyLeg()]);
+
+  // Prefill from a "Suggested multi" handoff (sessionStorage).
+  useEffect(() => {
+    const raw = sessionStorage.getItem("betPrefill");
+    if (!raw) return;
+    sessionStorage.removeItem("betPrefill");
+    try {
+      const p = JSON.parse(raw) as {
+        gameId?: number;
+        totalOdds?: number | null;
+        legs?: { playerName?: string; statType?: StatType; line?: number; odds?: number }[];
+      };
+      if (p.gameId) setGameId(String(p.gameId));
+      if (p.totalOdds != null) setTotalOdds(String(p.totalOdds));
+      if (Array.isArray(p.legs) && p.legs.length > 0) {
+        setLegs(
+          p.legs.map((l) => ({
+            playerName: l.playerName ?? "",
+            statType: (l.statType as StatType) ?? "disposals",
+            line: l.line != null ? String(l.line) : "",
+            odds: l.odds != null ? String(l.odds) : "",
+            confidence: "",
+            notes: "",
+          })),
+        );
+      }
+    } catch {
+      /* ignore malformed prefill */
+    }
+  }, []);
 
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
