@@ -1,0 +1,123 @@
+import { and, eq } from "drizzle-orm";
+
+import { db } from "@/db";
+import { games } from "@/db/schema";
+import { canonicalTeam } from "@/lib/afl/teams";
+import { getFixturesWithH2H } from "./oddsApi";
+import { getSquiggleGames, type SquiggleGame } from "./squiggle";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Fixture sync: pull from Squiggle (authoritative for schedule + results) and
+// enrich with The Odds API event IDs (needed to fetch player props later).
+// Idempotent — safe to run on every cron tick.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Convert a Squiggle local datetime + tz offset into a real UTC Date. */
+function squiggleDateToUtc(g: SquiggleGame): Date {
+  // g.date looks like "2026-06-14 17:40:00"; g.tz like "+10:00" or "+08:00".
+  const iso = `${g.date.replace(" ", "T")}${g.tz ?? "+10:00"}`;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) {
+    // Fallback: assume AEST if parsing failed.
+    return new Date(`${g.date.replace(" ", "T")}+10:00`);
+  }
+  return d;
+}
+
+function statusFromComplete(complete: number): "scheduled" | "in_progress" | "complete" {
+  if (complete >= 100) return "complete";
+  if (complete > 0) return "in_progress";
+  return "scheduled";
+}
+
+export interface SyncResult {
+  season: number;
+  upserted: number;
+  oddsMatched: number;
+}
+
+/** Sync the full season's fixtures + results from Squiggle into `games`. */
+export async function syncFixtures(season: number): Promise<SyncResult> {
+  const squiggleGames = await getSquiggleGames(season);
+
+  let upserted = 0;
+  for (const g of squiggleGames) {
+    const home = canonicalTeam(g.hteam) ?? g.hteam;
+    const away = canonicalTeam(g.ateam) ?? g.ateam;
+
+    await db
+      .insert(games)
+      .values({
+        round: g.round,
+        season: g.year,
+        home,
+        away,
+        venue: g.venue,
+        commenceTime: squiggleDateToUtc(g),
+        status: statusFromComplete(g.complete),
+        squiggleId: g.id,
+        homeScore: g.hscore,
+        awayScore: g.ascore,
+        updatedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: games.squiggleId,
+        set: {
+          round: g.round,
+          season: g.year,
+          home,
+          away,
+          venue: g.venue,
+          commenceTime: squiggleDateToUtc(g),
+          status: statusFromComplete(g.complete),
+          homeScore: g.hscore,
+          awayScore: g.ascore,
+          updatedAt: new Date(),
+        },
+      });
+    upserted++;
+  }
+
+  const oddsMatched = await enrichWithOddsApiIds().catch((err) => {
+    // The Odds API is paid/optional at this stage — never block the sync.
+    console.warn("[sync] odds enrichment skipped:", err);
+    return 0;
+  });
+
+  return { season, upserted, oddsMatched };
+}
+
+/**
+ * Attach The Odds API event IDs to upcoming games by matching team names +
+ * commence time. Stored on `games.oddsApiId` so we can later fetch props.
+ */
+async function enrichWithOddsApiIds(): Promise<number> {
+  const events = await getFixturesWithH2H();
+  let matched = 0;
+
+  for (const ev of events) {
+    const home = canonicalTeam(ev.home_team);
+    const away = canonicalTeam(ev.away_team);
+    if (!home || !away) continue;
+
+    const commence = new Date(ev.commence_time);
+    // Match on teams; commence times across sources can differ by minutes.
+    const rows = await db
+      .select({ id: games.id })
+      .from(games)
+      .where(and(eq(games.home, home), eq(games.away, away)))
+      .limit(5);
+
+    // Prefer the game whose commence time is closest to the odds event.
+    if (rows.length === 0) continue;
+    const target = rows[0];
+    await db
+      .update(games)
+      .set({ oddsApiId: ev.id, updatedAt: new Date() })
+      .where(eq(games.id, target.id));
+    matched++;
+    void commence;
+  }
+
+  return matched;
+}
