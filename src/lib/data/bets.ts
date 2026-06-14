@@ -1,7 +1,15 @@
 import { and, desc, eq } from "drizzle-orm";
 
 import { db } from "@/db";
-import { betLegs, bets, users, type Bet, type BetLeg } from "@/db/schema";
+import {
+  betLegs,
+  bets,
+  players,
+  predictions,
+  users,
+  type Bet,
+  type BetLeg,
+} from "@/db/schema";
 
 export interface BetWithLegs extends Bet {
   legs: BetLeg[];
@@ -38,24 +46,56 @@ export async function getBetsForUser(userId: number): Promise<BetWithLegs[]> {
   return result;
 }
 
-export interface UserGameLeg {
-  betId: number;
+export interface BetTrackerLeg {
   playerName: string | null;
+  jumper: number | null;
+  team: string | null;
   statType: string;
   line: number;
   odds: number | null;
   result: string;
+  prediction: number | null; // our Model C view, as a live proxy
 }
 
-/** A user's bet legs that reference a given game (for the live "your legs" panel). */
-export async function getUserLegsForGame(
+function normaliseName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z\s]/g, "").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * The user's legs that belong to a game — matched by leg.gameId OR (for legs
+ * that weren't linked) by player name against the game's predicted players.
+ * Enriched with jumper/team/our prediction for the live "your bets" panel.
+ */
+export async function getUserBetTracker(
   userId: number,
   gameId: number,
-): Promise<UserGameLeg[]> {
-  const rows = await db
+): Promise<BetTrackerLeg[]> {
+  const gamePlayers = await db
     .select({
-      betId: betLegs.betId,
+      name: players.name,
+      jumper: players.jumper,
+      team: players.team,
+      statType: predictions.statType,
+      value: predictions.predictedValue,
+    })
+    .from(predictions)
+    .innerJoin(players, eq(predictions.playerId, players.id))
+    .where(and(eq(predictions.gameId, gameId), eq(predictions.model, "C")));
+
+  const meta = new Map<string, { jumper: number | null; team: string }>();
+  const predByKey = new Map<string, number>();
+  const gameNames = new Set<string>();
+  for (const p of gamePlayers) {
+    const n = normaliseName(p.name);
+    gameNames.add(n);
+    meta.set(n, { jumper: p.jumper, team: p.team });
+    predByKey.set(`${n}:${p.statType}`, p.value);
+  }
+
+  const legs = await db
+    .select({
       playerName: betLegs.playerName,
+      gameId: betLegs.gameId,
       statType: betLegs.statType,
       line: betLegs.line,
       odds: betLegs.odds,
@@ -63,8 +103,26 @@ export async function getUserLegsForGame(
     })
     .from(betLegs)
     .innerJoin(bets, eq(betLegs.betId, bets.id))
-    .where(and(eq(bets.userId, userId), eq(betLegs.gameId, gameId)));
-  return rows;
+    .where(eq(bets.userId, userId));
+
+  const out: BetTrackerLeg[] = [];
+  for (const leg of legs) {
+    const n = leg.playerName ? normaliseName(leg.playerName) : "";
+    const belongs = leg.gameId === gameId || (leg.gameId == null && gameNames.has(n));
+    if (!belongs) continue;
+    const m = meta.get(n);
+    out.push({
+      playerName: leg.playerName,
+      jumper: m?.jumper ?? null,
+      team: m?.team ?? null,
+      statType: leg.statType,
+      line: leg.line,
+      odds: leg.odds,
+      result: leg.result,
+      prediction: predByKey.get(`${n}:${leg.statType}`) ?? null,
+    });
+  }
+  return out;
 }
 
 export interface BetSummary {
