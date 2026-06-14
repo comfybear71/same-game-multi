@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import { auth } from "@/lib/auth";
 import {
   getBetsForUser,
@@ -32,6 +34,9 @@ export default async function BetsPage() {
           <h1 className="text-2xl font-bold text-white">Bet tracker</h1>
           <p className="text-sm text-slate-400">Same-game multis and their legs.</p>
         </div>
+        <Link href="/bets/new" className="btn">
+          + New bet
+        </Link>
       </header>
 
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -54,8 +59,9 @@ export default async function BetsPage() {
         <div className="card">
           <p className="text-slate-300">No bets logged yet.</p>
           <p className="mt-1 text-sm text-slate-400">
-            The bet-entry form (player, stat, line, odds, stake, confidence,
-            screenshot upload to Vercel Blob, notes) is the next build step.
+            Tap <span className="font-medium text-slate-200">+ New bet</span> to log
+            a multi — upload your slip screenshot and let AI read the legs, or enter
+            them by hand.
           </p>
         </div>
       ) : (
@@ -105,14 +111,43 @@ function BetSlip({ slip }: { slip: BetWithLegs }) {
       </div>
       <ul className="mt-3 space-y-1">
         {slip.legs.map((leg) => (
-          <li key={leg.id} className="flex justify-between text-sm">
+          <li key={leg.id} className="flex justify-between gap-2 text-sm">
             <span className="text-slate-300">
+              {leg.playerName ? (
+                <span className="font-medium text-white">{leg.playerName} </span>
+              ) : null}
               {leg.statType} over {leg.line}
+              {leg.odds ? <span className="text-slate-500"> @ {leg.odds}</span> : null}
             </span>
-            <span className="text-slate-500">{leg.result}</span>
+            <span
+              className={
+                leg.result === "hit"
+                  ? "text-accent-win"
+                  : leg.result === "miss"
+                    ? "text-accent-loss"
+                    : "text-slate-500"
+              }
+            >
+              {leg.result}
+            </span>
           </li>
         ))}
       </ul>
+      {slip.screenshotUrl ? (
+        <a
+          href={slip.screenshotUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="mt-3 inline-block"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={slip.screenshotUrl}
+            alt="bet slip"
+            className="max-h-28 rounded-lg border border-surface-border"
+          />
+        </a>
+      ) : null}
     </div>
   );
 }

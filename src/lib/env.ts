@@ -15,6 +15,7 @@ const schema = z.object({
   NEXTAUTH_URL: z.string().url().optional(),
   ALLOWED_EMAILS: z.string().optional().default(""),
   BLOB_READ_WRITE_TOKEN: z.string().optional().default(""),
+  ANTHROPIC_API_KEY: z.string().optional().default(""),
   CRON_SECRET: z.string().optional().default(""),
   SQUIGGLE_CONTACT: z
     .string()
