@@ -1,7 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { PredictedVsAverageChart } from "@/components/charts/PredictedVsAverageChart";
+import { GeneratePredictionsButton } from "@/components/GeneratePredictionsButton";
+import { PredictionsTable } from "@/components/PredictionsTable";
+import { getGamePredictions, type PlayerPredictionRow } from "@/lib/data/predictions";
 import { getGameById } from "@/lib/data/games";
+import { STAT_TYPES } from "@/lib/predictions/features";
 import { formatAwst } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
@@ -11,10 +16,12 @@ export default async function GamePage({ params }: { params: { id: string } }) {
   if (Number.isNaN(id)) notFound();
 
   let game = null;
+  let rows: PlayerPredictionRow[] = [];
   try {
     game = await getGameById(id);
+    if (game) rows = await getGamePredictions(id);
   } catch {
-    game = null;
+    game = game ?? null;
   }
   if (!game) notFound();
 
@@ -35,55 +42,50 @@ export default async function GamePage({ params }: { params: { id: string } }) {
         <p className="mt-1 text-sm text-slate-400">{formatAwst(game.commenceTime)}</p>
       </header>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <SquadPanel team={game.home} side="Home" />
-        <SquadPanel team={game.away} side="Away" />
-      </div>
-
-      <section className="card">
-        <h2 className="text-lg font-semibold text-white">Predictions</h2>
-        <p className="mt-1 text-sm text-slate-400">
-          Three models per player per stat — A (season avg), B (form-weighted),
-          C (smart: form + opponent + venue). Player ingestion and per-player
-          predictions are wired next; see the build plan.
-        </p>
-        <ModelLegend />
-      </section>
-    </div>
-  );
-}
-
-function SquadPanel({ team, side }: { team: string; side: "Home" | "Away" }) {
-  return (
-    <div className="card">
-      <div className="flex items-center justify-between">
-        <h3 className="font-semibold text-white">{team}</h3>
-        <span className="pill bg-surface text-slate-400">{side}</span>
-      </div>
-      <p className="mt-3 text-sm text-slate-400">
-        Squad &amp; per-player stats (season avg, recent form, head-to-head,
-        injury status) appear here once player ingestion is connected. Injury
-        field shows &ldquo;—&rdquo; until a news source is wired.
-      </p>
-    </div>
-  );
-}
-
-function ModelLegend() {
-  const rows = [
-    { k: "A", name: "Simple", desc: "Season average" },
-    { k: "B", name: "Form-weighted", desc: "Recent form weighted over season" },
-    { k: "C", name: "Smart", desc: "Form × opponent strength × venue" },
-  ];
-  return (
-    <div className="mt-4 grid gap-2 sm:grid-cols-3">
-      {rows.map((r) => (
-        <div key={r.k} className="rounded-lg border border-surface-border p-3">
-          <div className="font-semibold text-accent">Model {r.k}</div>
-          <div className="text-sm text-white">{r.name}</div>
-          <div className="text-xs text-slate-400">{r.desc}</div>
+      <section className="card space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold text-white">Predictions</h2>
+            <p className="text-sm text-slate-400">
+              Models A (season avg), B (form-weighted), C (smart: form × opponent
+              × venue, from AFL Tables history). Edge = Model C minus the
+              bookmaker line.
+            </p>
+          </div>
+          <GeneratePredictionsButton gameId={game.id} />
         </div>
-      ))}
+
+        {rows.length === 0 ? (
+          <p className="text-sm text-slate-400">
+            No predictions yet. Hit &ldquo;Fetch props &amp; predict&rdquo; to pull
+            The Odds API player lines and run the models. (Requires{" "}
+            <code>ODDS_API_KEY</code>.)
+          </p>
+        ) : null}
+      </section>
+
+      {rows.length > 0 ? (
+        <>
+          <section className="card">
+            <h3 className="mb-1 font-semibold text-white">{rows[0].playerName}</h3>
+            <p className="mb-3 text-xs text-slate-400">
+              Model predictions vs bookmaker line.
+            </p>
+            <PredictedVsAverageChart data={chartData(rows[0])} />
+          </section>
+          <PredictionsTable rows={rows} />
+        </>
+      ) : null}
     </div>
   );
+}
+
+function chartData(row: PlayerPredictionRow) {
+  return STAT_TYPES.map((stat) => ({
+    stat,
+    line: row.stats[stat].line,
+    A: row.stats[stat].models.A,
+    B: row.stats[stat].models.B,
+    C: row.stats[stat].models.C,
+  }));
 }

@@ -43,9 +43,10 @@ src/
     api/
       auth/[...nextauth]/route.ts   NextAuth handler
       cron/refresh-fixtures/route.ts   daily fixtures + odds sync (Vercel Cron)
-      cron/settle-results/route.ts     morning-after results + bet settlement
+      cron/settle-results/route.ts     morning-after results + settle + accuracy
+      games/[id]/predict/route.ts      fetch props + generate predictions
       sync/route.ts                    manual fixture sync (signed-in users)
-    games/[id]/page.tsx             game detail (squads + predictions)
+    games/[id]/page.tsx             game detail (predictions table + chart)
     bets/page.tsx                   bet tracker
     review/page.tsx                 forecasting / accuracy dashboard
     login/page.tsx                  invite-only sign in
@@ -63,17 +64,24 @@ src/
     cron.ts                         cron auth + season helper
     settle.ts                       bet leg/slip settlement
     afl/teams.ts                    team-name canonicalisation across sources
-    data/                           UI read helpers (games, bets)
+    afl/venues.ts                   venue canonicalisation across sources
+    data/                           UI read helpers (games, bets, predictions,
+                                      accuracy leaderboard)
     ingest/                         external data clients
       cache.ts                      Postgres-backed fetch-through cache
       squiggle.ts                   Squiggle API (fixtures/results/standings)
       oddsApi.ts                    The Odds API (fixtures, h2h, player props)
-      aflTables.ts                  AFL Tables scrape (degrades gracefully)
+      props.ts                      store player prop lines for a game
+      aflTables.ts                  AFL Tables scrape (game logs + venue splits)
+      playerStats.ts                settle actual player stats from AFL Tables
       injuries.ts                   injury/news adapter (STUB)
       sync.ts                       upsert fixtures into the DB
     predictions/
       types.ts                      model inputs/outputs/params
       engine.ts                     Models A / B / C
+      features.ts                   history -> model inputs (factors, form)
+      generate.ts                   persist predictions for a game's players
+      accuracy.ts                   round scorecard -> model_accuracy
 drizzle/                            generated SQL migrations
 ```
 

@@ -23,8 +23,10 @@ protect the branch, and merge to `master`.
 - **Ingest:**
   - Squiggle client (fixtures/results/standings) with required User-Agent.
   - The Odds API client (fixtures+h2h, per-event player props) with aggressive
-    Postgres-backed caching to control paid usage.
-  - AFL Tables client — defensive shell that degrades gracefully (parsing TODO).
+    Postgres-backed caching to control paid usage. `props.ts` stores prop lines.
+  - AFL Tables client — **implemented & verified** parser for per-player
+    game-by-game logs + venue splits + current team; degrades gracefully.
+  - `playerStats.ts` settles actual player stats from AFL Tables after a game.
   - Injury/news adapter — interface + empty (noop) adapter.
   - `sync.ts` upserts Squiggle fixtures into `games` and attaches Odds API
     event IDs by canonical team name.
@@ -36,55 +38,69 @@ protect the branch, and merge to `master`.
 - **UI:** fixtures dashboard (next game highlighted + upcoming + recent
   results), game detail (squad panels + model legend), bet tracker (summary +
   slip list), review/forecasting placeholders. Manual "Refresh fixtures" button.
-- **Prediction engine:** Models A/B/C implemented as a pure, tunable function
-  library — see the open decision below.
+- **Prediction engine:** Models A/B/C implemented and wired end-to-end —
+  features from AFL Tables history, persisted predictions, settlement, and the
+  `model_accuracy` scorecard. See the section below.
+- **Edge Finder:** game detail shows our Model C vs the median bookmaker line
+  (edge column + chart).
 
-## Open decision — prediction engine (please confirm before I wire it in)
+## Prediction engine — decided & implemented
 
-The brief said: *"Confirm the plan before writing the prediction engine."* I've
-implemented the three models as a standalone, side-effect-free library
-(`src/lib/predictions/`) so the design is concrete, but I have **not** yet wired
-it into automated per-round generation or the accuracy scorecard. Proposed
-design:
+The model design was confirmed and is now wired end-to-end (parser → features →
+models → predictions → settlement → accuracy). Decisions made:
 
-- **Model A — Simple:** season average for the stat.
-- **Model B — Form-weighted:** linearly recency-weighted average of the last
-  `formWindow` (default 5) games, blended with the season average by
-  `formWeight` (default 0.6 toward form).
-- **Model C — Smart:** Model B × opponent factor × venue factor, each centred
-  on 1.0 and clamped to `[0.8, 1.2]` (default) to avoid silly extremes.
-  - *Opponent factor:* how much this opponent concedes of the stat vs league
-    average (e.g. a team that gives up lots of marks lifts a marks prediction).
-  - *Venue factor:* ground size / the player's record at the venue.
+- **Defaults kept:** `formWeight 0.6`, `formWindow 5`, factor clamp `0.8–1.2`
+  (`src/lib/predictions/types.ts` → `DEFAULT_PARAMS`). Easy to tune.
+- **Model C factors come from AFL Tables history** (as requested):
+  - *Opponent factor* = the player's mean for the stat vs that opponent ÷ career
+    mean, shrunk toward 1.0 by sample size (`SHRINK_K = 4`) so a couple of games
+    don't swing it. (This is the player's own matchup history — the most
+    reliable thing AFL Tables exposes per player.)
+  - *Venue factor* = the player's mean at the venue (from the AFL Tables venue
+    split table) ÷ career mean, same shrinkage. Falls back to 1.0 when the
+    venue name can't be matched (see `src/lib/afl/venues.ts`).
+- **Accuracy = MAE + line call** (both): `model_accuracy` stores mean absolute
+  error and the share of predictions on the correct side of the bookmaker line,
+  per model and stat. The Review page highlights the lowest-MAE model.
 
-Parameters live in `src/lib/predictions/types.ts` (`DEFAULT_PARAMS`).
+The models (`src/lib/predictions/engine.ts`):
+- **A — Simple:** current-season average (blends in prior season when thin).
+- **B — Form-weighted:** recency-weighted last-5 blended 60/40 with season avg.
+- **C — Smart:** Model B × opponent factor × venue factor (clamped).
 
-**Questions for you:**
-1. Are the default weights (`formWeight 0.6`, `formWindow 5`, clamp `0.8–1.2`)
-   a sensible starting point, or do you want different values?
-2. For Model C, how should opponent/venue factors be derived — from AFL Tables
-   match history, Squiggle, or kept as manual multipliers initially?
-3. What counts as a prediction "hit" for the accuracy scorecard — within ±X of
-   actual, or did it correctly call over/under the bookmaker line?
+**Verified:** the AFL Tables parser + feature/model pipeline were run against a
+live player page (Bontempelli, 271 games / 13 seasons) and produce sensible
+outputs. See `parseGameLog`/`buildInputs`/`runAllModels`.
 
-Once confirmed I'll: generate predictions per player/stat/model each round,
-store them, settle against actuals, and populate `model_accuracy` + the Review
-dashboard.
+### How predictions flow
 
-## Next steps (after the prediction-engine confirmation)
+1. On a game page, **Fetch props & predict** (`POST /api/games/[id]/predict`)
+   pulls The Odds API player lines (`syncPlayerProps` → `bookmaker_lines`) and
+   runs `generatePredictions`: resolves each propped player's team from AFL
+   Tables, builds inputs, persists A/B/C to `predictions`.
+2. Game detail shows the per-player table (A/B/C, line, edge = C − line, actual)
+   plus a Recharts bar chart.
+3. The morning-after cron settles actuals from AFL Tables
+   (`settleGamePlayerStats`), settles bet legs/slips, then
+   `computeRoundAccuracy` writes `model_accuracy`. The Review page renders the
+   leaderboard.
 
-1. **Player ingestion** — implement the AFL Tables parser in `aflTables.ts`
-   (season game-by-game stats), upsert `players` + `player_game_stats`. This
-   unlocks form, head-to-head history, settlement, and Model B/C inputs.
-2. **Player props storage** — loop Odds API event IDs, store lines in
-   `bookmaker_lines`; build the **Edge Finder** (our model vs bookie line).
-3. **Predictions pipeline** — generate + persist predictions; render the
-   per-player bar chart (predicted vs season avg), form line chart, and a
-   game-level summary chart.
-4. **Bet entry form** — create slips + legs (player, stat, line, odds, stake,
-   confidence, notes) with **screenshot upload to Vercel Blob**.
-5. **Review dashboard** — model leaderboard (MAE / hit rate per stat), ROI and
-   strike-rate-over-time charts from settled bets and `model_accuracy`.
+Prop fetching is **on-demand** (a button), not in the daily cron, to keep paid
+The Odds API usage bounded.
+
+## Next steps
+
+1. **Bet entry form** — create slips + legs (player, stat, line, odds, stake,
+   confidence, notes) with **screenshot upload to Vercel Blob**. Read/settle
+   paths already exist; only the create UI/route is missing.
+2. **Recent-form line chart** on the player view (engine + data are ready).
+3. **ROI / strike-rate over time** charts on Review (cumulative from settled
+   bets) — leaderboard is live; these time-series charts are the remaining bit.
+4. **Venue-name coverage** — extend `src/lib/afl/venues.ts` aliases as you spot
+   Squiggle/AFL Tables mismatches (factor is bounded + falls back to 1.0).
+5. **Player name → AFL Tables slug** edge cases — duplicate names / punctuation
+   get numeric suffixes on AFL Tables. The `players.aflTablesSlug` column exists
+   for manual overrides; wire it into `getPlayerHistory` calls where needed.
 6. **Injuries** — wire a real RSS/scrape adapter behind the existing interface.
 
 ## Known limitations / notes
@@ -93,8 +109,10 @@ dashboard.
   auth. To harden: switch to a NextAuth Email magic-link provider (needs SMTP
   env) or an OAuth provider (needs client id/secret env), then enforce the same
   allowlist in the `signIn` callback.
-- **AFL Tables parsing is unimplemented** by design (brittle HTML). The shell
-  fetches + caches; add the table selectors once verified against live markup.
+- **AFL Tables parsing is implemented** and verified against a live player page,
+  but it's still scraping brittle HTML — if AFL Tables changes layout, the
+  parser returns empty and the app degrades (factors → 1.0, stats stay pending)
+  rather than breaking. Re-verify selectors if data goes missing.
 - **Cron frequency:** Vercel Hobby allows daily crons, which is what's
   configured. Bump frequency on a paid plan if you want intra-day refreshes.
 - **Free-tier friendliness:** all external calls go through `lib/ingest/cache.ts`

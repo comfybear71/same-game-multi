@@ -11,20 +11,17 @@ import {
   YAxis,
 } from "recharts";
 
-export interface PredictedVsAverageDatum {
+export interface PredictedDatum {
   stat: string;
-  seasonAvg: number;
-  modelA: number;
-  modelB: number;
-  modelC: number;
+  line: number | null;
+  A: number | null;
+  B: number | null;
+  C: number | null;
 }
 
-// Per-player bar chart: season average vs each model's prediction, per stat.
-export function PredictedVsAverageChart({
-  data,
-}: {
-  data: PredictedVsAverageDatum[];
-}) {
+// Per-player bar chart: Models A/B/C predictions per stat, with the bookmaker
+// line alongside for reference.
+export function PredictedVsAverageChart({ data }: { data: PredictedDatum[] }) {
   return (
     <ResponsiveContainer width="100%" height={260}>
       <BarChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: -16 }}>
@@ -40,10 +37,10 @@ export function PredictedVsAverageChart({
           }}
         />
         <Legend wrapperStyle={{ fontSize: 12 }} />
-        <Bar dataKey="seasonAvg" name="Season avg" fill="#475569" radius={[3, 3, 0, 0]} />
-        <Bar dataKey="modelA" name="A · Simple" fill="#64748b" radius={[3, 3, 0, 0]} />
-        <Bar dataKey="modelB" name="B · Form" fill="#0ea5e9" radius={[3, 3, 0, 0]} />
-        <Bar dataKey="modelC" name="C · Smart" fill="#38bdf8" radius={[3, 3, 0, 0]} />
+        <Bar dataKey="line" name="Bookie line" fill="#475569" radius={[3, 3, 0, 0]} />
+        <Bar dataKey="A" name="A · Simple" fill="#64748b" radius={[3, 3, 0, 0]} />
+        <Bar dataKey="B" name="B · Form" fill="#0ea5e9" radius={[3, 3, 0, 0]} />
+        <Bar dataKey="C" name="C · Smart" fill="#38bdf8" radius={[3, 3, 0, 0]} />
       </BarChart>
     </ResponsiveContainer>
   );
