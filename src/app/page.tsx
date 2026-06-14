@@ -1,7 +1,13 @@
 import { GameCard } from "@/components/GameCard";
+import { LiveGameCard } from "@/components/LiveGameCard";
 import { SyncButton } from "@/components/SyncButton";
 import type { Game } from "@/db/schema";
-import { getNextGame, getRecentResults, getUpcomingGames } from "@/lib/data/games";
+import {
+  getInPlayGames,
+  getNextGame,
+  getRecentResults,
+  getUpcomingGames,
+} from "@/lib/data/games";
 
 export const dynamic = "force-dynamic";
 
@@ -9,13 +15,15 @@ export default async function HomePage() {
   let nextGame: Game | null = null;
   let upcoming: Game[] = [];
   let results: Game[] = [];
+  let inPlay: Game[] = [];
   let dbError: string | null = null;
 
   try {
-    [nextGame, upcoming, results] = await Promise.all([
+    [nextGame, upcoming, results, inPlay] = await Promise.all([
       getNextGame(),
       getUpcomingGames(),
       getRecentResults(),
+      getInPlayGames(),
     ]);
   } catch (err) {
     dbError = (err as Error).message;
@@ -41,6 +49,26 @@ export default async function HomePage() {
             hit &ldquo;Refresh fixtures&rdquo;. Details: {dbError}
           </p>
         </div>
+      ) : null}
+
+      {inPlay.length > 0 ? (
+        <section>
+          <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-accent-loss">
+            In play
+          </h2>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {inPlay.map((g) => (
+              <LiveGameCard
+                key={g.id}
+                gameId={g.id}
+                home={g.home}
+                away={g.away}
+                round={g.round}
+                venue={g.venue}
+              />
+            ))}
+          </div>
+        </section>
       ) : null}
 
       {nextGame ? (

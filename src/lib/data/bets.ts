@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 
 import { db } from "@/db";
 import { betLegs, bets, users, type Bet, type BetLeg } from "@/db/schema";
@@ -36,6 +36,35 @@ export async function getBetsForUser(userId: number): Promise<BetWithLegs[]> {
     result.push({ ...slip, legs });
   }
   return result;
+}
+
+export interface UserGameLeg {
+  betId: number;
+  playerName: string | null;
+  statType: string;
+  line: number;
+  odds: number | null;
+  result: string;
+}
+
+/** A user's bet legs that reference a given game (for the live "your legs" panel). */
+export async function getUserLegsForGame(
+  userId: number,
+  gameId: number,
+): Promise<UserGameLeg[]> {
+  const rows = await db
+    .select({
+      betId: betLegs.betId,
+      playerName: betLegs.playerName,
+      statType: betLegs.statType,
+      line: betLegs.line,
+      odds: betLegs.odds,
+      result: betLegs.result,
+    })
+    .from(betLegs)
+    .innerJoin(bets, eq(betLegs.betId, bets.id))
+    .where(and(eq(bets.userId, userId), eq(betLegs.gameId, gameId)));
+  return rows;
 }
 
 export interface BetSummary {
