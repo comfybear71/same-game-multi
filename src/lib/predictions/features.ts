@@ -119,6 +119,27 @@ export function buildInputs(
   }));
 }
 
+export interface StatFeature {
+  statType: StatType;
+  seasonAverage: number;
+  /** Most-recent-first stat values, up to `window` games (for charts + hit rate). */
+  recentForm: number[];
+}
+
+/** Season average + recent form per stat, for persistence + display. */
+export function buildStatFeatures(
+  history: PlayerHistory,
+  season: number,
+  window = 10,
+): StatFeature[] {
+  const log = history.gameLog;
+  return STAT_TYPES.map((stat) => ({
+    statType: stat,
+    seasonAverage: seasonAverage(log, season, stat),
+    recentForm: recentForm(log, stat, window),
+  }));
+}
+
 /** Actual stat values for a completed game (round + opponent match). */
 export function actualForGame(
   log: PlayerGameLogEntry[],

@@ -1,11 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { PredictedVsAverageChart } from "@/components/charts/PredictedVsAverageChart";
 import { GeneratePredictionsButton } from "@/components/GeneratePredictionsButton";
-import { PredictionsTable } from "@/components/PredictionsTable";
-import { getGamePredictions, type PlayerPredictionRow } from "@/lib/data/predictions";
+import { StatBoardView } from "@/components/StatBoardView";
 import { getGameById } from "@/lib/data/games";
+import { getStatBoard, type StatBoard } from "@/lib/data/statboard";
 import { STAT_TYPES } from "@/lib/predictions/features";
 import { formatAwst } from "@/lib/time";
 
@@ -16,17 +15,20 @@ export default async function GamePage({ params }: { params: { id: string } }) {
   if (Number.isNaN(id)) notFound();
 
   let game = null;
-  let rows: PlayerPredictionRow[] = [];
+  let board: StatBoard | null = null;
   try {
     game = await getGameById(id);
-    if (game) rows = await getGamePredictions(id);
+    if (game) board = await getStatBoard(id, game.home, game.away);
   } catch {
     game = game ?? null;
   }
   if (!game) notFound();
 
+  const hasData = board ? STAT_TYPES.some((s) => board!.byStat[s].length > 0) : false;
+  const upcoming = game.commenceTime.getTime() > Date.now();
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <Link href="/" className="text-sm text-accent hover:underline">
         ← Back to fixtures
       </Link>
@@ -42,50 +44,37 @@ export default async function GamePage({ params }: { params: { id: string } }) {
         <p className="mt-1 text-sm text-slate-400">{formatAwst(game.commenceTime)}</p>
       </header>
 
-      <section className="card space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-semibold text-white">Predictions</h2>
-            <p className="text-sm text-slate-400">
-              Models A (season avg), B (form-weighted), C (smart: form × opponent
-              × venue, from AFL Tables history). Edge = Model C minus the
-              bookmaker line.
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-slate-400">
+          Recent form, season average and our prediction vs the bookie line.
+        </p>
+        <GeneratePredictionsButton gameId={game.id} />
+      </div>
+
+      {hasData && board ? (
+        <StatBoardView board={board} />
+      ) : (
+        <div className="card text-sm text-slate-400">
+          {upcoming ? (
+            <>
+              <p className="text-slate-300">No player lines yet for this game.</p>
+              <p className="mt-1">
+                Bookmakers usually post player props about a day or two before the
+                game. Check back closer to kickoff, then tap{" "}
+                <span className="font-medium text-slate-200">
+                  &ldquo;Fetch props &amp; predict&rdquo;
+                </span>
+                .
+              </p>
+            </>
+          ) : (
+            <p>
+              No predictions were generated for this game (player props weren&apos;t
+              available).
             </p>
-          </div>
-          <GeneratePredictionsButton gameId={game.id} />
+          )}
         </div>
-
-        {rows.length === 0 ? (
-          <p className="text-sm text-slate-400">
-            No predictions yet. Hit &ldquo;Fetch props &amp; predict&rdquo; to pull
-            The Odds API player lines and run the models. (Requires{" "}
-            <code>ODDS_API_KEY</code>.)
-          </p>
-        ) : null}
-      </section>
-
-      {rows.length > 0 ? (
-        <>
-          <section className="card">
-            <h3 className="mb-1 font-semibold text-white">{rows[0].playerName}</h3>
-            <p className="mb-3 text-xs text-slate-400">
-              Model predictions vs bookmaker line.
-            </p>
-            <PredictedVsAverageChart data={chartData(rows[0])} />
-          </section>
-          <PredictionsTable rows={rows} />
-        </>
-      ) : null}
+      )}
     </div>
   );
-}
-
-function chartData(row: PlayerPredictionRow) {
-  return STAT_TYPES.map((stat) => ({
-    stat,
-    line: row.stats[stat].line,
-    A: row.stats[stat].models.A,
-    B: row.stats[stat].models.B,
-    C: row.stats[stat].models.C,
-  }));
 }

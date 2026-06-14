@@ -22,6 +22,7 @@ export interface PlayerGameLogEntry {
   season: number;
   round: string;
   opponent: string | null; // canonical team name
+  jumper: number | null; // guernsey number worn that game
   disposals: number;
   marks: number;
   tackles: number;
@@ -41,6 +42,7 @@ export interface PlayerHistory {
   gameLog: PlayerGameLogEntry[];
   venueSplits: VenueSplit[];
   team: string | null; // canonical team from the most recent season
+  jumper: number | null; // most recent guernsey number
 }
 
 /** Build the AFL Tables URL for a player name (best effort). */
@@ -98,10 +100,12 @@ export function parseGameLog(html: string): PlayerGameLogEntry[] {
       // A game row starts with the game number (possibly with ↑/↓ arrows).
       const gm = cells[0].replace(/[^0-9]/g, "");
       if (!/^\d+$/.test(gm)) continue;
+      const jumperRaw = cells[4].replace(/[^0-9]/g, "");
       games.push({
         season,
         round: cells[2],
         opponent: canonicalTeam(cells[1]),
+        jumper: jumperRaw ? parseInt(jumperRaw, 10) : null,
         marks: toInt(cells[6]),
         disposals: toInt(cells[8]),
         goals: toInt(cells[9]),
@@ -169,14 +173,24 @@ export async function getPlayerHistory(
       if (!res.ok) throw new Error(`AFL Tables ${url} -> ${res.status}`);
       return res.text();
     });
+    const gameLog = parseGameLog(html);
+    // Latest known guernsey number (walk back from the most recent game).
+    let jumper: number | null = null;
+    for (let i = gameLog.length - 1; i >= 0; i--) {
+      if (gameLog[i].jumper != null) {
+        jumper = gameLog[i].jumper;
+        break;
+      }
+    }
     return {
-      gameLog: parseGameLog(html),
+      gameLog,
       venueSplits: parseVenueSplits(html),
       team: parseLatestTeam(html),
+      jumper,
     };
   } catch (err) {
     console.warn(`[afltables] history failed for ${name}:`, err);
-    return { gameLog: [], venueSplits: [], team: null };
+    return { gameLog: [], venueSplits: [], team: null, jumper: null };
   }
 }
 

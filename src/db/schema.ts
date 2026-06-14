@@ -74,6 +74,8 @@ export const players = pgTable(
     id: serial("id").primaryKey(),
     name: text("name").notNull(),
     team: text("team").notNull(),
+    // Guernsey number (from the player's most recent match).
+    jumper: integer("jumper"),
     // Optional external identifiers to help dedupe across data sources.
     aflTablesSlug: text("afl_tables_slug"),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -184,6 +186,38 @@ export const predictions = pgTable(
       t.model,
     ),
     gameIdx: index("predictions_game_idx").on(t.gameId),
+  }),
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Per-player, per-stat features for a game (recent form for charts + hit rate)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const playerGameFeatures = pgTable(
+  "player_game_features",
+  {
+    id: serial("id").primaryKey(),
+    playerId: integer("player_id")
+      .notNull()
+      .references(() => players.id, { onDelete: "cascade" }),
+    gameId: integer("game_id")
+      .notNull()
+      .references(() => games.id, { onDelete: "cascade" }),
+    statType: statTypeEnum("stat_type").notNull(),
+    seasonAverage: doublePrecision("season_average"),
+    // Most-recent-first list of this stat across recent games (e.g. last 10).
+    recentForm: jsonb("recent_form").$type<number[]>().notNull().default([]),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    uniqueFeature: unique("player_game_feature_unique").on(
+      t.playerId,
+      t.gameId,
+      t.statType,
+    ),
+    gameIdx: index("pgf_game_idx").on(t.gameId),
   }),
 );
 
@@ -371,6 +405,7 @@ export type NewGame = typeof games.$inferInsert;
 export type Player = typeof players.$inferSelect;
 export type PlayerGameStat = typeof playerGameStats.$inferSelect;
 export type Prediction = typeof predictions.$inferSelect;
+export type PlayerGameFeature = typeof playerGameFeatures.$inferSelect;
 export type BookmakerLine = typeof bookmakerLines.$inferSelect;
 export type Bet = typeof bets.$inferSelect;
 export type BetLeg = typeof betLegs.$inferSelect;
