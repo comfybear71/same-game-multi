@@ -1,11 +1,10 @@
 "use client";
 
 import { signIn } from "next-auth/react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 
 function LoginForm() {
-  const router = useRouter();
   const params = useSearchParams();
   const callbackUrl = params.get("callbackUrl") || "/";
   const [email, setEmail] = useState("");
@@ -22,12 +21,14 @@ function LoginForm() {
       name,
       redirect: false,
     });
-    setLoading(false);
     if (res?.error) {
+      setLoading(false);
       setError("That email isn't on the allowlist.");
       return;
     }
-    router.push(callbackUrl);
+    // Hard navigation so the server-rendered layout/nav re-reads the new
+    // session immediately (avoids needing a manual page refresh).
+    window.location.assign(callbackUrl);
   }
 
   return (

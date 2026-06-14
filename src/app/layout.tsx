@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 
+import { BottomNav } from "@/components/BottomNav";
 import { Nav } from "@/components/Nav";
 import { auth } from "@/lib/auth";
 import { Providers } from "./providers";
@@ -13,6 +14,7 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
+  viewportFit: "cover",
   themeColor: "#0b0f17",
 };
 
@@ -27,7 +29,8 @@ export default async function RootLayout({
       <body>
         <Providers>
           <Nav email={session?.user?.email} />
-          <main className="mx-auto max-w-5xl px-4 py-6">{children}</main>
+          <main className="mx-auto max-w-5xl px-4 pb-28 pt-6 sm:pb-10">{children}</main>
+          {session?.user ? <BottomNav /> : null}
         </Providers>
       </body>
     </html>
