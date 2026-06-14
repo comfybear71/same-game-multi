@@ -164,6 +164,7 @@ export async function getPlayerHistory(
       const res = await fetch(url, {
         headers: { "User-Agent": "AFLMultiTracker/1.0" },
         cache: "no-store",
+        signal: AbortSignal.timeout(8000),
       });
       if (!res.ok) throw new Error(`AFL Tables ${url} -> ${res.status}`);
       return res.text();

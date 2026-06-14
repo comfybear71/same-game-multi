@@ -1,17 +1,22 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import { bookmakerLines, games, players, predictions } from "@/db/schema";
 import { canonicalTeam } from "@/lib/afl/teams";
 import { canonicalVenue } from "@/lib/afl/venues";
-import { getPlayerHistory } from "@/lib/ingest/aflTables";
+import { getPlayerHistory, type PlayerHistory } from "@/lib/ingest/aflTables";
 import { runAllModels } from "./engine";
 import { buildInputs } from "./features";
 import { DEFAULT_PARAMS } from "./types";
 
 // Generate and persist Models A/B/C predictions for every player who has a
 // bookmaker prop line on a game. Team/opponent/venue come from AFL Tables
-// history; players we can't resolve are skipped (their line is still stored).
+// history. Players we can't resolve are skipped (their line is still stored).
+//
+// Performance: histories are fetched concurrently (each is a ~270KB page) and
+// all predictions are written in a single batched upsert, so the first
+// (uncached) run completes within the serverless time budget. Subsequent runs
+// read cached HTML and are fast.
 
 export interface GenerateResult {
   gameId: number;
@@ -20,26 +25,24 @@ export interface GenerateResult {
   unresolved: string[];
 }
 
-async function upsertPlayer(name: string, team: string): Promise<number> {
-  const existing = await db
-    .select({ id: players.id })
-    .from(players)
-    .where(and(eq(players.name, name), eq(players.team, team)))
-    .limit(1);
-  if (existing[0]) return existing[0].id;
-  const inserted = await db
-    .insert(players)
-    .values({ name, team })
-    .onConflictDoNothing()
-    .returning({ id: players.id });
-  if (inserted[0]) return inserted[0].id;
-  // Race / conflict: re-read.
-  const again = await db
-    .select({ id: players.id })
-    .from(players)
-    .where(and(eq(players.name, name), eq(players.team, team)))
-    .limit(1);
-  return again[0].id;
+/** Run an async mapper over items with bounded concurrency. */
+async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < items.length) {
+      const idx = cursor++;
+      results[idx] = await fn(items[idx]);
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => worker()),
+  );
+  return results;
 }
 
 export async function generatePredictions(gameId: number): Promise<GenerateResult> {
@@ -57,30 +60,53 @@ export async function generatePredictions(gameId: number): Promise<GenerateResul
     .from(bookmakerLines)
     .where(eq(bookmakerLines.gameId, gameId));
   const names = [...new Set(lineRows.map((r) => r.name))];
+  if (names.length === 0) {
+    return { gameId, playersProcessed: 0, predictionsWritten: 0, unresolved: [] };
+  }
 
-  let predictionsWritten = 0;
-  const unresolved: string[] = [];
-  let playersProcessed = 0;
+  // Fetch all histories concurrently (bounded).
+  const fetched = await mapLimit(names, 5, async (name) => ({
+    name,
+    history: await getPlayerHistory(name),
+  }));
 
-  for (const name of names) {
-    const history = await getPlayerHistory(name);
-    if (history.gameLog.length === 0 || !history.team) {
-      unresolved.push(name);
-      continue;
-    }
+  const resolved = fetched.filter(
+    (f): f is { name: string; history: PlayerHistory & { team: string } } =>
+      f.history.gameLog.length > 0 && !!f.history.team,
+  );
+  const unresolved = fetched
+    .filter((f) => f.history.gameLog.length === 0 || !f.history.team)
+    .map((f) => f.name);
 
-    // Opponent = the team this player is NOT on.
-    let opponent: string | null = null;
-    if (history.team === homeC) opponent = awayC;
-    else if (history.team === awayC) opponent = homeC;
+  if (resolved.length === 0) {
+    return { gameId, playersProcessed: 0, predictionsWritten: 0, unresolved };
+  }
 
-    const playerId = await upsertPlayer(name, history.team);
+  // Batch-upsert players, then look up their ids in one query.
+  await db
+    .insert(players)
+    .values(resolved.map((r) => ({ name: r.name, team: r.history.team })))
+    .onConflictDoNothing();
+  const playerRows = await db
+    .select({ id: players.id, name: players.name, team: players.team })
+    .from(players)
+    .where(inArray(players.name, resolved.map((r) => r.name)));
+  const idByKey = new Map<string, number>();
+  for (const row of playerRows) idByKey.set(`${row.name}|${row.team}`, row.id);
 
-    // Backfill bookmaker line player ids.
+  // Build prediction rows + backfill bookmaker line player ids.
+  const predRows: (typeof predictions.$inferInsert)[] = [];
+  for (const { name, history } of resolved) {
+    const playerId = idByKey.get(`${name}|${history.team}`);
+    if (!playerId) continue;
+
     await db
       .update(bookmakerLines)
       .set({ playerId })
       .where(and(eq(bookmakerLines.gameId, gameId), eq(bookmakerLines.playerName, name)));
+
+    const opponent =
+      history.team === homeC ? awayC : history.team === awayC ? homeC : null;
 
     const inputs = buildInputs(history, {
       season,
@@ -88,33 +114,42 @@ export async function generatePredictions(gameId: number): Promise<GenerateResul
       venue,
       formWindow: DEFAULT_PARAMS.formWindow,
     });
-
     for (const input of inputs) {
-      const outputs = runAllModels(input, DEFAULT_PARAMS);
-      for (const out of outputs) {
-        await db
-          .insert(predictions)
-          .values({
-            playerId,
-            gameId,
-            statType: out.statType,
-            model: out.model,
-            predictedValue: out.predictedValue,
-          })
-          .onConflictDoUpdate({
-            target: [
-              predictions.playerId,
-              predictions.gameId,
-              predictions.statType,
-              predictions.model,
-            ],
-            set: { predictedValue: out.predictedValue, createdAt: new Date() },
-          });
-        predictionsWritten++;
+      for (const out of runAllModels(input, DEFAULT_PARAMS)) {
+        predRows.push({
+          playerId,
+          gameId,
+          statType: out.statType,
+          model: out.model,
+          predictedValue: out.predictedValue,
+        });
       }
     }
-    playersProcessed++;
   }
 
-  return { gameId, playersProcessed, predictionsWritten, unresolved };
+  // Single batched upsert for all predictions.
+  if (predRows.length > 0) {
+    await db
+      .insert(predictions)
+      .values(predRows)
+      .onConflictDoUpdate({
+        target: [
+          predictions.playerId,
+          predictions.gameId,
+          predictions.statType,
+          predictions.model,
+        ],
+        set: {
+          predictedValue: sql`excluded.predicted_value`,
+          createdAt: new Date(),
+        },
+      });
+  }
+
+  return {
+    gameId,
+    playersProcessed: resolved.length,
+    predictionsWritten: predRows.length,
+    unresolved,
+  };
 }

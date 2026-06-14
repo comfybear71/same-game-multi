@@ -8,7 +8,7 @@ import { generatePredictions } from "@/lib/predictions/generate";
 // A/B/C predictions for each propped player. Requires a signed-in user. Kept
 // out of the daily cron so paid prop calls stay on-demand.
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+export const maxDuration = 60;
 
 export async function POST(_req: Request, { params }: { params: { id: string } }) {
   const session = await auth();
