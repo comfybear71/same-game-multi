@@ -7,9 +7,11 @@ import { StatBoardView } from "@/components/StatBoardView";
 import { SuggestedMultis } from "@/components/SuggestedMultis";
 import { auth } from "@/lib/auth";
 import {
+  getPlayerBettingRecord,
   getUserBetTracker,
   userIdForEmail,
   type BetTrackerLeg,
+  type PlayerBetRecord,
 } from "@/lib/data/bets";
 import { teamColors } from "@/lib/afl/teamColors";
 import { getGameById } from "@/lib/data/games";
@@ -33,14 +35,20 @@ export default async function GamePage({ params }: { params: { id: string } }) {
   }
   if (!game) notFound();
 
-  // The signed-in user's own legs on this game (for the live "your bets" panel).
+  // The signed-in user's own legs on this game (for the live "your bets" panel)
+  // plus their per-player betting record (for the "last time you backed him…"
+  // hint on each card).
   let myLegs: BetTrackerLeg[] = [];
+  let playerRecord: Record<string, PlayerBetRecord> = {};
   try {
     const session = await auth();
     const email = session?.user?.email;
     if (email) {
       const userId = await userIdForEmail(email);
-      if (userId) myLegs = await getUserBetTracker(userId, game.id);
+      if (userId) {
+        myLegs = await getUserBetTracker(userId, game.id);
+        playerRecord = (await getPlayerBettingRecord(userId)).byKey;
+      }
     }
   } catch {
     myLegs = [];
@@ -80,7 +88,7 @@ export default async function GamePage({ params }: { params: { id: string } }) {
       {hasData && board ? (
         <>
           <SuggestedMultis gameId={game.id} />
-          <StatBoardView board={board} />
+          <StatBoardView board={board} record={playerRecord} />
         </>
       ) : (
         <div className="card text-sm text-slate-400">

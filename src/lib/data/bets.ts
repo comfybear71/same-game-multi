@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 
 import { db } from "@/db";
 import {
@@ -123,6 +123,119 @@ export async function getUserBetTracker(
     });
   }
   return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Player betting record — the "learning" layer. Across all of a user's settled
+// legs, how each player has gone against the lines you've backed: how often they
+// cleared it, the average line vs average actual, and the most recent result
+// ("last time you had him for 20.5 he got 19"). Surfaced on the bet tracker and
+// inline on the game board when you're about to back him again.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface PlayerBetRecord {
+  playerName: string;
+  statType: string;
+  bets: number; // settled legs (hit + miss)
+  hits: number;
+  misses: number;
+  avgLine: number;
+  avgActual: number | null;
+  lastLine: number;
+  lastActual: number | null;
+  lastResult: "hit" | "miss";
+}
+
+export interface PlayerRecordIndex {
+  list: PlayerBetRecord[]; // most-bet first
+  byKey: Record<string, PlayerBetRecord>; // key = `${normalisedName}:${stat}`
+}
+
+/** Lookup key for a player's record on a given stat. Mirror in any client. */
+export function playerRecordKey(name: string, stat: string): string {
+  return `${normaliseName(name)}:${stat}`;
+}
+
+/** Aggregate a user's settled legs into a per-player, per-stat record. */
+export async function getPlayerBettingRecord(
+  userId: number,
+): Promise<PlayerRecordIndex> {
+  // Newest first so the first leg we see per key is the most recent.
+  const legs = await db
+    .select({
+      playerName: betLegs.playerName,
+      statType: betLegs.statType,
+      line: betLegs.line,
+      actualValue: betLegs.actualValue,
+      result: betLegs.result,
+    })
+    .from(betLegs)
+    .innerJoin(bets, eq(betLegs.betId, bets.id))
+    .where(and(eq(bets.userId, userId), inArray(betLegs.result, ["hit", "miss"])))
+    .orderBy(desc(betLegs.createdAt));
+
+  interface Acc {
+    name: string;
+    stat: string;
+    bets: number;
+    hits: number;
+    lineSum: number;
+    actualSum: number;
+    actualN: number;
+    lastLine: number;
+    lastActual: number | null;
+    lastResult: "hit" | "miss";
+  }
+  const acc = new Map<string, Acc>();
+
+  for (const leg of legs) {
+    if (!leg.playerName) continue; // unnamed legs can't build a player record
+    const key = playerRecordKey(leg.playerName, leg.statType);
+    let a = acc.get(key);
+    if (!a) {
+      a = {
+        name: leg.playerName,
+        stat: leg.statType,
+        bets: 0,
+        hits: 0,
+        lineSum: 0,
+        actualSum: 0,
+        actualN: 0,
+        lastLine: leg.line,
+        lastActual: leg.actualValue,
+        lastResult: leg.result as "hit" | "miss",
+      };
+      acc.set(key, a);
+    }
+    a.bets++;
+    if (leg.result === "hit") a.hits++;
+    a.lineSum += leg.line;
+    if (leg.actualValue != null) {
+      a.actualSum += leg.actualValue;
+      a.actualN++;
+    }
+  }
+
+  const byKey: Record<string, PlayerBetRecord> = {};
+  const list: PlayerBetRecord[] = [];
+  for (const [key, a] of acc) {
+    const rec: PlayerBetRecord = {
+      playerName: a.name,
+      statType: a.stat,
+      bets: a.bets,
+      hits: a.hits,
+      misses: a.bets - a.hits,
+      avgLine: a.lineSum / a.bets,
+      avgActual: a.actualN > 0 ? a.actualSum / a.actualN : null,
+      lastLine: a.lastLine,
+      lastActual: a.lastActual,
+      lastResult: a.lastResult,
+    };
+    byKey[key] = rec;
+    list.push(rec);
+  }
+  list.sort((x, y) => y.bets - x.bets || x.playerName.localeCompare(y.playerName));
+  return { list, byKey };
 }
 
 export interface BetSummary {
