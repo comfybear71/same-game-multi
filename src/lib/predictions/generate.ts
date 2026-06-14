@@ -1,12 +1,18 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 
 import { db } from "@/db";
-import { bookmakerLines, games, players, predictions } from "@/db/schema";
+import {
+  bookmakerLines,
+  games,
+  players,
+  playerGameFeatures,
+  predictions,
+} from "@/db/schema";
 import { canonicalTeam } from "@/lib/afl/teams";
 import { canonicalVenue } from "@/lib/afl/venues";
 import { getPlayerHistory, type PlayerHistory } from "@/lib/ingest/aflTables";
 import { runAllModels } from "./engine";
-import { buildInputs } from "./features";
+import { buildInputs, buildStatFeatures } from "./features";
 import { DEFAULT_PARAMS } from "./types";
 
 // Generate and persist Models A/B/C predictions for every player who has a
@@ -82,11 +88,20 @@ export async function generatePredictions(gameId: number): Promise<GenerateResul
     return { gameId, playersProcessed: 0, predictionsWritten: 0, unresolved };
   }
 
-  // Batch-upsert players, then look up their ids in one query.
+  // Batch-upsert players (incl. guernsey number), then look up ids in one query.
   await db
     .insert(players)
-    .values(resolved.map((r) => ({ name: r.name, team: r.history.team })))
-    .onConflictDoNothing();
+    .values(
+      resolved.map((r) => ({
+        name: r.name,
+        team: r.history.team,
+        jumper: r.history.jumper,
+      })),
+    )
+    .onConflictDoUpdate({
+      target: [players.name, players.team],
+      set: { jumper: sql`excluded.jumper` },
+    });
   const playerRows = await db
     .select({ id: players.id, name: players.name, team: players.team })
     .from(players)
@@ -94,8 +109,9 @@ export async function generatePredictions(gameId: number): Promise<GenerateResul
   const idByKey = new Map<string, number>();
   for (const row of playerRows) idByKey.set(`${row.name}|${row.team}`, row.id);
 
-  // Build prediction rows + backfill bookmaker line player ids.
+  // Build prediction + feature rows, backfill bookmaker line player ids.
   const predRows: (typeof predictions.$inferInsert)[] = [];
+  const featureRows: (typeof playerGameFeatures.$inferInsert)[] = [];
   for (const { name, history } of resolved) {
     const playerId = idByKey.get(`${name}|${history.team}`);
     if (!playerId) continue;
@@ -125,6 +141,16 @@ export async function generatePredictions(gameId: number): Promise<GenerateResul
         });
       }
     }
+
+    for (const f of buildStatFeatures(history, season)) {
+      featureRows.push({
+        playerId,
+        gameId,
+        statType: f.statType,
+        seasonAverage: f.seasonAverage,
+        recentForm: f.recentForm,
+      });
+    }
   }
 
   // Single batched upsert for all predictions.
@@ -142,6 +168,24 @@ export async function generatePredictions(gameId: number): Promise<GenerateResul
         set: {
           predictedValue: sql`excluded.predicted_value`,
           createdAt: new Date(),
+        },
+      });
+  }
+
+  // Single batched upsert for all features.
+  if (featureRows.length > 0) {
+    await db
+      .insert(playerGameFeatures)
+      .values(featureRows)
+      .onConflictDoUpdate({
+        target: [
+          playerGameFeatures.playerId,
+          playerGameFeatures.gameId,
+          playerGameFeatures.statType,
+        ],
+        set: {
+          seasonAverage: sql`excluded.season_average`,
+          recentForm: sql`excluded.recent_form`,
         },
       });
   }
