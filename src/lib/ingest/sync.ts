@@ -33,6 +33,7 @@ function statusFromComplete(complete: number): "scheduled" | "in_progress" | "co
 export interface SyncResult {
   season: number;
   upserted: number;
+  skipped: number;
   oddsMatched: number;
 }
 
@@ -41,7 +42,14 @@ export async function syncFixtures(season: number): Promise<SyncResult> {
   const squiggleGames = await getSquiggleGames(season);
 
   let upserted = 0;
+  let skipped = 0;
   for (const g of squiggleGames) {
+    // Future/finals placeholders can come back without teams assigned yet.
+    // home/away are NOT NULL, so skip until both sides are known.
+    if (!g.hteam || !g.ateam) {
+      skipped++;
+      continue;
+    }
     const home = canonicalTeam(g.hteam) ?? g.hteam;
     const away = canonicalTeam(g.ateam) ?? g.ateam;
 
@@ -84,7 +92,7 @@ export async function syncFixtures(season: number): Promise<SyncResult> {
     return 0;
   });
 
-  return { season, upserted, oddsMatched };
+  return { season, upserted, skipped, oddsMatched };
 }
 
 /**
