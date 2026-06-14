@@ -97,6 +97,12 @@ function BetSlip({ slip }: { slip: BetWithLegs }) {
     lost: "bg-accent-loss/15 text-accent-loss",
     void: "bg-slate-600/30 text-slate-300",
   };
+  const settledLegs = slip.legs.filter(
+    (l) => l.result === "hit" || l.result === "miss",
+  );
+  const hits = settledLegs.filter((l) => l.result === "hit").length;
+  const misses = settledLegs.length - hits;
+
   return (
     <div className="card">
       <div className="flex items-center justify-between">
@@ -109,29 +115,66 @@ function BetSlip({ slip }: { slip: BetWithLegs }) {
         <span>Stake ${slip.totalStake?.toFixed(2) ?? "—"}</span>
         <span>Odds {slip.totalOdds?.toFixed(2) ?? "—"}</span>
       </div>
+      {settledLegs.length > 0 ? (
+        <p className="mt-2 text-sm">
+          <span className="font-semibold text-white">
+            {hits}/{settledLegs.length}
+          </span>{" "}
+          <span className="text-slate-400">legs hit</span>
+          {slip.status === "lost" && misses === 1 ? (
+            <span className="text-accent-pending">
+              {" "}
+              — one leg away from a winner
+            </span>
+          ) : null}
+        </p>
+      ) : null}
       <ul className="mt-3 space-y-1">
-        {slip.legs.map((leg) => (
-          <li key={leg.id} className="flex justify-between gap-2 text-sm">
-            <span className="text-slate-300">
-              {leg.playerName ? (
-                <span className="font-medium text-white">{leg.playerName} </span>
-              ) : null}
-              {leg.statType} over {leg.line}
-              {leg.odds ? <span className="text-slate-500"> @ {leg.odds}</span> : null}
-            </span>
-            <span
-              className={
-                leg.result === "hit"
-                  ? "text-accent-win"
-                  : leg.result === "miss"
-                    ? "text-accent-loss"
-                    : "text-slate-500"
-              }
-            >
-              {leg.result}
-            </span>
-          </li>
-        ))}
+        {slip.legs.map((leg) => {
+          const settled = leg.result === "hit" || leg.result === "miss";
+          const margin =
+            leg.actualValue != null ? leg.actualValue - leg.line : null;
+          return (
+            <li key={leg.id} className="flex justify-between gap-2 text-sm">
+              <span className="text-slate-300">
+                {leg.playerName ? (
+                  <span className="font-medium text-white">{leg.playerName} </span>
+                ) : null}
+                {leg.statType} over {leg.line}
+                {leg.odds ? <span className="text-slate-500"> @ {leg.odds}</span> : null}
+                {settled && leg.actualValue != null ? (
+                  <span className="text-slate-500">
+                    {" "}
+                    · got{" "}
+                    <span className="text-slate-300">{leg.actualValue}</span>
+                    {margin != null ? (
+                      <span
+                        className={
+                          margin > 0 ? "text-accent-win" : "text-accent-loss"
+                        }
+                      >
+                        {" "}
+                        ({margin > 0 ? "+" : ""}
+                        {margin})
+                      </span>
+                    ) : null}
+                  </span>
+                ) : null}
+              </span>
+              <span
+                className={
+                  leg.result === "hit"
+                    ? "text-accent-win"
+                    : leg.result === "miss"
+                      ? "text-accent-loss"
+                      : "text-slate-500"
+                }
+              >
+                {leg.result}
+              </span>
+            </li>
+          );
+        })}
       </ul>
       {slip.screenshotUrl ? (
         <a

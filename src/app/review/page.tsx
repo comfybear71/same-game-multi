@@ -1,6 +1,12 @@
 import { auth } from "@/lib/auth";
 import { getLeaderboard, type Leaderboard } from "@/lib/data/accuracy";
-import { getBetsForUser, summarise, userIdForEmail } from "@/lib/data/bets";
+import {
+  getBetsForUser,
+  getPlayerBettingRecord,
+  summarise,
+  userIdForEmail,
+  type PlayerBetRecord,
+} from "@/lib/data/bets";
 import { currentSeason } from "@/lib/cron";
 
 export const dynamic = "force-dynamic";
@@ -12,6 +18,7 @@ export default async function ReviewPage() {
   let board: Leaderboard | null = null;
   let roi: string = "—";
   let strike: string = "—";
+  let playerRecord: PlayerBetRecord[] = [];
   let dbError: string | null = null;
 
   try {
@@ -24,6 +31,7 @@ export default async function ReviewPage() {
         roi = summary.roi == null ? "—" : `${(summary.roi * 100).toFixed(0)}%`;
         const settled = summary.won + summary.lost;
         strike = settled === 0 ? "—" : `${Math.round((summary.won / settled) * 100)}%`;
+        playerRecord = (await getPlayerBettingRecord(userId)).list;
       }
     }
   } catch (err) {
@@ -93,6 +101,71 @@ export default async function ReviewPage() {
             cron records actuals and scores each model by mean absolute error and
             line-call accuracy per stat. The most accurate model is highlighted to
             guide the next week.
+          </p>
+        )}
+      </section>
+
+      <section className="card">
+        <h2 className="mb-1 text-lg font-semibold text-white">Your player record</h2>
+        <p className="mb-3 text-sm text-slate-400">
+          How each player has gone against the lines you&apos;ve backed — builds up
+          as your bets settle.
+        </p>
+        {playerRecord.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs uppercase tracking-wide text-slate-400">
+                  <th className="py-1 pr-4 font-medium">Player</th>
+                  <th className="py-1 pr-4 font-medium">Stat</th>
+                  <th className="py-1 pr-4 font-medium">Record</th>
+                  <th className="py-1 pr-4 font-medium">Avg line</th>
+                  <th className="py-1 pr-4 font-medium">Avg actual</th>
+                  <th className="py-1 pr-4 font-medium">Last time</th>
+                </tr>
+              </thead>
+              <tbody>
+                {playerRecord.map((r) => (
+                  <tr
+                    key={`${r.playerName}:${r.statType}`}
+                    className="border-t border-surface-border text-slate-300"
+                  >
+                    <td className="py-1.5 pr-4 font-semibold text-white">
+                      {r.playerName}
+                    </td>
+                    <td className="py-1.5 pr-4 capitalize">{r.statType}</td>
+                    <td className="py-1.5 pr-4">
+                      <span className="text-accent-win">{r.hits}</span>
+                      <span className="text-slate-500">/</span>
+                      <span>{r.bets}</span>
+                    </td>
+                    <td className="py-1.5 pr-4">{r.avgLine.toFixed(1)}</td>
+                    <td className="py-1.5 pr-4">
+                      {r.avgActual == null ? "—" : r.avgActual.toFixed(1)}
+                    </td>
+                    <td className="py-1.5 pr-4">
+                      {r.lastLine} →{" "}
+                      <span
+                        className={
+                          r.lastResult === "hit"
+                            ? "text-accent-win"
+                            : "text-accent-loss"
+                        }
+                      >
+                        {r.lastActual ?? "—"} {r.lastResult === "hit" ? "✓" : "✗"}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="text-sm text-slate-400">
+            No settled legs yet. Once your bets are graded the morning after each
+            game, every player you backed shows up here with their hit rate, the
+            average line you took vs what they actually got, and how they went last
+            time.
           </p>
         )}
       </section>

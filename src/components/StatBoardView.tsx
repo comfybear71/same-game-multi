@@ -5,7 +5,18 @@ import { useState } from "react";
 import { FormChart } from "@/components/charts/FormChart";
 import type { StatType } from "@/db/schema";
 import { teamColors } from "@/lib/afl/teamColors";
+import type { PlayerBetRecord } from "@/lib/data/bets";
 import type { PlayerStatRow, StatBoard } from "@/lib/data/statboard";
+
+// Mirror of playerRecordKey's normalisation (kept identical to lib/data/bets).
+function recordKey(name: string, stat: string): string {
+  const n = name
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return `${n}:${stat}`;
+}
 
 const STAT_TABS: { key: StatType; label: string }[] = [
   { key: "disposals", label: "Disposals" },
@@ -18,7 +29,13 @@ function fmt(n: number | null): string {
   return n == null ? "—" : n.toFixed(1);
 }
 
-export function StatBoardView({ board }: { board: StatBoard }) {
+export function StatBoardView({
+  board,
+  record = {},
+}: {
+  board: StatBoard;
+  record?: Record<string, PlayerBetRecord>;
+}) {
   const [stat, setStat] = useState<StatType>("disposals");
   const [team, setTeam] = useState<string>("all");
 
@@ -67,7 +84,11 @@ export function StatBoardView({ board }: { board: StatBoard }) {
       ) : (
         <div className="space-y-3">
           {rows.map((r) => (
-            <PlayerStatCard key={r.playerId} row={r} />
+            <PlayerStatCard
+              key={r.playerId}
+              row={r}
+              record={record[recordKey(r.name, stat)]}
+            />
           ))}
         </div>
       )}
@@ -75,7 +96,13 @@ export function StatBoardView({ board }: { board: StatBoard }) {
   );
 }
 
-function PlayerStatCard({ row }: { row: PlayerStatRow }) {
+function PlayerStatCard({
+  row,
+  record,
+}: {
+  row: PlayerStatRow;
+  record?: PlayerBetRecord;
+}) {
   const c = teamColors(row.team);
   const hasCall = row.prediction != null && row.line != null;
   const over = hasCall ? row.prediction! > row.line! : null;
@@ -127,6 +154,23 @@ function PlayerStatCard({ row }: { row: PlayerStatRow }) {
           )}
         </div>
       </div>
+
+      {/* Your past record on this player + stat (the "learning" hint) */}
+      {record && record.bets > 0 ? (
+        <div className="mt-3 rounded-md bg-surface px-2.5 py-1.5 text-xs text-slate-400">
+          <span className="font-semibold text-slate-200">Your record:</span>{" "}
+          <span className="text-accent-win">{record.hits}</span>
+          <span className="text-slate-500">/</span>
+          {record.bets} · last time {record.lastLine} →{" "}
+          <span
+            className={
+              record.lastResult === "hit" ? "text-accent-win" : "text-accent-loss"
+            }
+          >
+            {record.lastActual ?? "—"} {record.lastResult === "hit" ? "✓" : "✗"}
+          </span>
+        </div>
+      ) : null}
 
       {/* Last 5 form chips */}
       {last5.length > 0 ? (
