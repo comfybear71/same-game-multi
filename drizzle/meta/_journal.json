@@ -15,6 +15,13 @@
       "when": 1781412857675,
       "tag": "0001_nasty_typhoid_mary",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1781414363396,
+      "tag": "0002_brief_the_hand",
+      "breakpoints": true
     }
   ]
 }

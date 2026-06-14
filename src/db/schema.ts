@@ -269,6 +269,8 @@ export const bets = pgTable("bets", {
   totalStake: doublePrecision("total_stake"),
   status: betStatusEnum("status").notNull().default("pending"),
   notes: text("notes"),
+  // Screenshot of the whole slip (Vercel Blob URL).
+  screenshotUrl: text("screenshot_url"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -285,6 +287,8 @@ export const betLegs = pgTable(
     playerId: integer("player_id").references(() => players.id, {
       onDelete: "set null",
     }),
+    // Raw player name as entered / read from the slip (kept even when unmatched).
+    playerName: text("player_name"),
     gameId: integer("game_id").references(() => games.id, {
       onDelete: "set null",
     }),
