@@ -15,7 +15,11 @@ import { cached } from "./cache";
 const BASE = "https://api.the-odds-api.com/v4";
 const SPORT = "aussierules_afl";
 const REGIONS = "au";
-const PROP_MARKETS = "player_disposals,player_marks,player_tackles,player_goals";
+// AFL player-prop market keys per The Odds API. Note disposals is an
+// Over/Under market, but marks/tackles/goals are "Over only" markets with
+// distinct keys. Requesting an invalid key 422s the whole call.
+const PROP_MARKETS =
+  "player_disposals,player_marks_over,player_tackles_over,player_goals_scored_over";
 
 export interface OddsOutcome {
   name: string; // team name (h2h) or "Over"/"Under" (props) or player name
@@ -95,11 +99,11 @@ export function marketKeyToStat(
   switch (key) {
     case "player_disposals":
       return "disposals";
-    case "player_marks":
+    case "player_marks_over":
       return "marks";
-    case "player_tackles":
+    case "player_tackles_over":
       return "tackles";
-    case "player_goals":
+    case "player_goals_scored_over":
       return "goals";
     default:
       return null;
