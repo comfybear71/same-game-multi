@@ -44,6 +44,7 @@ const ALIASES: Record<string, AflTeam> = {
   "gold coast": "Gold Coast",
   "gold coast suns": "Gold Coast",
   "greater western sydney": "Greater Western Sydney",
+  "greater western sydney giants": "Greater Western Sydney",
   "gws": "Greater Western Sydney",
   "gws giants": "Greater Western Sydney",
   "hawthorn": "Hawthorn",
