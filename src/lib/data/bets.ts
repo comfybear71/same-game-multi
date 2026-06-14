@@ -51,19 +51,24 @@ export interface BetSummary {
 export function summarise(slips: BetWithLegs[]): BetSummary {
   let staked = 0;
   let returned = 0;
+  // ROI is computed over SETTLED bets only — pending stakes don't count as
+  // losses (that's why a fresh pending bet must not show -100%).
+  let settledStake = 0;
   const counts = { pending: 0, won: 0, lost: 0 };
   for (const s of slips) {
-    staked += s.totalStake ?? 0;
+    const stake = s.totalStake ?? 0;
+    staked += stake;
     if (s.status === "won") {
       counts.won++;
-      returned += (s.totalStake ?? 0) * (s.totalOdds ?? 0);
+      settledStake += stake;
+      returned += stake * (s.totalOdds ?? 0);
     } else if (s.status === "lost") {
       counts.lost++;
+      settledStake += stake;
     } else if (s.status === "pending") {
       counts.pending++;
     }
   }
-  const settledStake = staked; // simple ROI over all staked
   const roi = settledStake > 0 ? (returned - settledStake) / settledStake : null;
   return {
     total: slips.length,
