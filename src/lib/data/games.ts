@@ -1,9 +1,29 @@
-import { and, asc, desc, eq, gte, lt } from "drizzle-orm";
+import { and, asc, desc, eq, gte, lt, lte, ne } from "drizzle-orm";
 
 import { db } from "@/db";
 import { games, type Game } from "@/db/schema";
 
 // Read helpers for the UI. Server-only.
+
+/**
+ * Games that have started recently but aren't marked complete — candidates for
+ * "in play". The live score/clock is confirmed per-game from Squiggle in the UI.
+ */
+export async function getInPlayGames(): Promise<Game[]> {
+  const now = new Date();
+  const windowStart = new Date(now.getTime() - 4 * 60 * 60 * 1000);
+  return db
+    .select()
+    .from(games)
+    .where(
+      and(
+        gte(games.commenceTime, windowStart),
+        lte(games.commenceTime, now),
+        ne(games.status, "complete"),
+      ),
+    )
+    .orderBy(asc(games.commenceTime));
+}
 
 /** Next upcoming (scheduled or in-progress) game by commence time. */
 export async function getNextGame(): Promise<Game | null> {

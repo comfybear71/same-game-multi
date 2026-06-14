@@ -40,8 +40,6 @@ export interface Suggestion {
   rationale?: string;
 }
 
-const TIER_SIZE: Record<RiskTier, number> = { cautious: 3, medium: 4, high: 6 };
-
 function median(values: number[]): number | null {
   if (values.length === 0) return null;
   const s = [...values].sort((a, b) => a - b);
@@ -110,7 +108,7 @@ async function candidateLegs(gameId: number, focus: StatFocus): Promise<Suggeste
       team: p.team,
       statType: p.statType,
       line,
-      odds,
+      odds: odds == null ? null : Math.round(odds * 100) / 100,
       prediction: p.value,
       edge,
       hitRate,
@@ -120,53 +118,54 @@ async function candidateLegs(gameId: number, focus: StatFocus): Promise<Suggeste
   return legs;
 }
 
-function pickTier(all: SuggestedLeg[], tier: RiskTier, focus: StatFocus): Suggestion {
-  let pool = all.filter((l) => l.odds != null);
-  if (tier === "cautious") {
-    pool = pool.filter((l) => l.edge > 0 && (l.hitRate ?? 0) >= 0.5);
-    pool.sort((a, b) => b.confidence - a.confidence || (a.odds ?? 9) - (b.odds ?? 9));
-  } else if (tier === "medium") {
-    pool = pool.filter((l) => l.edge > 0);
-    // Reward confidence with a nod to payout.
-    pool.sort(
-      (a, b) =>
-        b.confidence + 0.15 * ((b.odds ?? 1) - 1) - (a.confidence + 0.15 * ((a.odds ?? 1) - 1)),
-    );
-  } else {
-    // High risk: our model still has to like it a bit, then chase the payout.
-    pool = pool.filter((l) => l.confidence >= 0.35);
-    pool.sort((a, b) => (b.odds ?? 0) - (a.odds ?? 0));
-  }
-
-  const chosen: SuggestedLeg[] = [];
-  const usedPlayers = new Set<number>();
-  const usedStats = new Set<StatType>();
+/** Greedily take up to n distinct-player legs not already used. */
+function pickN(pool: SuggestedLeg[], n: number, used: Set<number>): SuggestedLeg[] {
+  const out: SuggestedLeg[] = [];
   for (const l of pool) {
-    if (chosen.length >= TIER_SIZE[tier]) break;
-    if (usedPlayers.has(l.playerId)) continue;
-    // In "any" mode keep a multi readable: at most two stat types.
-    if (focus === "any" && !usedStats.has(l.statType) && usedStats.size >= 2) continue;
-    chosen.push(l);
-    usedPlayers.add(l.playerId);
-    usedStats.add(l.statType);
+    if (out.length >= n) break;
+    if (used.has(l.playerId)) continue;
+    out.push(l);
+    used.add(l.playerId);
   }
-
-  const estOdds =
-    chosen.length > 0
-      ? Math.round(chosen.reduce((p, l) => p * (l.odds ?? 1), 1) * 100) / 100
-      : null;
-  const avgConfidence =
-    chosen.length > 0 ? chosen.reduce((s, l) => s + l.confidence, 0) / chosen.length : 0;
-
-  return { tier, legs: chosen, estOdds, avgConfidence };
+  return out;
 }
 
+function finalize(tier: RiskTier, legs: SuggestedLeg[]): Suggestion {
+  const estOdds =
+    legs.length > 0
+      ? Math.round(legs.reduce((p, l) => p * (l.odds ?? 1), 1) * 100) / 100
+      : null;
+  const avgConfidence =
+    legs.length > 0 ? legs.reduce((s, l) => s + l.confidence, 0) / legs.length : 0;
+  return { tier, legs, estOdds, avgConfidence };
+}
+
+// Build the tiers as a ladder so risk + odds increase monotonically:
+//   cautious = the 3 highest-confidence legs (safe bankers)
+//   medium   = cautious + 1 moderate-odds value leg
+//   high     = medium + the 2 longest-odds value legs
+// Distinct players throughout; "high" naturally carries the longshots.
 export async function buildSuggestions(
   gameId: number,
   focus: StatFocus = "any",
 ): Promise<Suggestion[]> {
   const legs = await candidateLegs(gameId, focus);
-  return (["cautious", "medium", "high"] as RiskTier[]).map((t) =>
-    pickTier(legs, t, focus),
-  );
+  const positive = legs.filter((l) => l.odds != null && l.edge > 0);
+
+  const byConfidence = [...positive].sort((a, b) => b.confidence - a.confidence);
+  const byOdds = [...positive].sort((a, b) => (b.odds ?? 0) - (a.odds ?? 0));
+
+  const used = new Set<number>();
+  const cautiousLegs = pickN(byConfidence, 3, used);
+
+  const valuePool = byConfidence.filter((l) => (l.odds ?? 0) >= 1.9);
+  const mediumLegs = [...cautiousLegs, ...pickN(valuePool, 1, used)];
+
+  const highLegs = [...mediumLegs, ...pickN(byOdds, 2, used)];
+
+  return [
+    finalize("cautious", cautiousLegs),
+    finalize("medium", mediumLegs),
+    finalize("high", highLegs),
+  ];
 }

@@ -27,8 +27,9 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   try {
     // Cache the (deterministic picks + Claude rationale) so repeated button
     // presses don't re-bill Claude. Refreshes when predictions/odds change.
+    // The version segment lets a logic change invalidate stale cached results.
     const suggestions = await cached(
-      `suggest:${gameId}:${focus}`,
+      `suggest:v2:${gameId}:${focus}`,
       20 * 60,
       async () => explainMultis(await buildSuggestions(gameId, focus)),
     );

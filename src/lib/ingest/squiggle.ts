@@ -22,6 +22,15 @@ export interface SquiggleGame {
   tz: string;
   complete: number; // 0..100 (% complete)
   winner: string | null;
+  timestr?: string | null; // live clock, e.g. "Q2 17:29" or "Full Time"
+}
+
+export interface LiveGameState {
+  status: "scheduled" | "live" | "final";
+  timestr: string | null;
+  homeScore: number | null;
+  awayScore: number | null;
+  complete: number;
 }
 
 export interface SquiggleStanding {
@@ -83,4 +92,27 @@ export async function getCompletedSquiggleGames(
 ): Promise<SquiggleGame[]> {
   const games = await getSquiggleGames(year, round);
   return games.filter((g) => g.complete === 100);
+}
+
+/** Live score/clock for one game (short 60s cache so it stays fresh in-play). */
+export async function getLiveGameState(
+  year: number,
+  round: number,
+  squiggleId: number,
+): Promise<LiveGameState | null> {
+  const key = `squiggle:live:${year}:${round}`;
+  const data = await cached<{ games: SquiggleGame[] }>(key, 60, () =>
+    squiggleFetch<{ games: SquiggleGame[] }>(`q=games;year=${year};round=${round}`),
+  );
+  const g = (data.games ?? []).find((x) => x.id === squiggleId);
+  if (!g) return null;
+  const status: LiveGameState["status"] =
+    g.complete >= 100 ? "final" : g.complete > 0 ? "live" : "scheduled";
+  return {
+    status,
+    timestr: g.timestr ?? null,
+    homeScore: g.hscore,
+    awayScore: g.ascore,
+    complete: g.complete,
+  };
 }
