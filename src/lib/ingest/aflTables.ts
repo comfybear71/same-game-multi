@@ -157,12 +157,61 @@ export function parseVenueSplits(html: string): VenueSplit[] {
   return splits;
 }
 
-/** Fetch + parse a player's full history. Returns empty on any failure. */
-export async function getPlayerHistory(
-  name: string,
-  slugOverride?: string | null,
-): Promise<PlayerHistory> {
-  const url = playerUrl(name, slugOverride);
+// Bookmakers often use a player's formal first name where AFL Tables uses the
+// common short form (and vice versa). Try these nickname variants when the
+// direct lookup finds nothing.
+const FIRST_NAME_NICKNAMES: Record<string, string[]> = {
+  jackson: ["jack"],
+  daniel: ["dan", "danny"],
+  lachlan: ["lachie", "lachy"],
+  joseph: ["joe"],
+  mitchito: ["mitch"],
+  mitchell: ["mitch"],
+  alixzander: ["alix"],
+  matthew: ["matt"],
+  nicholas: ["nick", "nic"],
+  samuel: ["sam"],
+  benjamin: ["ben"],
+  thomas: ["tom"],
+  harrison: ["harry"],
+  zachary: ["zac", "zach"],
+  maximilian: ["max"],
+  cameron: ["cam"],
+  anthony: ["tony"],
+  michael: ["mick", "mike"],
+  patrick: ["paddy", "pat"],
+  william: ["will", "billy"],
+  joshua: ["josh"],
+  christopher: ["chris"],
+  timothy: ["tim"],
+  dominic: ["dom"],
+  oliver: ["ollie"],
+  edward: ["ed", "ned"],
+};
+
+function cap(word: string): string {
+  return word.charAt(0).toUpperCase() + word.slice(1);
+}
+
+/** Candidate full names to try (formal first, then nickname variants). */
+function nameCandidates(name: string): string[] {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length < 2) return [name];
+  const first = parts[0].toLowerCase();
+  const rest = parts.slice(1).join(" ");
+  const out = [name];
+  for (const nick of FIRST_NAME_NICKNAMES[first] ?? []) {
+    out.push(`${cap(nick)} ${rest}`);
+  }
+  return out;
+}
+
+function emptyHistory(): PlayerHistory {
+  return { gameLog: [], venueSplits: [], team: null, jumper: null };
+}
+
+/** Fetch + parse one AFL Tables URL. Returns null if missing/empty. */
+async function fetchHistoryAt(url: string): Promise<PlayerHistory | null> {
   try {
     const html = await cached<string>(`afltables:${url}`, 12 * 60 * 60, async () => {
       const res = await fetch(url, {
@@ -174,6 +223,7 @@ export async function getPlayerHistory(
       return res.text();
     });
     const gameLog = parseGameLog(html);
+    if (gameLog.length === 0) return null;
     // Latest known guernsey number (walk back from the most recent game).
     let jumper: number | null = null;
     for (let i = gameLog.length - 1; i >= 0; i--) {
@@ -188,10 +238,25 @@ export async function getPlayerHistory(
       team: parseLatestTeam(html),
       jumper,
     };
-  } catch (err) {
-    console.warn(`[afltables] history failed for ${name}:`, err);
-    return { gameLog: [], venueSplits: [], team: null, jumper: null };
+  } catch {
+    return null;
   }
+}
+
+/** Fetch + parse a player's history, trying nickname variants. */
+export async function getPlayerHistory(
+  name: string,
+  slugOverride?: string | null,
+): Promise<PlayerHistory> {
+  if (slugOverride) {
+    return (await fetchHistoryAt(playerUrl(name, slugOverride))) ?? emptyHistory();
+  }
+  for (const candidate of nameCandidates(name)) {
+    const history = await fetchHistoryAt(playerUrl(candidate));
+    if (history) return history;
+  }
+  console.warn(`[afltables] no history for ${name}`);
+  return emptyHistory();
 }
 
 /** True when AFL Tables is reachable; used for a soft "source down" badge. */
