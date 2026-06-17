@@ -7,6 +7,7 @@ import type { StatType } from "@/db/schema";
 import { teamColors } from "@/lib/afl/teamColors";
 import type { PlayerBetRecord } from "@/lib/data/bets";
 import type { PlayerStatRow, StatBoard } from "@/lib/data/statboard";
+import { floorStat, floorStatLabel, lineTarget, signed } from "@/lib/format";
 import type { InjuryStatus } from "@/lib/ingest/injuries";
 
 // Mirror of playerRecordKey's normalisation (kept identical to lib/data/bets).
@@ -31,10 +32,6 @@ function aiPickLine(picks: Partial<Record<StatType, number>>): string | null {
     (t) => `${picks[t.key]} ${t.label.toLowerCase()}`,
   );
   return parts.length > 0 ? parts.join(" · ") : null;
-}
-
-function fmt(n: number | null): string {
-  return n == null ? "—" : n.toFixed(1);
 }
 
 // Coarse news status -> chip label + colour. "unknown" never renders a chip.
@@ -122,8 +119,14 @@ function PlayerStatCard({
 }) {
   const c = teamColors(row.team);
   const newsChip = row.news ? NEWS_CHIP[row.news.status] : null;
-  const hasCall = row.prediction != null && row.line != null;
-  const over = hasCall ? row.prediction! > row.line! : null;
+  // Whole-number view: the count the player must reach, and our floored
+  // (downside-favouring) projection. The call + edge derive from these so
+  // everything on the card stays decimal-free and internally consistent.
+  const needed = row.line != null ? lineTarget(row.line) : null;
+  const proj = row.prediction != null ? floorStat(row.prediction) : null;
+  const hasCall = proj != null && needed != null;
+  const over = hasCall ? proj >= needed : null;
+  const wholeEdge = hasCall ? proj - needed : null;
   // Last 5, displayed oldest -> newest with the most recent highlighted.
   const last5 = row.recentForm.slice(0, 5).reverse();
 
@@ -149,7 +152,7 @@ function PlayerStatCard({
           </div>
           <div className="text-xs text-slate-400">
             {row.team}
-            {row.seasonAvg != null ? ` · Season avg ${row.seasonAvg.toFixed(1)}` : ""}
+            {row.seasonAvg != null ? ` · Season avg ${floorStat(row.seasonAvg)}` : ""}
           </div>
         </div>
         <div className="text-right">
@@ -160,22 +163,21 @@ function PlayerStatCard({
                   over ? "text-accent-win" : "text-accent-loss"
                 }`}
               >
-                {over ? "OVER" : "UNDER"} {fmt(row.prediction)}
+                {over ? "OVER" : "UNDER"} {proj}
               </div>
               <div className="text-xs text-slate-400">
-                Line {row.line}
-                {row.edge != null ? (
+                Need {needed}+
+                {wholeEdge != null ? (
                   <span className={over ? "text-accent-win" : "text-accent-loss"}>
                     {" "}
-                    ({row.edge > 0 ? "+" : ""}
-                    {row.edge.toFixed(1)})
+                    ({signed(wholeEdge)})
                   </span>
                 ) : null}
               </div>
             </>
           ) : (
             <div className="text-sm text-slate-300">
-              Pred {fmt(row.prediction)}
+              Pred {floorStatLabel(row.prediction)}
               <div className="text-xs text-slate-500">no line</div>
             </div>
           )}
@@ -274,7 +276,7 @@ function PlayerStatCard({
 
       {/* Model detail (de-emphasised) */}
       <div className="mt-1 text-[11px] text-slate-500">
-        Models · A {fmt(row.models.A)} · B {fmt(row.models.B)} · C {fmt(row.models.C)}
+        Models · A {floorStatLabel(row.models.A)} · B {floorStatLabel(row.models.B)} · C {floorStatLabel(row.models.C)}
       </div>
     </div>
   );

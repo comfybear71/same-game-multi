@@ -13,10 +13,15 @@ export function SettleNowButton() {
     setMsg(null);
     try {
       const res = await fetch("/api/bets/settle", { method: "POST" });
-      const json = await res.json();
-      if (!res.ok || !json.ok) throw new Error(json.error || "Failed");
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.ok) {
+        throw new Error(json?.error || `Settle failed (HTTP ${res.status})`);
+      }
+      const { legsSettled, slipsSettled } = json.settle;
       setMsg(
-        `Checked ${json.statsRecorded} player stats, settled ${json.settle.legsSettled} legs / ${json.settle.slipsSettled} slips.`,
+        legsSettled === 0
+          ? "Nothing new to settle yet — results may not be published. You can set any leg manually below."
+          : `Settled ${legsSettled} leg${legsSettled === 1 ? "" : "s"} / ${slipsSettled} slip${slipsSettled === 1 ? "" : "s"}.`,
       );
       router.refresh();
     } catch (err) {

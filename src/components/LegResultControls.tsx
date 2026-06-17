@@ -3,6 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { targetLabel } from "@/lib/format";
+
 // Manual override for a pending leg that auto-settlement can't reach (e.g.
 // the bet wasn't linked to a game/player, or AFL Tables never published the
 // game). Lets you record the real result by hand instead of it sitting on
@@ -52,7 +54,7 @@ export function LegResultControls({ legId, line }: { legId: number; line: number
       <input
         className="w-14 rounded border border-surface-border bg-surface px-1.5 py-0.5 text-xs text-slate-100"
         inputMode="numeric"
-        placeholder={`vs ${line}`}
+        placeholder={`vs ${targetLabel(line)}`}
         value={actual}
         onChange={(e) => setActual(e.target.value)}
       />

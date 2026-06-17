@@ -8,6 +8,7 @@ import {
   type PlayerBetRecord,
 } from "@/lib/data/bets";
 import { currentSeason } from "@/lib/cron";
+import { floorStat, targetLabel } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -139,12 +140,12 @@ export default async function ReviewPage() {
                       <span className="text-slate-500">/</span>
                       <span>{r.bets}</span>
                     </td>
-                    <td className="py-1.5 pr-4">{r.avgLine.toFixed(1)}</td>
+                    <td className="py-1.5 pr-4">{floorStat(r.avgLine)}</td>
                     <td className="py-1.5 pr-4">
-                      {r.avgActual == null ? "—" : r.avgActual.toFixed(1)}
+                      {r.avgActual == null ? "—" : floorStat(r.avgActual)}
                     </td>
                     <td className="py-1.5 pr-4">
-                      {r.lastLine} →{" "}
+                      {targetLabel(r.lastLine)} →{" "}
                       <span
                         className={
                           r.lastResult === "hit"

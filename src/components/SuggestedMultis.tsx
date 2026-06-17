@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 
 import type { StatType } from "@/db/schema";
 import { teamColors } from "@/lib/afl/teamColors";
+import { targetLabel } from "@/lib/format";
 import type { RiskTier, Suggestion, SuggestedLeg } from "@/lib/predictions/suggest";
 import { DEFAULT_LEGS, MAX_LEGS, MIN_LEGS } from "@/lib/predictions/suggestLimits";
 
@@ -204,7 +205,7 @@ function SuggestionCard({
                     {l.playerName}
                   </div>
                   <div className="text-xs capitalize text-slate-400">
-                    {l.statType} over {l.line}
+                    {l.statType} {targetLabel(l.line)}
                     {l.hitRate != null ? ` · hit ${Math.round(l.hitRate * 100)}%` : ""}
                     {l.history && l.history.bets > 0 ? (
                       <span className="text-slate-500">

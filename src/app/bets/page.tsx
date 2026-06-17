@@ -9,6 +9,7 @@ import {
   userIdForEmail,
   type BetWithLegs,
 } from "@/lib/data/bets";
+import { marginVsTarget, signed, targetLabel } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -138,7 +139,9 @@ function BetSlip({ slip }: { slip: BetWithLegs }) {
         {slip.legs.map((leg) => {
           const settled = leg.result === "hit" || leg.result === "miss";
           const margin =
-            leg.actualValue != null ? leg.actualValue - leg.line : null;
+            leg.actualValue != null
+              ? marginVsTarget(leg.actualValue, leg.line)
+              : null;
           return (
             <li key={leg.id} className="space-y-1 text-sm">
               <div className="flex justify-between gap-2">
@@ -146,7 +149,7 @@ function BetSlip({ slip }: { slip: BetWithLegs }) {
                   {leg.playerName ? (
                     <span className="font-medium text-white">{leg.playerName} </span>
                   ) : null}
-                  {leg.statType} over {leg.line}
+                  {leg.statType} {targetLabel(leg.line)}
                   {leg.odds ? <span className="text-slate-500"> @ {leg.odds}</span> : null}
                   {settled && leg.actualValue != null ? (
                     <span className="text-slate-500">
@@ -156,12 +159,11 @@ function BetSlip({ slip }: { slip: BetWithLegs }) {
                       {margin != null ? (
                         <span
                           className={
-                            margin > 0 ? "text-accent-win" : "text-accent-loss"
+                            margin >= 0 ? "text-accent-win" : "text-accent-loss"
                           }
                         >
                           {" "}
-                          ({margin > 0 ? "+" : ""}
-                          {margin})
+                          ({signed(margin)})
                         </span>
                       ) : null}
                     </span>
