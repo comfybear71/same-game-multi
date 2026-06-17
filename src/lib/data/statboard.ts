@@ -30,6 +30,10 @@ export interface PlayerStatRow {
   edge: number | null; // prediction - line
   hitRate: number | null; // share of recent games over the line (0..1)
   actual: number | null;
+  // The AI's headline pick across all four stats for this player, floored
+  // (favouring the downside rather than rounding to nearest) so the card can
+  // show one clear suggestion line regardless of which stat tab is active.
+  aiPicks: Partial<Record<StatType, number>>;
 }
 
 export interface StatBoard {
@@ -132,6 +136,7 @@ export async function getStatBoard(
         actual: actual
           ? (actual as unknown as Record<string, number | null>)[p.statType]
           : null,
+        aiPicks: {},
       };
       rows.set(key, row);
     }
@@ -144,6 +149,21 @@ export async function getStatBoard(
     row.prediction = row.models.C ?? row.models.B ?? row.models.A;
     row.edge =
       row.prediction != null && row.line != null ? row.prediction - row.line : null;
+  }
+
+  // Floored headline pick per (player, stat) — shared across every row for
+  // that player so each card can show the full disposals/marks/tackles/goals
+  // line regardless of which stat tab produced the row.
+  const picksByPlayer = new Map<number, Partial<Record<StatType, number>>>();
+  for (const row of rows.values()) {
+    if (row.prediction == null) continue;
+    const picks = picksByPlayer.get(row.playerId) ?? {};
+    picks[row._stat] = Math.floor(row.prediction);
+    picksByPlayer.set(row.playerId, picks);
+  }
+
+  for (const row of rows.values()) {
+    row.aiPicks = picksByPlayer.get(row.playerId) ?? {};
     const { _stat, ...clean } = row;
     board.byStat[_stat].push(clean);
   }

@@ -1,15 +1,19 @@
 import { and, eq, inArray } from "drizzle-orm";
 
 import { db } from "@/db";
-import { betLegs, bets, games, playerGameStats } from "@/db/schema";
+import { betLegs, bets, games, playerGameStats, type LegResult } from "@/db/schema";
+import { currentSeason } from "@/lib/cron";
+import { settleGamePlayerStats } from "@/lib/ingest/playerStats";
+import { syncFixtures } from "@/lib/ingest/sync";
+import { computeRoundAccuracy } from "@/lib/predictions/accuracy";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Settlement: once a game is complete and player stats are recorded, mark each
 // bet leg hit/miss, then roll up each slip to won/lost.
 //
-// Player stat ingestion (AFL Tables) is stubbed in v1, so legs settle only when
-// a matching `player_game_stats` row exists and is `settled`. Until then legs
-// stay "pending" and this runs harmlessly. See HANDOFF.md.
+// A leg only auto-settles once it has both a linked game and a matched
+// player (set when the bet was saved). Legs missing either stay "pending"
+// forever — see settleLegManually() for the fallback override.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface SettleResult {
@@ -70,7 +74,7 @@ export async function settlePendingBets(): Promise<SettleResult> {
 }
 
 /** Mark a slip won only if every leg hit; lost if any leg missed. */
-async function rollUpSlips(betIds: number[]): Promise<number> {
+export async function rollUpSlips(betIds: number[]): Promise<number> {
   if (betIds.length === 0) return 0;
 
   const legs = await db
@@ -107,4 +111,65 @@ export async function gamesAwaitingStats(): Promise<number> {
     .from(games)
     .where(eq(games.status, "complete"));
   return rows.length;
+}
+
+/**
+ * Manual fallback for a leg that auto-settlement will never reach (no
+ * matched player, or AFL Tables never published the game) — set its result
+ * by hand, then roll up its slip. `actualValue` is optional since a manual
+ * void/override may not have a real number behind it.
+ */
+export async function settleLegManually(
+  legId: number,
+  betId: number,
+  result: LegResult,
+  actualValue?: number | null,
+): Promise<void> {
+  await db
+    .update(betLegs)
+    .set({ result, actualValue: actualValue ?? null })
+    .where(eq(betLegs.id, legId));
+  await rollUpSlips([betId]);
+}
+
+export interface SettlementPipelineResult {
+  sync: Awaited<ReturnType<typeof syncFixtures>>;
+  statsRecorded: number;
+  settle: SettleResult;
+  accuracyRows: number;
+}
+
+/**
+ * The full morning-after pipeline: refresh results from Squiggle, pull actual
+ * player stats from AFL Tables for every completed game, settle pending legs
+ * against those actuals, then recompute model accuracy for affected rounds.
+ * Shared by the daily cron and the "Settle now" button so a manual run does
+ * exactly what the cron does, on demand.
+ */
+export async function runSettlementPipeline(): Promise<SettlementPipelineResult> {
+  const season = currentSeason();
+  const sync = await syncFixtures(season);
+
+  const completed = await db
+    .select({ id: games.id, round: games.round })
+    .from(games)
+    .where(eq(games.status, "complete"));
+
+  let statsRecorded = 0;
+  const rounds = new Set<number>();
+  for (const g of completed) {
+    const res = await settleGamePlayerStats(g.id);
+    statsRecorded += res.recorded;
+    if (g.round != null && res.recorded > 0) rounds.add(g.round);
+  }
+
+  const settle = await settlePendingBets();
+
+  let accuracyRows = 0;
+  for (const round of rounds) {
+    const acc = await computeRoundAccuracy(season, round);
+    accuracyRows += acc.rowsWritten;
+  }
+
+  return { sync, statsRecorded, settle, accuracyRows };
 }

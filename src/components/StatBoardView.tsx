@@ -25,6 +25,13 @@ const STAT_TABS: { key: StatType; label: string }[] = [
   { key: "goals", label: "Goals" },
 ];
 
+function aiPickLine(picks: Partial<Record<StatType, number>>): string | null {
+  const parts = STAT_TABS.filter((t) => picks[t.key] != null).map(
+    (t) => `${picks[t.key]} ${t.label.toLowerCase()}`,
+  );
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
 function fmt(n: number | null): string {
   return n == null ? "—" : n.toFixed(1);
 }
@@ -154,6 +161,14 @@ function PlayerStatCard({
           )}
         </div>
       </div>
+
+      {/* SGM AI headline pick across all four stats, favouring the downside
+          (floored, not rounded) so it reads as a conservative suggestion. */}
+      {aiPickLine(row.aiPicks) ? (
+        <div className="mt-2 text-sm font-semibold text-accent-loss">
+          SGM AI 🤖 suggests {aiPickLine(row.aiPicks)}
+        </div>
+      ) : null}
 
       {/* Your past record on this player + stat (the "learning" hint) */}
       {record && record.bets > 0 ? (
