@@ -104,6 +104,17 @@ export async function rollUpSlips(betIds: number[]): Promise<number> {
   return settled;
 }
 
+/** Distinct game ids referenced by still-pending bet legs (for a scoped settle). */
+export async function pendingLegGameIds(): Promise<number[]> {
+  const rows = await db
+    .selectDistinct({ gameId: betLegs.gameId })
+    .from(betLegs)
+    .where(eq(betLegs.result, "pending"));
+  return rows
+    .map((r) => r.gameId)
+    .filter((id): id is number => id != null);
+}
+
 /** Convenience: how many completed games still lack settled player stats. */
 export async function gamesAwaitingStats(): Promise<number> {
   const rows = await db
@@ -143,17 +154,26 @@ export interface SettlementPipelineResult {
  * The full morning-after pipeline: refresh results from Squiggle, pull actual
  * player stats from AFL Tables for every completed game, settle pending legs
  * against those actuals, then recompute model accuracy for affected rounds.
- * Shared by the daily cron and the "Settle now" button so a manual run does
- * exactly what the cron does, on demand.
+ * Shared by the daily cron and the "Settle now" button. Pass `gameIds` to
+ * scope the (slow, scraping) stats step to just those games — the manual
+ * button uses this so it only touches the games your pending bets reference
+ * and finishes well inside the serverless time limit. The unscoped cron run
+ * sweeps every completed game.
  */
-export async function runSettlementPipeline(): Promise<SettlementPipelineResult> {
+export async function runSettlementPipeline(
+  opts: { gameIds?: number[] } = {},
+): Promise<SettlementPipelineResult> {
   const season = currentSeason();
   const sync = await syncFixtures(season);
 
-  const completed = await db
+  const completedAll = await db
     .select({ id: games.id, round: games.round })
     .from(games)
     .where(eq(games.status, "complete"));
+  const completed =
+    opts.gameIds == null
+      ? completedAll
+      : completedAll.filter((g) => opts.gameIds!.includes(g.id));
 
   let statsRecorded = 0;
   const rounds = new Set<number>();

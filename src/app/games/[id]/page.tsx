@@ -14,6 +14,7 @@ import {
   type PlayerBetRecord,
 } from "@/lib/data/bets";
 import { teamColors } from "@/lib/afl/teamColors";
+import { floorStat, targetLabel } from "@/lib/format";
 import { getGameById } from "@/lib/data/games";
 import { getStatBoard, type StatBoard } from "@/lib/data/statboard";
 import { STAT_TYPES } from "@/lib/predictions/features";
@@ -150,9 +151,9 @@ function MyLegsPanel({ legs }: { legs: BetTrackerLeg[] }) {
                   {leg.playerName ?? "Player"}
                 </div>
                 <div className="text-xs text-slate-400">
-                  <span className="capitalize">{leg.statType}</span> over {leg.line}
+                  <span className="capitalize">{leg.statType}</span> {targetLabel(leg.line)}
                   {leg.prediction != null
-                    ? ` · we predict ${leg.prediction.toFixed(1)}`
+                    ? ` · we predict ${floorStat(leg.prediction)}`
                     : ""}
                 </div>
               </div>
