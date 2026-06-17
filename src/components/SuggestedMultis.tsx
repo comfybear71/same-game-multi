@@ -172,6 +172,14 @@ function SuggestionCard({
 }) {
   const [legs, setLegs] = useState<SuggestedLeg[]>(s.legs);
 
+  // Resync when a new suggestion arrives for the same tier — e.g. the leg-count
+  // fetch resolves after the card already mounted, so s.legs grows from the
+  // stale set the card first seeded with. Without this the list stays frozen at
+  // whatever was loaded at mount (the bug where asking for 10 legs showed 4).
+  useEffect(() => {
+    setLegs(s.legs);
+  }, [s.legs]);
+
   if (s.legs.length === 0) {
     return <p className="text-sm text-slate-400">Not enough lines for this tier yet.</p>;
   }
