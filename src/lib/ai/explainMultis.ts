@@ -26,6 +26,8 @@ function summarise(s: Suggestion) {
       prediction: Math.round(l.prediction * 10) / 10,
       hitRatePct: l.hitRate == null ? null : Math.round(l.hitRate * 100),
       odds: l.odds,
+      // Qualitative context from AFL news (injury cloud, managed, named, etc.).
+      news: l.news ? { status: l.news.status, note: l.news.note } : null,
     })),
   };
 }
@@ -37,6 +39,7 @@ export async function explainMultis(suggestions: Suggestion[]): Promise<Suggesti
 
   const prompt = `You are explaining AFL same-game multi suggestions to a casual punter (keep it warm and simple, no jargon).
 For each tier, write ONE short sentence (max 28 words) on why these picks suit that risk level, referencing the form/lines where it helps.
+If a leg has a "news" field (an injury cloud, a managed/rested tag, or a late team-news note), weave that in plainly — e.g. flag a "test" as a slight risk. Players already ruled out have been removed.
 Tiers data: ${JSON.stringify(suggestions.map(summarise))}
 Respond with ONLY a JSON object: {"cautious": string, "medium": string, "high": string}.`;
 

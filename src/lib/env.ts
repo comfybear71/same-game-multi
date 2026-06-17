@@ -21,6 +21,9 @@ const schema = z.object({
     .string()
     .optional()
     .default("AFLMultiTracker/1.0 (contact@example.com)"),
+  // Comma-separated AFL news RSS feed URLs for injury/team-news context.
+  // Empty = no news (the adapter falls back to a no-op, UI shows nothing).
+  AFL_NEWS_FEEDS: z.string().optional().default("https://www.zerohanger.com/feed/"),
 });
 
 type Env = z.infer<typeof schema>;

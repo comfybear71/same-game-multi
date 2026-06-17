@@ -9,6 +9,7 @@ import {
   type StatType,
 } from "@/db/schema";
 import { getPlayerBettingRecord, playerRecordKey } from "@/lib/data/bets";
+import { getPlayerNews, type InjuryNews } from "@/lib/ingest/injuries";
 import { DEFAULT_LEGS, MAX_LEGS, MIN_LEGS } from "./suggestLimits";
 
 // Build risk-tiered same-game-multi suggestions from our own data, sized to
@@ -36,6 +37,7 @@ export interface SuggestedLeg {
   hitRate: number | null;
   confidence: number;
   history: { hits: number; bets: number } | null; // your own past bets on this player + stat
+  news: InjuryNews | null; // matched injury/team news ("test"/"managed" survive, "out" is dropped)
 }
 
 export interface Suggestion {
@@ -77,6 +79,24 @@ function withHistory(confidence: number, history: { hits: number; bets: number }
   return clamp(confidence * (1 - weight) + personalHitRate * weight, 0, 1);
 }
 
+/**
+ * How a coarse news status scales a leg's confidence. "out" players are dropped
+ * entirely (never suggest someone ruled out); "test"/"managed" are heavily
+ * discounted; "available" (named/returning) and no-news are left as-is.
+ */
+function newsMultiplier(news: InjuryNews | null): number {
+  switch (news?.status) {
+    case "out":
+      return 0;
+    case "test":
+      return 0.55;
+    case "managed":
+      return 0.8;
+    default:
+      return 1;
+  }
+}
+
 async function candidateLegs(
   gameId: number,
   focus: StatFocus,
@@ -95,9 +115,15 @@ async function candidateLegs(
     .innerJoin(players, eq(predictions.playerId, players.id))
     .where(and(eq(predictions.gameId, gameId), eq(predictions.model, "C")));
 
-  const [lines, feats] = await Promise.all([
+  const roster = [
+    ...new Map(
+      preds.map((p) => [p.playerId, { id: p.playerId, name: p.name, team: p.team }]),
+    ).values(),
+  ];
+  const [lines, feats, newsByPlayer] = await Promise.all([
     db.select().from(bookmakerLines).where(eq(bookmakerLines.gameId, gameId)),
     db.select().from(playerGameFeatures).where(eq(playerGameFeatures.gameId, gameId)),
+    getPlayerNews(roster),
   ]);
 
   // Median line + median over-odds per (playerId, stat).
@@ -125,6 +151,9 @@ async function candidateLegs(
     const hitRate = form.length > 0 ? form.filter((v) => v > line).length / form.length : null;
     const edge = p.value - line;
     const history = historyByKey[playerRecordKey(p.name, p.statType)] ?? null;
+    const news = newsByPlayer.get(p.playerId) ?? null;
+    if (news?.status === "out") continue; // never suggest a ruled-out player
+    const base = withHistory(confidenceOf(hitRate, edge, line), history);
     legs.push({
       playerId: p.playerId,
       playerName: p.name,
@@ -136,8 +165,9 @@ async function candidateLegs(
       prediction: p.value,
       edge,
       hitRate,
-      confidence: withHistory(confidenceOf(hitRate, edge, line), history),
+      confidence: clamp(base * newsMultiplier(news), 0, 1),
       history,
+      news,
     });
   }
   return legs;

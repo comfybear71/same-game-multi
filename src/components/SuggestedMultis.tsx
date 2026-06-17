@@ -212,6 +212,12 @@ function SuggestionCard({
                         · you {l.history.hits}/{l.history.bets}
                       </span>
                     ) : null}
+                    {l.news && (l.news.status === "test" || l.news.status === "managed") ? (
+                      <span className="font-semibold text-accent-pending">
+                        {" "}
+                        · {l.news.status}
+                      </span>
+                    ) : null}
                   </div>
                 </div>
                 <span className="text-sm text-slate-300">
