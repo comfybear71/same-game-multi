@@ -5,7 +5,8 @@ import { useEffect, useState } from "react";
 
 import type { StatType } from "@/db/schema";
 import { teamColors } from "@/lib/afl/teamColors";
-import { targetLabel } from "@/lib/format";
+import { lineTarget } from "@/lib/format";
+import { estimateOddsAtTarget } from "@/lib/predictions/altLine";
 import type { RiskTier, Suggestion, SuggestedLeg } from "@/lib/predictions/suggest";
 import { DEFAULT_LEGS, MAX_LEGS, MIN_LEGS } from "@/lib/predictions/suggestLimits";
 
@@ -163,6 +164,20 @@ export function SuggestedMultis({ gameId }: { gameId: number }) {
   );
 }
 
+// A working copy of a suggested leg: `target` is the whole number the punter is
+// currently chasing (defaults to the bookie line, editable via the steppers),
+// and `estOdds` is the price re-estimated for that target.
+type EditableLeg = SuggestedLeg & { target: number; estOdds: number | null };
+
+function toEditable(legs: SuggestedLeg[]): EditableLeg[] {
+  return legs.map((l) => ({ ...l, target: lineTarget(l.line), estOdds: l.odds }));
+}
+
+function multiOdds(legs: EditableLeg[]): number | null {
+  if (legs.length === 0) return null;
+  return Math.round(legs.reduce((p, l) => p * (l.estOdds ?? 1), 1) * 100) / 100;
+}
+
 function SuggestionCard({
   s,
   onLog,
@@ -170,24 +185,47 @@ function SuggestionCard({
   s: Suggestion;
   onLog: (legs: SuggestedLeg[]) => void;
 }) {
-  const [legs, setLegs] = useState<SuggestedLeg[]>(s.legs);
+  const [legs, setLegs] = useState<EditableLeg[]>(() => toEditable(s.legs));
 
   // Resync when a new suggestion arrives for the same tier — e.g. the leg-count
   // fetch resolves after the card already mounted, so s.legs grows from the
   // stale set the card first seeded with. Without this the list stays frozen at
   // whatever was loaded at mount (the bug where asking for 10 legs showed 4).
   useEffect(() => {
-    setLegs(s.legs);
+    setLegs(toEditable(s.legs));
   }, [s.legs]);
 
   if (s.legs.length === 0) {
     return <p className="text-sm text-slate-400">Not enough lines for this tier yet.</p>;
   }
 
-  const estOdds = estOddsOf(legs);
+  const estOdds = multiOdds(legs);
 
   function remove(playerId: number, statType: string) {
     setLegs((prev) => prev.filter((l) => !(l.playerId === playerId && l.statType === statType)));
+  }
+
+  // Nudge a leg's target up/down a whole step and re-estimate its odds.
+  function changeTarget(playerId: number, statType: string, delta: number) {
+    setLegs((prev) =>
+      prev.map((l) => {
+        if (l.playerId !== playerId || l.statType !== statType) return l;
+        const target = Math.max(1, l.target + delta);
+        return { ...l, target, estOdds: estimateOddsAtTarget(l.line, l.odds, target) };
+      }),
+    );
+  }
+
+  // Push the edited targets back onto each leg as a clean half-line (so it logs
+  // and displays as "{target}+"), carrying the re-estimated odds.
+  function log() {
+    onLog(
+      legs.map((l) => ({
+        ...l,
+        line: l.target === lineTarget(l.line) ? l.line : l.target - 0.5,
+        odds: l.estOdds,
+      })),
+    );
   }
 
   return (
@@ -200,6 +238,7 @@ function SuggestionCard({
         <ul className="space-y-2">
           {legs.map((l) => {
             const c = teamColors(l.team);
+            const edited = l.target !== lineTarget(l.line);
             return (
               <li key={`${l.playerId}-${l.statType}`} className="flex items-center gap-3">
                 <span
@@ -212,25 +251,51 @@ function SuggestionCard({
                   <div className="truncate text-sm font-medium text-white">
                     {l.playerName}
                   </div>
-                  <div className="text-xs capitalize text-slate-400">
-                    {l.statType} {targetLabel(l.line)}
-                    {l.hitRate != null ? ` · hit ${Math.round(l.hitRate * 100)}%` : ""}
+                  <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-slate-400">
+                    <span className="capitalize">{l.statType}</span>
+                    <span className="inline-flex items-center gap-1">
+                      <button
+                        type="button"
+                        className="flex h-5 w-5 items-center justify-center rounded border border-surface-border text-slate-300 disabled:opacity-40"
+                        onClick={() => changeTarget(l.playerId, l.statType, -1)}
+                        disabled={l.target <= 1}
+                        aria-label={`Lower ${l.playerName} ${l.statType} target`}
+                      >
+                        −
+                      </button>
+                      <span
+                        className={`min-w-[2.5ch] text-center text-sm font-semibold ${
+                          edited ? "text-accent" : "text-slate-200"
+                        }`}
+                      >
+                        {l.target}+
+                      </span>
+                      <button
+                        type="button"
+                        className="flex h-5 w-5 items-center justify-center rounded border border-surface-border text-slate-300"
+                        onClick={() => changeTarget(l.playerId, l.statType, 1)}
+                        aria-label={`Raise ${l.playerName} ${l.statType} target`}
+                      >
+                        +
+                      </button>
+                    </span>
+                    {!edited && l.hitRate != null ? (
+                      <span>· hit {Math.round(l.hitRate * 100)}%</span>
+                    ) : null}
                     {l.history && l.history.bets > 0 ? (
                       <span className="text-slate-500">
-                        {" "}
                         · you {l.history.hits}/{l.history.bets}
                       </span>
                     ) : null}
                     {l.news && (l.news.status === "test" || l.news.status === "managed") ? (
                       <span className="font-semibold text-accent-pending">
-                        {" "}
                         · {l.news.status}
                       </span>
                     ) : null}
                   </div>
                 </div>
                 <span className="text-sm text-slate-300">
-                  {l.odds != null ? l.odds.toFixed(2) : "—"}
+                  {l.estOdds != null ? l.estOdds.toFixed(2) : "—"}
                 </span>
                 <button
                   className="text-slate-500 hover:text-accent-loss"
@@ -255,7 +320,7 @@ function SuggestionCard({
             estimate — confirm real price in the bookie app
           </div>
         </div>
-        <button className="btn" onClick={() => onLog(legs)} disabled={legs.length === 0}>
+        <button className="btn" onClick={log} disabled={legs.length === 0}>
           Log this bet
         </button>
       </div>
