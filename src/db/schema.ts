@@ -416,3 +416,4 @@ export type BetLeg = typeof betLegs.$inferSelect;
 export type ModelAccuracy = typeof modelAccuracy.$inferSelect;
 export type StatType = (typeof statTypeEnum.enumValues)[number];
 export type ModelKey = (typeof modelEnum.enumValues)[number];
+export type LegResult = (typeof legResultEnum.enumValues)[number];

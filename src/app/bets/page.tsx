@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import { LegResultControls } from "@/components/LegResultControls";
+import { SettleNowButton } from "@/components/SettleNowButton";
 import { auth } from "@/lib/auth";
 import {
   getBetsForUser,
@@ -34,9 +36,12 @@ export default async function BetsPage() {
           <h1 className="text-2xl font-bold text-white">Bet tracker</h1>
           <p className="text-sm text-slate-400">Same-game multis and their legs.</p>
         </div>
-        <Link href="/bets/new" className="btn">
-          + New bet
-        </Link>
+        <div className="flex items-center gap-2">
+          <SettleNowButton />
+          <Link href="/bets/new" className="btn">
+            + New bet
+          </Link>
+        </div>
       </header>
 
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -135,43 +140,48 @@ function BetSlip({ slip }: { slip: BetWithLegs }) {
           const margin =
             leg.actualValue != null ? leg.actualValue - leg.line : null;
           return (
-            <li key={leg.id} className="flex justify-between gap-2 text-sm">
-              <span className="text-slate-300">
-                {leg.playerName ? (
-                  <span className="font-medium text-white">{leg.playerName} </span>
-                ) : null}
-                {leg.statType} over {leg.line}
-                {leg.odds ? <span className="text-slate-500"> @ {leg.odds}</span> : null}
-                {settled && leg.actualValue != null ? (
-                  <span className="text-slate-500">
-                    {" "}
-                    · got{" "}
-                    <span className="text-slate-300">{leg.actualValue}</span>
-                    {margin != null ? (
-                      <span
-                        className={
-                          margin > 0 ? "text-accent-win" : "text-accent-loss"
-                        }
-                      >
-                        {" "}
-                        ({margin > 0 ? "+" : ""}
-                        {margin})
-                      </span>
-                    ) : null}
-                  </span>
-                ) : null}
-              </span>
-              <span
-                className={
-                  leg.result === "hit"
-                    ? "text-accent-win"
-                    : leg.result === "miss"
-                      ? "text-accent-loss"
-                      : "text-slate-500"
-                }
-              >
-                {leg.result}
-              </span>
+            <li key={leg.id} className="space-y-1 text-sm">
+              <div className="flex justify-between gap-2">
+                <span className="text-slate-300">
+                  {leg.playerName ? (
+                    <span className="font-medium text-white">{leg.playerName} </span>
+                  ) : null}
+                  {leg.statType} over {leg.line}
+                  {leg.odds ? <span className="text-slate-500"> @ {leg.odds}</span> : null}
+                  {settled && leg.actualValue != null ? (
+                    <span className="text-slate-500">
+                      {" "}
+                      · got{" "}
+                      <span className="text-slate-300">{leg.actualValue}</span>
+                      {margin != null ? (
+                        <span
+                          className={
+                            margin > 0 ? "text-accent-win" : "text-accent-loss"
+                          }
+                        >
+                          {" "}
+                          ({margin > 0 ? "+" : ""}
+                          {margin})
+                        </span>
+                      ) : null}
+                    </span>
+                  ) : null}
+                </span>
+                <span
+                  className={
+                    leg.result === "hit"
+                      ? "text-accent-win"
+                      : leg.result === "miss"
+                        ? "text-accent-loss"
+                        : "text-slate-500"
+                  }
+                >
+                  {leg.result}
+                </span>
+              </div>
+              {leg.result === "pending" ? (
+                <LegResultControls legId={leg.id} line={leg.line} />
+              ) : null}
             </li>
           );
         })}

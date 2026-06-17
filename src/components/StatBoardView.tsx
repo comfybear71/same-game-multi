@@ -7,6 +7,7 @@ import type { StatType } from "@/db/schema";
 import { teamColors } from "@/lib/afl/teamColors";
 import type { PlayerBetRecord } from "@/lib/data/bets";
 import type { PlayerStatRow, StatBoard } from "@/lib/data/statboard";
+import type { InjuryStatus } from "@/lib/ingest/injuries";
 
 // Mirror of playerRecordKey's normalisation (kept identical to lib/data/bets).
 function recordKey(name: string, stat: string): string {
@@ -25,9 +26,25 @@ const STAT_TABS: { key: StatType; label: string }[] = [
   { key: "goals", label: "Goals" },
 ];
 
+function aiPickLine(picks: Partial<Record<StatType, number>>): string | null {
+  const parts = STAT_TABS.filter((t) => picks[t.key] != null).map(
+    (t) => `${picks[t.key]} ${t.label.toLowerCase()}`,
+  );
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
 function fmt(n: number | null): string {
   return n == null ? "—" : n.toFixed(1);
 }
+
+// Coarse news status -> chip label + colour. "unknown" never renders a chip.
+const NEWS_CHIP: Record<InjuryStatus, { label: string; cls: string } | null> = {
+  out: { label: "OUT", cls: "bg-accent-loss/20 text-accent-loss ring-accent-loss/40" },
+  test: { label: "TEST", cls: "bg-accent-pending/20 text-accent-pending ring-accent-pending/40" },
+  managed: { label: "MANAGED", cls: "bg-accent-pending/20 text-accent-pending ring-accent-pending/40" },
+  available: { label: "NAMED", cls: "bg-accent-win/20 text-accent-win ring-accent-win/40" },
+  unknown: null,
+};
 
 export function StatBoardView({
   board,
@@ -104,6 +121,7 @@ function PlayerStatCard({
   record?: PlayerBetRecord;
 }) {
   const c = teamColors(row.team);
+  const newsChip = row.news ? NEWS_CHIP[row.news.status] : null;
   const hasCall = row.prediction != null && row.line != null;
   const over = hasCall ? row.prediction! > row.line! : null;
   // Last 5, displayed oldest -> newest with the most recent highlighted.
@@ -119,7 +137,16 @@ function PlayerStatCard({
           {row.jumper ?? "–"}
         </span>
         <div className="min-w-0 flex-1">
-          <div className="truncate font-semibold text-white">{row.name}</div>
+          <div className="flex items-center gap-2">
+            <span className="truncate font-semibold text-white">{row.name}</span>
+            {newsChip ? (
+              <span
+                className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ring-1 ${newsChip.cls}`}
+              >
+                {newsChip.label}
+              </span>
+            ) : null}
+          </div>
           <div className="text-xs text-slate-400">
             {row.team}
             {row.seasonAvg != null ? ` · Season avg ${row.seasonAvg.toFixed(1)}` : ""}
@@ -154,6 +181,27 @@ function PlayerStatCard({
           )}
         </div>
       </div>
+
+      {/* SGM AI headline pick across all four stats, favouring the downside
+          (floored, not rounded) so it reads as a conservative suggestion. */}
+      {aiPickLine(row.aiPicks) ? (
+        <div className="mt-2 text-sm font-semibold text-accent-loss">
+          SGM AI 🤖 suggests {aiPickLine(row.aiPicks)}
+        </div>
+      ) : null}
+
+      {/* Matched injury/team news headline (why the chip is showing) */}
+      {row.news && newsChip ? (
+        <div className="mt-2 flex gap-1.5 text-xs text-slate-400">
+          <span aria-hidden>📰</span>
+          <span className="min-w-0">
+            <span className="text-slate-300">{row.news.note ?? newsChip.label}</span>
+            {row.news.source ? (
+              <span className="text-slate-600"> · {row.news.source}</span>
+            ) : null}
+          </span>
+        </div>
+      ) : null}
 
       {/* Your past record on this player + stat (the "learning" hint) */}
       {record && record.bets > 0 ? (

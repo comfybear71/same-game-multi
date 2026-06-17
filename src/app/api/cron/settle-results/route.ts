@@ -1,19 +1,14 @@
-import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
-import { db } from "@/db";
-import { games } from "@/db/schema";
-import { authorizeCron, currentSeason } from "@/lib/cron";
-import { settleGamePlayerStats } from "@/lib/ingest/playerStats";
-import { syncFixtures } from "@/lib/ingest/sync";
-import { computeRoundAccuracy } from "@/lib/predictions/accuracy";
-import { settlePendingBets } from "@/lib/settle";
+import { authorizeCron } from "@/lib/cron";
+import { runSettlementPipeline } from "@/lib/settle";
 
 // Runs daily, morning-after AWST (see vercel.json):
 //   1. Refresh results from Squiggle (flips games to complete + scores).
 //   2. Pull actual player stats from AFL Tables for completed games.
 //   3. Settle bet legs/slips against those actuals.
 //   4. Recompute model accuracy for affected rounds.
+// Same pipeline is exposed on-demand via POST /api/bets/settle ("Settle now").
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
@@ -22,37 +17,8 @@ export async function GET(request: Request) {
   if (denied) return denied;
 
   try {
-    const season = currentSeason();
-    const sync = await syncFixtures(season);
-
-    const completed = await db
-      .select({ id: games.id, round: games.round })
-      .from(games)
-      .where(eq(games.status, "complete"));
-
-    let statsRecorded = 0;
-    const rounds = new Set<number>();
-    for (const g of completed) {
-      const res = await settleGamePlayerStats(g.id);
-      statsRecorded += res.recorded;
-      if (g.round != null && res.recorded > 0) rounds.add(g.round);
-    }
-
-    const settle = await settlePendingBets();
-
-    let accuracyRows = 0;
-    for (const round of rounds) {
-      const acc = await computeRoundAccuracy(season, round);
-      accuracyRows += acc.rowsWritten;
-    }
-
-    return NextResponse.json({
-      ok: true,
-      sync,
-      statsRecorded,
-      settle,
-      accuracyRows,
-    });
+    const result = await runSettlementPipeline();
+    return NextResponse.json({ ok: true, ...result });
   } catch (err) {
     console.error("[cron] settle-results failed:", err);
     return NextResponse.json(
