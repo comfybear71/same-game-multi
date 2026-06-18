@@ -6,7 +6,9 @@ import {
   getInPlayGames,
   getNextGame,
   getRecentResults,
+  getRecentTeamForm,
   getUpcomingGames,
+  type FormResult,
 } from "@/lib/data/games";
 import {
   getTeamRankings,
@@ -14,9 +16,10 @@ import {
   type TeamRanking,
   type TeamRatios,
 } from "@/lib/data/teamStats";
+import { canonicalTeam } from "@/lib/afl/teams";
 import { fixtureMatchupEdges, fixtureTeamRanking } from "@/lib/predictions/teamMatchup";
 
-import type { FixtureRanks } from "@/components/GameCard";
+import type { FixtureForm, FixtureRanks } from "@/components/GameCard";
 
 export const dynamic = "force-dynamic";
 
@@ -27,17 +30,20 @@ export default async function HomePage() {
   let inPlay: Game[] = [];
   let teamRatios: Map<string, TeamRatios> = new Map();
   let teamRankings: Map<string, TeamRanking> = new Map();
+  let teamForm: Map<string, FormResult[]> = new Map();
   let dbError: string | null = null;
 
   try {
-    [nextGame, upcoming, results, inPlay, teamRatios, teamRankings] = await Promise.all([
-      getNextGame(),
-      getUpcomingGames(),
-      getRecentResults(),
-      getInPlayGames(),
-      getTeamRatios(),
-      getTeamRankings(),
-    ]);
+    [nextGame, upcoming, results, inPlay, teamRatios, teamRankings, teamForm] =
+      await Promise.all([
+        getNextGame(),
+        getUpcomingGames(),
+        getRecentResults(),
+        getInPlayGames(),
+        getTeamRatios(),
+        getTeamRankings(),
+        getRecentTeamForm(),
+      ]);
   } catch (err) {
     dbError = (err as Error).message;
   }
@@ -46,6 +52,10 @@ export default async function HomePage() {
   const ranksFor = (g: Game): FixtureRanks => ({
     home: fixtureTeamRanking(teamRankings, g.home),
     away: fixtureTeamRanking(teamRankings, g.away),
+  });
+  const formFor = (g: Game): FixtureForm => ({
+    home: teamForm.get(canonicalTeam(g.home) ?? g.home) ?? null,
+    away: teamForm.get(canonicalTeam(g.away) ?? g.away) ?? null,
   });
   const restUpcoming = upcoming.filter((g) => g.id !== nextGame?.id);
 
@@ -99,6 +109,7 @@ export default async function HomePage() {
             featured
             edges={edgesFor(nextGame)}
             ranks={ranksFor(nextGame)}
+            form={formFor(nextGame)}
           />
         </section>
       ) : !dbError ? (
@@ -117,7 +128,13 @@ export default async function HomePage() {
           </h2>
           <div className="grid gap-3 sm:grid-cols-2">
             {restUpcoming.map((g) => (
-              <GameCard key={g.id} game={g} edges={edgesFor(g)} ranks={ranksFor(g)} />
+              <GameCard
+                key={g.id}
+                game={g}
+                edges={edgesFor(g)}
+                ranks={ranksFor(g)}
+                form={formFor(g)}
+              />
             ))}
           </div>
         </section>

@@ -5,6 +5,8 @@ import { GeneratePredictionsButton } from "@/components/GeneratePredictionsButto
 import { LiveScoreboard } from "@/components/LiveScoreboard";
 import { StatBoardView } from "@/components/StatBoardView";
 import { SuggestedMultis } from "@/components/SuggestedMultis";
+import { TeamFormAndRanks } from "@/components/TeamFormAndRanks";
+import type { StatType } from "@/db/schema";
 import { auth } from "@/lib/auth";
 import {
   getPlayerBettingRecord,
@@ -13,11 +15,18 @@ import {
   type BetTrackerLeg,
   type PlayerBetRecord,
 } from "@/lib/data/bets";
+import { canonicalTeam } from "@/lib/afl/teams";
 import { teamColors } from "@/lib/afl/teamColors";
 import { floorStat, targetLabel } from "@/lib/format";
-import { getGameById } from "@/lib/data/games";
+import { getGameById, getRecentTeamForm, type FormResult } from "@/lib/data/games";
 import { getStatBoard, type StatBoard } from "@/lib/data/statboard";
+import { getTeamRankings, getTeamRatios } from "@/lib/data/teamStats";
 import { STAT_TYPES } from "@/lib/predictions/features";
+import {
+  fixtureMatchupEdges,
+  fixtureTeamRanking,
+  type TeamRanking,
+} from "@/lib/predictions/teamMatchup";
 import { formatAwst } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
@@ -55,6 +64,33 @@ export default async function GamePage({ params }: { params: { id: string } }) {
     myLegs = [];
   }
 
+  // Team form + league rankings + matchup edges for the two sides (same data as
+  // the fixture cards), shown under the header.
+  let homeRanking: TeamRanking | null = null;
+  let awayRanking: TeamRanking | null = null;
+  let homeForm: FormResult[] | null = null;
+  let awayForm: FormResult[] | null = null;
+  let edges: Record<StatType, string | null> | null = null;
+  try {
+    const [rankings, ratios, form] = await Promise.all([
+      getTeamRankings(),
+      getTeamRatios(),
+      getRecentTeamForm(),
+    ]);
+    homeRanking = fixtureTeamRanking(rankings, game.home);
+    awayRanking = fixtureTeamRanking(rankings, game.away);
+    homeForm = form.get(canonicalTeam(game.home) ?? game.home) ?? null;
+    awayForm = form.get(canonicalTeam(game.away) ?? game.away) ?? null;
+    edges = fixtureMatchupEdges(ratios, game.home, game.away);
+  } catch {
+    // team stats are best-effort; the rest of the page still renders
+  }
+  const ledFor = (name: string) =>
+    new Set<StatType>(
+      edges ? (Object.keys(edges) as StatType[]).filter((s) => edges![s] === name) : [],
+    );
+  const hasTeamStats = !!(homeRanking || awayRanking || homeForm || awayForm);
+
   const hasData = board ? STAT_TYPES.some((s) => board!.byStat[s].length > 0) : false;
   const upcoming = game.commenceTime.getTime() > Date.now();
 
@@ -74,6 +110,33 @@ export default async function GamePage({ params }: { params: { id: string } }) {
         </h1>
         <p className="mt-1 text-sm text-slate-400">{formatAwst(game.commenceTime)}</p>
       </header>
+
+      {hasTeamStats ? (
+        <section className="card">
+          <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">
+            Last 5 &amp; league ranking
+          </div>
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex-1">
+              <div className="font-semibold text-white">{game.home}</div>
+              <TeamFormAndRanks
+                form={homeForm}
+                ranking={homeRanking}
+                ledStats={ledFor(game.home)}
+              />
+            </div>
+            <div className="flex-1 text-right">
+              <div className="font-semibold text-white">{game.away}</div>
+              <TeamFormAndRanks
+                form={awayForm}
+                ranking={awayRanking}
+                ledStats={ledFor(game.away)}
+                align="right"
+              />
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <LiveScoreboard gameId={game.id} home={game.home} away={game.away} />
 
