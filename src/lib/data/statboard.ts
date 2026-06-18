@@ -10,6 +10,8 @@ import {
   type ModelKey,
   type StatType,
 } from "@/db/schema";
+import { getPlayerCalibration } from "@/lib/data/calibration";
+import { calKey, type Calibration } from "@/lib/predictions/calibration";
 import { STAT_TYPES } from "@/lib/predictions/features";
 import { getPlayerNews, type InjuryNews } from "@/lib/ingest/injuries";
 
@@ -31,6 +33,9 @@ export interface PlayerStatRow {
   edge: number | null; // prediction - line
   hitRate: number | null; // share of recent games over the line (0..1)
   actual: number | null;
+  // How the player's actuals have compared to our baseline (Model B) on this
+  // stat — drives the "we've under-rated him" note. Null until we have data.
+  calibration: Calibration | null;
   // Latest matched injury/team news for this player (null when none). Same
   // object on every stat row for the player.
   news: InjuryNews | null;
@@ -84,13 +89,15 @@ export async function getStatBoard(
 
   if (preds.length === 0) return empty;
 
-  const [lines, feats, actuals] = await Promise.all([
+  const playerIds = [...new Set(preds.map((p) => p.playerId))];
+  const [lines, feats, actuals, calibration] = await Promise.all([
     db.select().from(bookmakerLines).where(eq(bookmakerLines.gameId, gameId)),
     db.select().from(playerGameFeatures).where(eq(playerGameFeatures.gameId, gameId)),
     db
       .select()
       .from(playerGameStats)
       .where(and(eq(playerGameStats.gameId, gameId), eq(playerGameStats.settled, true))),
+    getPlayerCalibration(playerIds),
   ]);
 
   // Median line per (playerId, stat).
@@ -140,6 +147,7 @@ export async function getStatBoard(
         actual: actual
           ? (actual as unknown as Record<string, number | null>)[p.statType]
           : null,
+        calibration: calibration.get(calKey(p.playerId, p.statType)) ?? null,
         aiPicks: {},
         news: null,
       };

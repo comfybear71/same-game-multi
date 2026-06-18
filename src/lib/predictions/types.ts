@@ -25,6 +25,12 @@ export interface PredictionInput {
    * (Wheelo team season aggregates). >1 means a soft matchup for this stat.
    */
   teamFactor?: number;
+  /**
+   * Per-player calibration factor centred on 1.0: corrects systematic bias in
+   * our baseline (how the player's actuals have compared to Model B). >1 means
+   * we've been under-rating him, so nudge the prediction up.
+   */
+  playerFactor?: number;
 }
 
 export interface ModelOutput {
@@ -43,6 +49,8 @@ export interface ModelParams {
   factorClamp: [number, number];
   /** Clamp the team matchup factor to this (tighter) band — it stacks on top of opponent/venue. */
   teamFactorClamp: [number, number];
+  /** Clamp the per-player calibration factor — it stacks on the others, so keep it tight. */
+  playerFactorClamp: [number, number];
 }
 
 export const DEFAULT_PARAMS: ModelParams = {
@@ -50,4 +58,5 @@ export const DEFAULT_PARAMS: ModelParams = {
   formWeight: 0.6,
   factorClamp: [0.8, 1.2],
   teamFactorClamp: [0.85, 1.15],
+  playerFactorClamp: [0.85, 1.15],
 };

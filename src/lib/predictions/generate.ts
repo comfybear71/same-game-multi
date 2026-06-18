@@ -10,8 +10,10 @@ import {
 } from "@/db/schema";
 import { canonicalTeam } from "@/lib/afl/teams";
 import { canonicalVenue } from "@/lib/afl/venues";
+import { getPlayerCalibration } from "@/lib/data/calibration";
 import { getPlayerHistory, type PlayerHistory } from "@/lib/ingest/aflTables";
 import { getTeamSeasonStats } from "@/lib/ingest/wheelo";
+import { calKey } from "./calibration";
 import { runAllModels } from "./engine";
 import { buildInputs, buildStatFeatures, STAT_TYPES } from "./features";
 import { matchupFactor, teamRatios } from "./teamMatchup";
@@ -114,6 +116,9 @@ export async function generatePredictions(gameId: number): Promise<GenerateResul
   // One team-stats fetch for the whole game (Wheelo season aggregates, for + against).
   const ratios = teamRatios(await getTeamSeasonStats(season));
 
+  // Per-player calibration from this game's players' track record (Model B vs actuals).
+  const calibration = await getPlayerCalibration([...idByKey.values()]);
+
   // Build prediction + feature rows, backfill bookmaker line player ids.
   const predRows: (typeof predictions.$inferInsert)[] = [];
   const featureRows: (typeof playerGameFeatures.$inferInsert)[] = [];
@@ -133,12 +138,17 @@ export async function generatePredictions(gameId: number): Promise<GenerateResul
       STAT_TYPES.map((stat) => [stat, matchupFactor(ratios, history.team, opponent, stat)]),
     ) as Record<(typeof STAT_TYPES)[number], number>;
 
+    const playerFactors = Object.fromEntries(
+      STAT_TYPES.map((stat) => [stat, calibration.get(calKey(playerId, stat))?.factor ?? 1]),
+    ) as Record<(typeof STAT_TYPES)[number], number>;
+
     const inputs = buildInputs(history, {
       season,
       opponent,
       venue,
       formWindow: DEFAULT_PARAMS.formWindow,
       teamFactors,
+      playerFactors,
     });
     for (const input of inputs) {
       for (const out of runAllModels(input, DEFAULT_PARAMS)) {
