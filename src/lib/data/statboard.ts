@@ -28,6 +28,8 @@ export interface PlayerStatRow {
   line: number | null;
   seasonAvg: number | null;
   recentForm: number[]; // most-recent-first
+  vsOpponentAvg: number | null; // player's avg for this stat vs this opponent
+  vsOpponentGames: number; // games that average is based on
   models: Record<ModelKey, number | null>;
   prediction: number | null; // headline = Model C (smart)
   edge: number | null; // prediction - line
@@ -140,6 +142,8 @@ export async function getStatBoard(
         line,
         seasonAvg: feat?.seasonAverage ?? null,
         recentForm,
+        vsOpponentAvg: feat?.vsOpponentAvg ?? null,
+        vsOpponentGames: feat?.vsOpponentGames ?? 0,
         models: { A: null, B: null, C: null },
         prediction: null,
         edge: null,

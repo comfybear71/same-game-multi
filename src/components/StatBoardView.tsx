@@ -175,6 +175,7 @@ export function StatBoardView({
               row={r}
               record={record[recordKey(r.name, stat)]}
               statLabel={STAT_TABS.find((t) => t.key === stat)?.label.toLowerCase() ?? stat}
+              opponent={board.home === r.team ? board.away : board.home}
             />
           ))}
         </div>
@@ -187,11 +188,14 @@ function PlayerStatCard({
   row,
   record,
   statLabel,
+  opponent,
 }: {
   row: PlayerStatRow;
   record?: PlayerBetRecord;
   statLabel: string;
+  opponent: string;
 }) {
+  const [showInfo, setShowInfo] = useState(false);
   const c = teamColors(row.team);
   const newsChip = row.news ? NEWS_CHIP[row.news.status] : null;
   // Whole-number view: the count the player must reach, and our floored
@@ -224,6 +228,19 @@ function PlayerStatCard({
                 {newsChip.label}
               </span>
             ) : null}
+            <button
+              type="button"
+              aria-label={`Info on ${row.name}`}
+              aria-expanded={showInfo}
+              onClick={() => setShowInfo((v) => !v)}
+              className={`shrink-0 rounded-full border px-1.5 text-[11px] font-bold leading-5 ${
+                showInfo
+                  ? "border-accent bg-accent/20 text-accent"
+                  : "border-surface-border text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              i
+            </button>
           </div>
           <div className="text-xs text-slate-400">
             {row.team}
@@ -258,6 +275,37 @@ function PlayerStatCard({
           )}
         </div>
       </div>
+
+      {/* Info popover: opponent record + news detail (bio/weather to come) */}
+      {showInfo ? (
+        <div className="mt-3 space-y-1.5 rounded-md border border-surface-border bg-surface px-3 py-2 text-xs">
+          <div className="font-semibold text-slate-200">Player intel</div>
+          <div className="text-slate-400">
+            {row.vsOpponentGames > 0 && row.vsOpponentAvg != null ? (
+              <>
+                vs <span className="text-slate-200">{opponent}</span>: averages{" "}
+                <span className="font-semibold text-white">
+                  {Math.round(row.vsOpponentAvg)}
+                </span>{" "}
+                {statLabel} over {row.vsOpponentGames} game
+                {row.vsOpponentGames === 1 ? "" : "s"}
+              </>
+            ) : (
+              <>No past meetings vs {opponent} on record</>
+            )}
+          </div>
+          {row.news ? (
+            <div className="text-slate-400">
+              <span aria-hidden>📰</span>{" "}
+              <span className="text-slate-300">{row.news.note ?? row.news.status}</span>
+              {row.news.source ? (
+                <span className="text-slate-600"> · {row.news.source}</span>
+              ) : null}
+            </div>
+          ) : null}
+          <div className="text-[11px] text-slate-600">Bio &amp; weather coming soon.</div>
+        </div>
+      ) : null}
 
       {/* SGM AI headline pick across all four stats, favouring the downside
           (floored, not rounded) so it reads as a conservative suggestion. */}
