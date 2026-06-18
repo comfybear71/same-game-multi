@@ -5,7 +5,7 @@
   "description": "AFL same-game multi prediction and bet tracking tool (solo/small-group).",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "tsx src/db/migrate.ts && next build",
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
