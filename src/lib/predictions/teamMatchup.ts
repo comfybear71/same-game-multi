@@ -17,6 +17,14 @@ export const STAT_LABEL: Record<StatType, string> = {
   goals: "goals",
 };
 
+/** Short labels for the compact fixture-card ranking line. */
+export const STAT_SHORT: Record<StatType, string> = {
+  disposals: "Disp",
+  marks: "Marks",
+  tackles: "Tack",
+  goals: "Goals",
+};
+
 // Team aggregates are noisier early in the season than a player's own form;
 // this shrinks the ratio toward 1.0 until enough games have been played.
 const SHRINK_K = 8;
@@ -104,4 +112,34 @@ export function fixtureMatchupEdges(
   const out = {} as Record<StatType, string | null>;
   for (const stat of STATS) out[stat] = matchupEdge(ratios, h, a, stat);
   return out;
+}
+
+export interface TeamRanking {
+  rank: Record<StatType, number>; // 1 = leads the league for that stat
+  outOf: number; // teams ranked (usually 18)
+}
+
+/** League rank (1 = most) of every team on each "for" stat, season-to-date. */
+export function teamRankings(board: SeasonTeamStats): Map<string, TeamRanking> {
+  const outOf = board.teams.length;
+  const out = new Map<string, TeamRanking>();
+  for (const t of board.teams) {
+    out.set(t.team, { rank: {} as Record<StatType, number>, outOf });
+  }
+  for (const stat of STATS) {
+    const ranked = [...board.teams].sort((a, b) => b.for[stat] - a.for[stat]);
+    ranked.forEach((t, i) => {
+      const entry = out.get(t.team);
+      if (entry) entry.rank[stat] = i + 1;
+    });
+  }
+  return out;
+}
+
+/** This fixture team's rankings, matched through canonical names; null if absent. */
+export function fixtureTeamRanking(
+  rankings: Map<string, TeamRanking>,
+  team: string,
+): TeamRanking | null {
+  return rankings.get(canonicalTeam(team) ?? team) ?? null;
 }
