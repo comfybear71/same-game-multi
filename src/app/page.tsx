@@ -8,8 +8,15 @@ import {
   getRecentResults,
   getUpcomingGames,
 } from "@/lib/data/games";
-import { getTeamRatios, type TeamRatios } from "@/lib/data/teamStats";
-import { fixtureMatchupEdges } from "@/lib/predictions/teamMatchup";
+import {
+  getTeamRankings,
+  getTeamRatios,
+  type TeamRanking,
+  type TeamRatios,
+} from "@/lib/data/teamStats";
+import { fixtureMatchupEdges, fixtureTeamRanking } from "@/lib/predictions/teamMatchup";
+
+import type { FixtureRanks } from "@/components/GameCard";
 
 export const dynamic = "force-dynamic";
 
@@ -19,21 +26,27 @@ export default async function HomePage() {
   let results: Game[] = [];
   let inPlay: Game[] = [];
   let teamRatios: Map<string, TeamRatios> = new Map();
+  let teamRankings: Map<string, TeamRanking> = new Map();
   let dbError: string | null = null;
 
   try {
-    [nextGame, upcoming, results, inPlay, teamRatios] = await Promise.all([
+    [nextGame, upcoming, results, inPlay, teamRatios, teamRankings] = await Promise.all([
       getNextGame(),
       getUpcomingGames(),
       getRecentResults(),
       getInPlayGames(),
       getTeamRatios(),
+      getTeamRankings(),
     ]);
   } catch (err) {
     dbError = (err as Error).message;
   }
 
   const edgesFor = (g: Game) => fixtureMatchupEdges(teamRatios, g.home, g.away);
+  const ranksFor = (g: Game): FixtureRanks => ({
+    home: fixtureTeamRanking(teamRankings, g.home),
+    away: fixtureTeamRanking(teamRankings, g.away),
+  });
   const restUpcoming = upcoming.filter((g) => g.id !== nextGame?.id);
 
   return (
@@ -81,7 +94,12 @@ export default async function HomePage() {
           <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-accent">
             Next game
           </h2>
-          <GameCard game={nextGame} featured edges={edgesFor(nextGame)} />
+          <GameCard
+            game={nextGame}
+            featured
+            edges={edgesFor(nextGame)}
+            ranks={ranksFor(nextGame)}
+          />
         </section>
       ) : !dbError ? (
         <div className="card">
@@ -99,7 +117,7 @@ export default async function HomePage() {
           </h2>
           <div className="grid gap-3 sm:grid-cols-2">
             {restUpcoming.map((g) => (
-              <GameCard key={g.id} game={g} edges={edgesFor(g)} />
+              <GameCard key={g.id} game={g} edges={edgesFor(g)} ranks={ranksFor(g)} />
             ))}
           </div>
         </section>

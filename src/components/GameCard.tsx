@@ -1,17 +1,24 @@
 import Link from "next/link";
 
 import type { Game, StatType } from "@/db/schema";
-import { STAT_LABEL } from "@/lib/predictions/teamMatchup";
+import { STAT_SHORT, STATS, type TeamRanking } from "@/lib/predictions/teamMatchup";
 import { formatAwst } from "@/lib/time";
+
+export interface FixtureRanks {
+  home: TeamRanking | null;
+  away: TeamRanking | null;
+}
 
 export function GameCard({
   game,
   featured = false,
   edges = null,
+  ranks = null,
 }: {
   game: Game;
   featured?: boolean;
   edges?: Record<StatType, string | null> | null;
+  ranks?: FixtureRanks | null;
 }) {
   const complete = game.status === "complete";
   return (
@@ -28,14 +35,20 @@ export function GameCard({
         </span>
         <StatusPill status={game.status} />
       </div>
-      <div className="mt-2 flex items-center justify-between gap-2">
-        <TeamLine name={game.home} score={complete ? game.homeScore : null} edges={edges} />
-        <span className="text-xs text-slate-500">vs</span>
+      <div className="mt-2 flex items-start justify-between gap-2">
+        <TeamLine
+          name={game.home}
+          score={complete ? game.homeScore : null}
+          edges={edges}
+          ranking={ranks?.home ?? null}
+        />
+        <span className="mt-1 text-xs text-slate-500">vs</span>
         <TeamLine
           name={game.away}
           score={complete ? game.awayScore : null}
           align="right"
           edges={edges}
+          ranking={ranks?.away ?? null}
         />
       </div>
       <div className="mt-2 text-sm text-slate-400">{formatAwst(game.commenceTime)}</div>
@@ -43,27 +56,43 @@ export function GameCard({
   );
 }
 
+function ordinal(n: number | undefined): string {
+  if (!n) return "–";
+  const v = n % 100;
+  const suffix = v >= 11 && v <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th";
+  return `${n}${suffix}`;
+}
+
 function TeamLine({
   name,
   score,
   align = "left",
   edges,
+  ranking,
 }: {
   name: string;
   score: number | null;
   align?: "left" | "right";
   edges?: Record<StatType, string | null> | null;
+  ranking?: TeamRanking | null;
 }) {
-  const leads = edges
-    ? (Object.keys(edges) as StatType[]).filter((stat) => edges[stat] === name)
-    : [];
+  const led = new Set<StatType>(
+    edges ? (Object.keys(edges) as StatType[]).filter((s) => edges[s] === name) : [],
+  );
   return (
     <div className={`flex-1 ${align === "right" ? "text-right" : ""}`}>
       <div className="font-semibold text-white">{name}</div>
       {score != null ? <div className="text-sm text-slate-400">{score}</div> : null}
-      {leads.length > 0 ? (
-        <div className="text-[11px] text-accent">
-          Leads {leads.map((s) => STAT_LABEL[s]).join(", ")}
+      {ranking ? (
+        <div className="mt-1 text-[11px] leading-relaxed text-slate-400">
+          {STATS.map((s, i) => (
+            <span key={s}>
+              {i > 0 ? <span className="text-slate-600"> · </span> : null}
+              <span className={led.has(s) ? "font-semibold text-accent" : ""}>
+                {STAT_SHORT[s]} {ordinal(ranking.rank[s])}
+              </span>
+            </span>
+          ))}
         </div>
       ) : null}
     </div>
