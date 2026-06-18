@@ -17,7 +17,14 @@ export function RunMigrationsButton() {
       if (!res.ok || !json?.ok) {
         throw new Error(json?.error || `Migrate failed (HTTP ${res.status})`);
       }
-      setMsg(json.applied ? "Migrations applied." : "No database configured.");
+      const ran: string[] = Array.isArray(json.ran) ? json.ran : [];
+      setMsg(
+        !json.applied
+          ? "No database configured."
+          : ran.length === 0
+            ? "Already up to date."
+            : `Applied ${ran.length} migration${ran.length === 1 ? "" : "s"}.`,
+      );
     } catch (err) {
       setMsg((err as Error).message);
     } finally {
