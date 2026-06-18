@@ -27,6 +27,39 @@ const STAT_TABS: { key: StatType; label: string }[] = [
   { key: "goals", label: "Goals" },
 ];
 
+type SortKey = "edge" | "hitRate" | "prediction" | "seasonAvg" | "name";
+
+const SORT_OPTIONS: { key: SortKey; label: string }[] = [
+  { key: "edge", label: "Edge" },
+  { key: "hitRate", label: "Hit rate" },
+  { key: "prediction", label: "Projection" },
+  { key: "seasonAvg", label: "Season avg" },
+  { key: "name", label: "Name" },
+];
+
+/** Sort rows by the chosen key — numeric keys descending, nulls last. */
+function sortRows(rows: PlayerStatRow[], key: SortKey): PlayerStatRow[] {
+  if (key === "name") {
+    return [...rows].sort((a, b) => a.name.localeCompare(b.name));
+  }
+  const value = (r: PlayerStatRow): number | null =>
+    key === "edge"
+      ? r.edge
+      : key === "hitRate"
+        ? r.hitRate
+        : key === "prediction"
+          ? r.prediction
+          : r.seasonAvg;
+  return [...rows].sort((a, b) => {
+    const av = value(a);
+    const bv = value(b);
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    return bv - av;
+  });
+}
+
 function aiPickLine(picks: Partial<Record<StatType, number>>): string | null {
   const parts = STAT_TABS.filter((t) => picks[t.key] != null).map(
     (t) => `${picks[t.key]} ${t.label.toLowerCase()}`,
@@ -70,10 +103,11 @@ export function StatBoardView({
 }) {
   const [stat, setStat] = useState<StatType>("disposals");
   const [team, setTeam] = useState<string>("all");
+  const [sort, setSort] = useState<SortKey>("edge");
 
   const all = board.byStat[stat].filter((r) => team === "all" || r.team === team);
   const lined = all.filter((r) => r.line != null);
-  const rows = lined.length > 0 ? lined : all;
+  const rows = sortRows(lined.length > 0 ? lined : all, sort);
 
   return (
     <div className="space-y-3">
@@ -107,6 +141,26 @@ export function StatBoardView({
             }`}
           >
             {t === "all" ? "All players" : t}
+          </button>
+        ))}
+      </div>
+
+      {/* Sort */}
+      <div className="flex items-center gap-2 overflow-x-auto pb-1">
+        <span className="shrink-0 text-[11px] uppercase tracking-wide text-slate-500">
+          Sort
+        </span>
+        {SORT_OPTIONS.map((o) => (
+          <button
+            key={o.key}
+            onClick={() => setSort(o.key)}
+            className={`whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium ${
+              sort === o.key
+                ? "bg-accent/20 text-accent ring-1 ring-accent/40"
+                : "border border-surface-border text-slate-300"
+            }`}
+          >
+            {o.label}
           </button>
         ))}
       </div>
