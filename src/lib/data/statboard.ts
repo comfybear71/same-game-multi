@@ -25,6 +25,10 @@ export interface PlayerStatRow {
   name: string;
   team: string;
   jumper: number | null;
+  dob: string | null; // ISO yyyy-mm-dd, for age
+  heightCm: number | null;
+  weightKg: number | null;
+  recentFantasyAvg: number | null; // mean AFL Fantasy points, last ~5 games
   line: number | null;
   seasonAvg: number | null;
   recentForm: number[]; // most-recent-first
@@ -81,6 +85,10 @@ export async function getStatBoard(
       name: players.name,
       team: players.team,
       jumper: players.jumper,
+      dob: players.dob,
+      heightCm: players.heightCm,
+      weightKg: players.weightKg,
+      recentFantasyAvg: players.recentFantasyAvg,
       statType: predictions.statType,
       model: predictions.model,
       value: predictions.predictedValue,
@@ -139,6 +147,10 @@ export async function getStatBoard(
         name: p.name,
         team: p.team,
         jumper: p.jumper,
+        dob: p.dob,
+        heightCm: p.heightCm,
+        weightKg: p.weightKg,
+        recentFantasyAvg: p.recentFantasyAvg,
         line,
         seasonAvg: feat?.seasonAverage ?? null,
         recentForm,

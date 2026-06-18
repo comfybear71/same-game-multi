@@ -60,6 +60,17 @@ function sortRows(rows: PlayerStatRow[], key: SortKey): PlayerStatRow[] {
   });
 }
 
+function ageFromDob(dob: string | null): number | null {
+  if (!dob) return null;
+  const d = new Date(dob);
+  if (Number.isNaN(d.getTime())) return null;
+  const now = new Date();
+  let age = now.getFullYear() - d.getFullYear();
+  const m = now.getMonth() - d.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < d.getDate())) age -= 1;
+  return age;
+}
+
 function aiPickLine(picks: Partial<Record<StatType, number>>): string | null {
   const parts = STAT_TABS.filter((t) => picks[t.key] != null).map(
     (t) => `${picks[t.key]} ${t.label.toLowerCase()}`,
@@ -198,6 +209,14 @@ function PlayerStatCard({
   const [showInfo, setShowInfo] = useState(false);
   const c = teamColors(row.team);
   const newsChip = row.news ? NEWS_CHIP[row.news.status] : null;
+  const age = ageFromDob(row.dob);
+  const bioLine = [
+    age != null ? `Age ${age}` : null,
+    row.heightCm ? `${row.heightCm}cm` : null,
+    row.weightKg ? `${row.weightKg}kg` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   // Whole-number view: the count the player must reach, and our floored
   // (downside-favouring) projection. The call + edge derive from these so
   // everything on the card stays decimal-free and internally consistent.
@@ -303,7 +322,17 @@ function PlayerStatCard({
               ) : null}
             </div>
           ) : null}
-          <div className="text-[11px] text-slate-600">Bio &amp; weather coming soon.</div>
+          {bioLine ? <div className="text-slate-400">{bioLine}</div> : null}
+          {row.recentFantasyAvg != null ? (
+            <div className="text-slate-400">
+              Fantasy{" "}
+              <span className="font-semibold text-white">
+                {Math.round(row.recentFantasyAvg)}
+              </span>{" "}
+              avg (last 5)
+            </div>
+          ) : null}
+          <div className="text-[11px] text-slate-600">Weather &amp; position coming soon.</div>
         </div>
       ) : null}
 

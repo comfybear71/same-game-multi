@@ -78,6 +78,12 @@ export const players = pgTable(
     jumper: integer("jumper"),
     // Optional external identifiers to help dedupe across data sources.
     aflTablesSlug: text("afl_tables_slug"),
+    // Bio + recent AFL Fantasy form, scraped from AFL Tables during prediction
+    // generation (drives the player info popover). dob is ISO yyyy-mm-dd.
+    dob: text("dob"),
+    heightCm: integer("height_cm"),
+    weightKg: integer("weight_kg"),
+    recentFantasyAvg: doublePrecision("recent_fantasy_avg"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
