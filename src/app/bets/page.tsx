@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { LegResultControls } from "@/components/LegResultControls";
+import { RunMigrationsButton } from "@/components/RunMigrationsButton";
 import { SettleNowButton } from "@/components/SettleNowButton";
 import { UploadResultButton } from "@/components/UploadResultButton";
 import { auth } from "@/lib/auth";
@@ -78,6 +79,10 @@ export default async function BetsPage() {
           ))}
         </div>
       )}
+
+      <footer className="border-t border-surface-border pt-4">
+        <RunMigrationsButton />
+      </footer>
     </div>
   );
 }
