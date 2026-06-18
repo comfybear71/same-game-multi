@@ -1,7 +1,9 @@
 import Link from "next/link";
 
+import { TeamFormAndRanks } from "@/components/TeamFormAndRanks";
 import type { Game, StatType } from "@/db/schema";
-import { STAT_SHORT, STATS, type TeamRanking } from "@/lib/predictions/teamMatchup";
+import type { FormResult } from "@/lib/data/games";
+import type { TeamRanking } from "@/lib/predictions/teamMatchup";
 import { formatAwst } from "@/lib/time";
 
 export interface FixtureRanks {
@@ -9,16 +11,23 @@ export interface FixtureRanks {
   away: TeamRanking | null;
 }
 
+export interface FixtureForm {
+  home: FormResult[] | null;
+  away: FormResult[] | null;
+}
+
 export function GameCard({
   game,
   featured = false,
   edges = null,
   ranks = null,
+  form = null,
 }: {
   game: Game;
   featured?: boolean;
   edges?: Record<StatType, string | null> | null;
   ranks?: FixtureRanks | null;
+  form?: FixtureForm | null;
 }) {
   const complete = game.status === "complete";
   return (
@@ -41,6 +50,7 @@ export function GameCard({
           score={complete ? game.homeScore : null}
           edges={edges}
           ranking={ranks?.home ?? null}
+          form={form?.home ?? null}
         />
         <span className="mt-1 text-xs text-slate-500">vs</span>
         <TeamLine
@@ -49,18 +59,12 @@ export function GameCard({
           align="right"
           edges={edges}
           ranking={ranks?.away ?? null}
+          form={form?.away ?? null}
         />
       </div>
       <div className="mt-2 text-sm text-slate-400">{formatAwst(game.commenceTime)}</div>
     </Link>
   );
-}
-
-function ordinal(n: number | undefined): string {
-  if (!n) return "–";
-  const v = n % 100;
-  const suffix = v >= 11 && v <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th";
-  return `${n}${suffix}`;
 }
 
 function TeamLine({
@@ -69,12 +73,14 @@ function TeamLine({
   align = "left",
   edges,
   ranking,
+  form,
 }: {
   name: string;
   score: number | null;
   align?: "left" | "right";
   edges?: Record<StatType, string | null> | null;
   ranking?: TeamRanking | null;
+  form?: FormResult[] | null;
 }) {
   const led = new Set<StatType>(
     edges ? (Object.keys(edges) as StatType[]).filter((s) => edges[s] === name) : [],
@@ -83,18 +89,7 @@ function TeamLine({
     <div className={`flex-1 ${align === "right" ? "text-right" : ""}`}>
       <div className="font-semibold text-white">{name}</div>
       {score != null ? <div className="text-sm text-slate-400">{score}</div> : null}
-      {ranking ? (
-        <div className="mt-1 text-[11px] leading-relaxed text-slate-400">
-          {STATS.map((s, i) => (
-            <span key={s}>
-              {i > 0 ? <span className="text-slate-600"> · </span> : null}
-              <span className={led.has(s) ? "font-semibold text-accent" : ""}>
-                {STAT_SHORT[s]} {ordinal(ranking.rank[s])}
-              </span>
-            </span>
-          ))}
-        </div>
-      ) : null}
+      <TeamFormAndRanks form={form} ranking={ranking} ledStats={led} align={align} />
     </div>
   );
 }

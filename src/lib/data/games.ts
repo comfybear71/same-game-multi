@@ -87,6 +87,48 @@ export async function findGameByTeams(
   return rows[0]?.id ?? null;
 }
 
+export type FormResult = "W" | "L" | "D";
+
+/**
+ * Each team's last `window` results (oldest → most recent) from completed
+ * games, for the fixture-card form guide. Keyed by canonical team name.
+ */
+export async function getRecentTeamForm(
+  window = 5,
+): Promise<Map<string, FormResult[]>> {
+  const rows = await db
+    .select({
+      home: games.home,
+      away: games.away,
+      homeScore: games.homeScore,
+      awayScore: games.awayScore,
+    })
+    .from(games)
+    .where(eq(games.status, "complete"))
+    .orderBy(asc(games.commenceTime));
+
+  const byTeam = new Map<string, FormResult[]>();
+  const add = (team: string, r: FormResult) => {
+    const key = canonicalTeam(team) ?? team;
+    const list = byTeam.get(key) ?? [];
+    list.push(r);
+    byTeam.set(key, list);
+  };
+  for (const g of rows) {
+    if (g.homeScore == null || g.awayScore == null) continue;
+    if (g.homeScore === g.awayScore) {
+      add(g.home, "D");
+      add(g.away, "D");
+    } else {
+      const homeWon = g.homeScore > g.awayScore;
+      add(g.home, homeWon ? "W" : "L");
+      add(g.away, homeWon ? "L" : "W");
+    }
+  }
+  for (const [team, list] of byTeam) byTeam.set(team, list.slice(-window));
+  return byTeam;
+}
+
 /** Games for a given round (for round-level dashboards). */
 export async function getGamesByRound(
   season: number,
