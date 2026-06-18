@@ -27,6 +27,32 @@ const STAT_TABS: { key: StatType; label: string }[] = [
   { key: "goals", label: "Goals" },
 ];
 
+type Tier = "Safe" | "Balanced" | "Aggressive";
+
+// Per-leg confidence, using the SAME formula the multi builder sorts its
+// Cautious tier by (lib/predictions/suggest.ts confidenceOf): recent hit rate
+// blended with how far our prediction clears the line. So a "Safe" tag here is
+// exactly what the Cautious tier picks first.
+function confidenceTier(
+  edge: number | null,
+  hitRate: number | null,
+  line: number | null,
+): Tier | null {
+  if (edge == null || line == null) return null;
+  const hr = hitRate ?? 0.5;
+  const margin = Math.max(0, Math.min(1, edge / (0.15 * Math.max(line, 1))));
+  const score = Math.max(0, Math.min(1, 0.55 * hr + 0.45 * margin));
+  if (score >= 0.66) return "Safe";
+  if (score >= 0.45) return "Balanced";
+  return "Aggressive";
+}
+
+const TIER_STYLE: Record<Tier, string> = {
+  Safe: "bg-accent-win/20 text-accent-win",
+  Balanced: "bg-accent-pending/20 text-accent-pending",
+  Aggressive: "bg-accent-loss/20 text-accent-loss",
+};
+
 type SortKey = "edge" | "hitRate" | "prediction" | "seasonAvg" | "name";
 
 const SORT_OPTIONS: { key: SortKey; label: string }[] = [
@@ -225,8 +251,21 @@ function PlayerStatCard({
   const hasCall = proj != null && needed != null;
   const over = hasCall ? proj >= needed : null;
   const wholeEdge = hasCall ? proj - needed : null;
+  const tier = confidenceTier(row.edge, row.hitRate, row.line);
   // Last 5, displayed oldest -> newest with the most recent highlighted.
   const last5 = row.recentForm.slice(0, 5).reverse();
+
+  // "Why": base from form/season (Model B), then the adjustment to the headline
+  // (Model C) — the player-calibration part exactly, the rest as matchup.
+  const base = row.models.B;
+  const form5 = row.recentForm.slice(0, 5);
+  const formAvg = form5.length
+    ? Math.round(form5.reduce((a, b) => a + b, 0) / form5.length)
+    : null;
+  const calDelta = base != null ? Math.round(((row.calibration?.factor ?? 1) - 1) * base) : 0;
+  const totalDelta =
+    base != null && row.prediction != null ? Math.round(row.prediction - base) : 0;
+  const matchupDelta = totalDelta - calDelta;
 
   return (
     <div className="card">
@@ -285,6 +324,13 @@ function PlayerStatCard({
                   </span>
                 ) : null}
               </div>
+              {tier ? (
+                <div
+                  className={`mt-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-bold ${TIER_STYLE[tier]}`}
+                >
+                  {tier}
+                </div>
+              ) : null}
             </>
           ) : (
             <div className="text-sm text-slate-300">
@@ -431,6 +477,18 @@ function PlayerStatCard({
               {row.actual > row.line ? "over" : "under"} the line
             </span>
           ) : null}
+        </div>
+      ) : null}
+
+      {/* Why: how the projection was built */}
+      {base != null && row.prediction != null ? (
+        <div className="mt-2 text-[11px] text-slate-400">
+          <span className="font-semibold text-slate-300">Why:</span> form{" "}
+          {formAvg ?? "–"}, season {row.seasonAvg != null ? floorStat(row.seasonAvg) : "–"}{" "}
+          → {floorStat(base)}
+          {matchupDelta !== 0 ? ` · matchup ${signed(matchupDelta)}` : ""}
+          {calDelta !== 0 ? ` · our read ${signed(calDelta)}` : ""} →{" "}
+          <span className="font-semibold text-white">{floorStat(row.prediction)}</span>
         </div>
       ) : null}
 
