@@ -128,20 +128,44 @@ export interface StatFeature {
   seasonAverage: number;
   /** Most-recent-first stat values, up to `window` games (for charts + hit rate). */
   recentForm: number[];
+  /** Player's average for this stat vs the upcoming opponent (null if never met). */
+  vsOpponentAvg: number | null;
+  /** How many career games that average is based on. */
+  vsOpponentGames: number;
 }
 
-/** Season average + recent form per stat, for persistence + display. */
+/** Player's record for a stat against a specific opponent (career). */
+function vsOpponentRecord(
+  log: PlayerGameLogEntry[],
+  opponent: string | null,
+  stat: StatType,
+): { avg: number | null; games: number } {
+  if (!opponent) return { avg: null, games: 0 };
+  const vals = log
+    .filter((g) => g.opponent === opponent)
+    .map((g) => statValue(g, stat));
+  if (vals.length === 0) return { avg: null, games: 0 };
+  return { avg: mean(vals), games: vals.length };
+}
+
+/** Season average + recent form + vs-opponent record per stat, for persistence + display. */
 export function buildStatFeatures(
   history: PlayerHistory,
   season: number,
+  opponent: string | null = null,
   window = 10,
 ): StatFeature[] {
   const log = history.gameLog;
-  return STAT_TYPES.map((stat) => ({
-    statType: stat,
-    seasonAverage: seasonAverage(log, season, stat),
-    recentForm: recentForm(log, stat, window),
-  }));
+  return STAT_TYPES.map((stat) => {
+    const vs = vsOpponentRecord(log, opponent, stat);
+    return {
+      statType: stat,
+      seasonAverage: seasonAverage(log, season, stat),
+      recentForm: recentForm(log, stat, window),
+      vsOpponentAvg: vs.avg,
+      vsOpponentGames: vs.games,
+    };
+  });
 }
 
 /** Actual stat values for a completed game (round + opponent match). */

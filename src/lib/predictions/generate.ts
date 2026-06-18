@@ -162,13 +162,15 @@ export async function generatePredictions(gameId: number): Promise<GenerateResul
       }
     }
 
-    for (const f of buildStatFeatures(history, season)) {
+    for (const f of buildStatFeatures(history, season, opponent)) {
       featureRows.push({
         playerId,
         gameId,
         statType: f.statType,
         seasonAverage: f.seasonAverage,
         recentForm: f.recentForm,
+        vsOpponentAvg: f.vsOpponentAvg,
+        vsOpponentGames: f.vsOpponentGames,
       });
     }
   }
@@ -206,6 +208,8 @@ export async function generatePredictions(gameId: number): Promise<GenerateResul
         set: {
           seasonAverage: sql`excluded.season_average`,
           recentForm: sql`excluded.recent_form`,
+          vsOpponentAvg: sql`excluded.vs_opponent_avg`,
+          vsOpponentGames: sql`excluded.vs_opponent_games`,
         },
       });
   }

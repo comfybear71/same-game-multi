@@ -207,6 +207,11 @@ export const playerGameFeatures = pgTable(
     seasonAverage: doublePrecision("season_average"),
     // Most-recent-first list of this stat across recent games (e.g. last 10).
     recentForm: jsonb("recent_form").$type<number[]>().notNull().default([]),
+    // The player's record against this game's opponent for this stat (from AFL
+    // Tables history): average and how many games it's based on. Drives the
+    // "vs this opponent" line in the player info popover.
+    vsOpponentAvg: doublePrecision("vs_opponent_avg"),
+    vsOpponentGames: integer("vs_opponent_games"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
