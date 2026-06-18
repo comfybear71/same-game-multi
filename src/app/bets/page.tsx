@@ -74,8 +74,8 @@ export default async function BetsPage() {
         </div>
       ) : (
         <div className="space-y-3">
-          {slips.map((slip) => (
-            <BetSlip key={slip.id} slip={slip} />
+          {groupByRound(slips).map((group, i) => (
+            <RoundSection key={group.key} group={group} defaultOpen={i === 0} />
           ))}
         </div>
       )}
@@ -91,6 +91,58 @@ function strikeRate(won: number, lost: number): string {
   const settled = won + lost;
   if (settled === 0) return "—";
   return `${Math.round((won / settled) * 100)}%`;
+}
+
+interface RoundGroup {
+  key: string;
+  round: number | null;
+  slips: BetWithLegs[];
+}
+
+/** Group slips by round, newest round first, unrounded last. */
+function groupByRound(slips: BetWithLegs[]): RoundGroup[] {
+  const map = new Map<number | null, BetWithLegs[]>();
+  for (const s of slips) {
+    const k = s.round ?? null;
+    const arr = map.get(k);
+    if (arr) arr.push(s);
+    else map.set(k, [s]);
+  }
+  return [...map.entries()]
+    .map(([round, group]) => ({ key: String(round), round, slips: group }))
+    .sort((a, b) => {
+      if (a.round == null) return 1;
+      if (b.round == null) return -1;
+      return b.round - a.round;
+    });
+}
+
+function RoundSection({
+  group,
+  defaultOpen,
+}: {
+  group: RoundGroup;
+  defaultOpen: boolean;
+}) {
+  const s = summarise(group.slips);
+  return (
+    <details open={defaultOpen} className="space-y-3">
+      <summary className="flex cursor-pointer list-none items-center justify-between rounded-lg bg-surface-card px-3 py-2">
+        <span className="text-sm font-semibold text-white">
+          {group.round != null ? `Round ${group.round}` : "No round"}
+        </span>
+        <span className="text-xs text-slate-400">
+          {s.total} slip{s.total === 1 ? "" : "s"} · {s.won}W {s.lost}L
+          {s.pending > 0 ? ` · ${s.pending} pending` : ""}
+        </span>
+      </summary>
+      <div className="space-y-3">
+        {group.slips.map((slip) => (
+          <BetSlip key={slip.id} slip={slip} />
+        ))}
+      </div>
+    </details>
+  );
 }
 
 function Stat({ label, value }: { label: string; value: string }) {
