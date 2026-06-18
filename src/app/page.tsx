@@ -10,16 +10,11 @@ import {
   getUpcomingGames,
   type FormResult,
 } from "@/lib/data/games";
-import {
-  getTeamRankings,
-  getTeamRatios,
-  type TeamRanking,
-  type TeamRatios,
-} from "@/lib/data/teamStats";
+import { getTeamRankings, type TeamRanking } from "@/lib/data/teamStats";
 import { canonicalTeam } from "@/lib/afl/teams";
-import { fixtureMatchupEdges, fixtureTeamRanking } from "@/lib/predictions/teamMatchup";
+import { fixtureStatWins, fixtureTeamRanking } from "@/lib/predictions/teamMatchup";
 
-import type { FixtureForm, FixtureRanks } from "@/components/GameCard";
+import type { FixtureForm, FixtureRanks, FixtureWins } from "@/components/GameCard";
 
 export const dynamic = "force-dynamic";
 
@@ -28,19 +23,17 @@ export default async function HomePage() {
   let upcoming: Game[] = [];
   let results: Game[] = [];
   let inPlay: Game[] = [];
-  let teamRatios: Map<string, TeamRatios> = new Map();
   let teamRankings: Map<string, TeamRanking> = new Map();
   let teamForm: Map<string, FormResult[]> = new Map();
   let dbError: string | null = null;
 
   try {
-    [nextGame, upcoming, results, inPlay, teamRatios, teamRankings, teamForm] =
+    [nextGame, upcoming, results, inPlay, teamRankings, teamForm] =
       await Promise.all([
         getNextGame(),
         getUpcomingGames(),
         getRecentResults(),
         getInPlayGames(),
-        getTeamRatios(),
         getTeamRankings(),
         getRecentTeamForm(),
       ]);
@@ -48,7 +41,6 @@ export default async function HomePage() {
     dbError = (err as Error).message;
   }
 
-  const edgesFor = (g: Game) => fixtureMatchupEdges(teamRatios, g.home, g.away);
   const ranksFor = (g: Game): FixtureRanks => ({
     home: fixtureTeamRanking(teamRankings, g.home),
     away: fixtureTeamRanking(teamRankings, g.away),
@@ -56,6 +48,10 @@ export default async function HomePage() {
   const formFor = (g: Game): FixtureForm => ({
     home: teamForm.get(canonicalTeam(g.home) ?? g.home) ?? null,
     away: teamForm.get(canonicalTeam(g.away) ?? g.away) ?? null,
+  });
+  const winsFor = (g: Game): FixtureWins => ({
+    home: fixtureStatWins(teamRankings, g.home, g.away),
+    away: fixtureStatWins(teamRankings, g.away, g.home),
   });
   const restUpcoming = upcoming.filter((g) => g.id !== nextGame?.id);
 
@@ -107,9 +103,9 @@ export default async function HomePage() {
           <GameCard
             game={nextGame}
             featured
-            edges={edgesFor(nextGame)}
             ranks={ranksFor(nextGame)}
             form={formFor(nextGame)}
+            wins={winsFor(nextGame)}
           />
         </section>
       ) : !dbError ? (
@@ -131,9 +127,9 @@ export default async function HomePage() {
               <GameCard
                 key={g.id}
                 game={g}
-                edges={edgesFor(g)}
                 ranks={ranksFor(g)}
                 form={formFor(g)}
+                wins={winsFor(g)}
               />
             ))}
           </div>
