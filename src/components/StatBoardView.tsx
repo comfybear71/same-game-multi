@@ -174,6 +174,7 @@ export function StatBoardView({
               key={r.playerId}
               row={r}
               record={record[recordKey(r.name, stat)]}
+              statLabel={STAT_TABS.find((t) => t.key === stat)?.label.toLowerCase() ?? stat}
             />
           ))}
         </div>
@@ -185,9 +186,11 @@ export function StatBoardView({
 function PlayerStatCard({
   row,
   record,
+  statLabel,
 }: {
   row: PlayerStatRow;
   record?: PlayerBetRecord;
+  statLabel: string;
 }) {
   const c = teamColors(row.team);
   const newsChip = row.news ? NEWS_CHIP[row.news.status] : null;
@@ -286,7 +289,8 @@ function PlayerStatCard({
           <span className="font-semibold text-slate-200">Your record:</span>{" "}
           <span className="text-accent-win">{record.hits}</span>
           <span className="text-slate-500">/</span>
-          {record.bets} · last time {record.lastLine} →{" "}
+          {record.bets} {record.bets === 1 ? "bet" : "bets"} · last time{" "}
+          {record.lastLine} →{" "}
           <span
             className={
               record.lastResult === "hit" ? "text-accent-win" : "text-accent-loss"
@@ -295,7 +299,11 @@ function PlayerStatCard({
             {record.lastActual ?? "—"} {record.lastResult === "hit" ? "✓" : "✗"}
           </span>
         </div>
-      ) : null}
+      ) : (
+        <div className="mt-3 rounded-md bg-surface px-2.5 py-1.5 text-xs text-slate-500">
+          ✨ New pick — you&apos;ve never backed his {statLabel} before.
+        </div>
+      )}
 
       {/* Last 5 form chips */}
       {last5.length > 0 ? (
