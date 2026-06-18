@@ -7,12 +7,16 @@ import { canonicalTeam } from "@/lib/afl/teams";
 // Read helpers for the UI. Server-only.
 
 /**
- * Games that have started recently but aren't marked complete — candidates for
- * "in play". The live score/clock is confirmed per-game from Squiggle in the UI.
+ * Games that have started but aren't marked complete — "in play / awaiting
+ * result". The live score/clock is confirmed per-game from Squiggle in the UI.
+ *
+ * The window runs back 24h, not 4h: an evening game often isn't flipped to
+ * "complete" until the next-morning settle cron, so a tighter window left it
+ * showing nowhere (not upcoming, not in-play, not a result) for hours.
  */
 export async function getInPlayGames(): Promise<Game[]> {
   const now = new Date();
-  const windowStart = new Date(now.getTime() - 4 * 60 * 60 * 1000);
+  const windowStart = new Date(now.getTime() - 24 * 60 * 60 * 1000);
   return db
     .select()
     .from(games)
