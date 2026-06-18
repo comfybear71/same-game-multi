@@ -19,6 +19,12 @@ export interface PredictionInput {
    * venue. >1 lifts the prediction, <1 lowers it.
    */
   venueFactor?: number;
+  /**
+   * Team matchup factor centred on 1.0: blends the player's own team's
+   * scoring strength in this stat with how much the opponent concedes it
+   * (Wheelo team season aggregates). >1 means a soft matchup for this stat.
+   */
+  teamFactor?: number;
 }
 
 export interface ModelOutput {
@@ -35,10 +41,13 @@ export interface ModelParams {
   formWeight: number;
   /** Clamp opponent/venue factors to this band to avoid silly extremes. */
   factorClamp: [number, number];
+  /** Clamp the team matchup factor to this (tighter) band — it stacks on top of opponent/venue. */
+  teamFactorClamp: [number, number];
 }
 
 export const DEFAULT_PARAMS: ModelParams = {
   formWindow: 5,
   formWeight: 0.6,
   factorClamp: [0.8, 1.2],
+  teamFactorClamp: [0.85, 1.15],
 };
