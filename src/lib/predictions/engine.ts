@@ -58,7 +58,10 @@ export function modelB(
   return round1(blended);
 }
 
-/** Model C — Model B adjusted by clamped opponent, venue, and team matchup factors. */
+/**
+ * Model C — Model B adjusted by clamped opponent, venue, team matchup, and
+ * per-player calibration factors.
+ */
 export function modelC(
   input: PredictionInput,
   params: ModelParams = DEFAULT_PARAMS,
@@ -67,7 +70,8 @@ export function modelC(
   const opp = clamp(input.opponentFactor ?? 1, params.factorClamp);
   const venue = clamp(input.venueFactor ?? 1, params.factorClamp);
   const team = clamp(input.teamFactor ?? 1, params.teamFactorClamp);
-  return round1(base * opp * venue * team);
+  const player = clamp(input.playerFactor ?? 1, params.playerFactorClamp);
+  return round1(base * opp * venue * team * player);
 }
 
 /** Run all three models for one input. */

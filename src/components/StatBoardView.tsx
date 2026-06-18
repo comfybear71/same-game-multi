@@ -34,6 +34,24 @@ function aiPickLine(picks: Partial<Record<StatType, number>>): string | null {
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
+// "We've under/over-rated him" hint, shown once we have a few games and the
+// bias is meaningful (>=5%). Round the averages for a clean read.
+function CalibrationNote({ cal }: { cal: PlayerStatRow["calibration"] }) {
+  if (!cal || cal.games < 3 || Math.abs(cal.factor - 1) < 0.05) return null;
+  const under = cal.factor > 1;
+  return (
+    <div className="mt-2 text-xs">
+      <span className={under ? "text-accent-win" : "text-accent-loss"}>
+        {under ? "📈 We under-rate him" : "📉 We over-rate him"}
+      </span>{" "}
+      <span className="text-slate-400">
+        — baseline {Math.round(cal.predAvg)}, actual averaging{" "}
+        {Math.round(cal.actualAvg)} over {cal.games} game{cal.games === 1 ? "" : "s"}
+      </span>
+    </div>
+  );
+}
+
 // Coarse news status -> chip label + colour. "unknown" never renders a chip.
 const NEWS_CHIP: Record<InjuryStatus, { label: string; cls: string } | null> = {
   out: { label: "OUT", cls: "bg-accent-loss/20 text-accent-loss ring-accent-loss/40" },
@@ -204,6 +222,9 @@ function PlayerStatCard({
           </span>
         </div>
       ) : null}
+
+      {/* Calibration: how the player has gone vs our baseline on this stat */}
+      <CalibrationNote cal={row.calibration} />
 
       {/* Your past record on this player + stat (the "learning" hint) */}
       {record && record.bets > 0 ? (

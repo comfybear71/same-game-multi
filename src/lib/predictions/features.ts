@@ -101,6 +101,7 @@ export interface FeatureContext {
   venue: string | null; // canonical venue of the upcoming game
   formWindow: number;
   teamFactors?: Record<StatType, number> | null; // team matchup factor per stat, see teamMatchup.ts
+  playerFactors?: Record<StatType, number> | null; // per-player calibration factor per stat, see calibration.ts
 }
 
 /** Build one PredictionInput per stat for a player's upcoming game. */
@@ -118,6 +119,7 @@ export function buildInputs(
     opponentFactor: opponentFactor(log, ctx.opponent, stat),
     venueFactor: venueFactor(history, ctx.venue, stat),
     teamFactor: ctx.teamFactors?.[stat] ?? 1,
+    playerFactor: ctx.playerFactors?.[stat] ?? 1,
   }));
 }
 
