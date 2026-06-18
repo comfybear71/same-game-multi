@@ -1,0 +1,1 @@
+ALTER TABLE "bets" ADD COLUMN "result_screenshot_url" text;

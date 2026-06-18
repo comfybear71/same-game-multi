@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 
 import { db } from "@/db";
 import { betLegs, bets, games, playerGameStats, type LegResult } from "@/db/schema";
@@ -143,10 +143,86 @@ export async function settleLegManually(
   await rollUpSlips([betId]);
 }
 
+/**
+ * Settle a slip directly from a bookmaker "Resulted" screenshot: write each
+ * matched leg's result + actual value, stamp the result screenshot on the bet,
+ * then roll the slip up to won/lost. Used by the post-game result upload, which
+ * doesn't need a linked game/player or AFL Tables — the screenshot already has
+ * the actuals. The morning pipeline later backfills any number we couldn't read.
+ */
+export async function applyResultMatches(
+  betId: number,
+  matches: { legId: number; result: LegResult; actualValue: number | null }[],
+  resultScreenshotUrl?: string | null,
+): Promise<SettleResult> {
+  for (const m of matches) {
+    await db
+      .update(betLegs)
+      .set({ result: m.result, actualValue: m.actualValue })
+      .where(and(eq(betLegs.id, m.legId), eq(betLegs.betId, betId)));
+  }
+  if (resultScreenshotUrl) {
+    await db
+      .update(bets)
+      .set({ resultScreenshotUrl })
+      .where(eq(bets.id, betId));
+  }
+  const slipsSettled = await rollUpSlips([betId]);
+  return { legsSettled: matches.length, slipsSettled };
+}
+
+/**
+ * Fill in actual values for legs that settled by result (e.g. from a screenshot
+ * with the tick but no readable number) once AFL Tables publishes the official
+ * figure. Only touches already-settled legs whose actualValue is still missing —
+ * it never changes a result or overwrites a number we already have.
+ */
+export async function backfillSettledActuals(): Promise<number> {
+  const legs = await db
+    .select()
+    .from(betLegs)
+    .where(
+      and(
+        inArray(betLegs.result, ["hit", "miss"]),
+        isNull(betLegs.actualValue),
+      ),
+    );
+
+  let filled = 0;
+  for (const leg of legs) {
+    if (!leg.gameId || !leg.playerId) continue;
+    const stat = (
+      await db
+        .select()
+        .from(playerGameStats)
+        .where(
+          and(
+            eq(playerGameStats.gameId, leg.gameId),
+            eq(playerGameStats.playerId, leg.playerId),
+            eq(playerGameStats.settled, true),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!stat) continue;
+    const actualValue = (stat as unknown as Record<string, number | null>)[
+      leg.statType
+    ];
+    if (actualValue == null) continue;
+    await db
+      .update(betLegs)
+      .set({ actualValue })
+      .where(eq(betLegs.id, leg.id));
+    filled++;
+  }
+  return filled;
+}
+
 export interface SettlementPipelineResult {
   sync: Awaited<ReturnType<typeof syncFixtures>>;
   statsRecorded: number;
   settle: SettleResult;
+  actualsBackfilled: number;
   accuracyRows: number;
 }
 
@@ -184,6 +260,7 @@ export async function runSettlementPipeline(
   }
 
   const settle = await settlePendingBets();
+  const actualsBackfilled = await backfillSettledActuals();
 
   let accuracyRows = 0;
   for (const round of rounds) {
@@ -191,5 +268,5 @@ export async function runSettlementPipeline(
     accuracyRows += acc.rowsWritten;
   }
 
-  return { sync, statsRecorded, settle, accuracyRows };
+  return { sync, statsRecorded, settle, actualsBackfilled, accuracyRows };
 }
