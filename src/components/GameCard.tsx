@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { TeamFormAndRanks } from "@/components/TeamFormAndRanks";
+import { TeamFormAndRanks, teamNameClass } from "@/components/TeamFormAndRanks";
 import type { Game, StatType } from "@/db/schema";
 import type { FormResult } from "@/lib/data/games";
 import type { TeamRanking } from "@/lib/predictions/teamMatchup";
@@ -16,18 +16,23 @@ export interface FixtureForm {
   away: FormResult[] | null;
 }
 
+export interface FixtureWins {
+  home: Set<StatType> | null;
+  away: Set<StatType> | null;
+}
+
 export function GameCard({
   game,
   featured = false,
-  edges = null,
   ranks = null,
   form = null,
+  wins = null,
 }: {
   game: Game;
   featured?: boolean;
-  edges?: Record<StatType, string | null> | null;
   ranks?: FixtureRanks | null;
   form?: FixtureForm | null;
+  wins?: FixtureWins | null;
 }) {
   const complete = game.status === "complete";
   return (
@@ -48,18 +53,18 @@ export function GameCard({
         <TeamLine
           name={game.home}
           score={complete ? game.homeScore : null}
-          edges={edges}
           ranking={ranks?.home ?? null}
           form={form?.home ?? null}
+          wins={wins?.home ?? null}
         />
         <span className="mt-1 text-xs text-slate-500">vs</span>
         <TeamLine
           name={game.away}
           score={complete ? game.awayScore : null}
           align="right"
-          edges={edges}
           ranking={ranks?.away ?? null}
           form={form?.away ?? null}
+          wins={wins?.away ?? null}
         />
       </div>
       <div className="mt-2 text-sm text-slate-400">{formatAwst(game.commenceTime)}</div>
@@ -71,25 +76,24 @@ function TeamLine({
   name,
   score,
   align = "left",
-  edges,
   ranking,
   form,
+  wins,
 }: {
   name: string;
   score: number | null;
   align?: "left" | "right";
-  edges?: Record<StatType, string | null> | null;
   ranking?: TeamRanking | null;
   form?: FormResult[] | null;
+  wins?: Set<StatType> | null;
 }) {
-  const led = new Set<StatType>(
-    edges ? (Object.keys(edges) as StatType[]).filter((s) => edges[s] === name) : [],
-  );
   return (
     <div className={`flex-1 ${align === "right" ? "text-right" : ""}`}>
-      <div className="font-semibold text-white">{name}</div>
+      <div className={`font-semibold ${wins ? teamNameClass(wins.size) : "text-white"}`}>
+        {name}
+      </div>
       {score != null ? <div className="text-sm text-slate-400">{score}</div> : null}
-      <TeamFormAndRanks form={form} ranking={ranking} ledStats={led} align={align} />
+      <TeamFormAndRanks form={form} ranking={ranking} wins={wins ?? undefined} align={align} />
     </div>
   );
 }

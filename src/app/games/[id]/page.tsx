@@ -5,7 +5,7 @@ import { GeneratePredictionsButton } from "@/components/GeneratePredictionsButto
 import { LiveScoreboard } from "@/components/LiveScoreboard";
 import { StatBoardView } from "@/components/StatBoardView";
 import { SuggestedMultis } from "@/components/SuggestedMultis";
-import { TeamFormAndRanks } from "@/components/TeamFormAndRanks";
+import { TeamFormAndRanks, teamNameClass } from "@/components/TeamFormAndRanks";
 import type { StatType } from "@/db/schema";
 import { auth } from "@/lib/auth";
 import {
@@ -20,10 +20,10 @@ import { teamColors } from "@/lib/afl/teamColors";
 import { floorStat, targetLabel } from "@/lib/format";
 import { getGameById, getRecentTeamForm, type FormResult } from "@/lib/data/games";
 import { getStatBoard, type StatBoard } from "@/lib/data/statboard";
-import { getTeamRankings, getTeamRatios } from "@/lib/data/teamStats";
+import { getTeamRankings } from "@/lib/data/teamStats";
 import { STAT_TYPES } from "@/lib/predictions/features";
 import {
-  fixtureMatchupEdges,
+  fixtureStatWins,
   fixtureTeamRanking,
   type TeamRanking,
 } from "@/lib/predictions/teamMatchup";
@@ -70,25 +70,22 @@ export default async function GamePage({ params }: { params: { id: string } }) {
   let awayRanking: TeamRanking | null = null;
   let homeForm: FormResult[] | null = null;
   let awayForm: FormResult[] | null = null;
-  let edges: Record<StatType, string | null> | null = null;
+  let homeWins = new Set<StatType>();
+  let awayWins = new Set<StatType>();
   try {
-    const [rankings, ratios, form] = await Promise.all([
+    const [rankings, form] = await Promise.all([
       getTeamRankings(),
-      getTeamRatios(),
       getRecentTeamForm(),
     ]);
     homeRanking = fixtureTeamRanking(rankings, game.home);
     awayRanking = fixtureTeamRanking(rankings, game.away);
     homeForm = form.get(canonicalTeam(game.home) ?? game.home) ?? null;
     awayForm = form.get(canonicalTeam(game.away) ?? game.away) ?? null;
-    edges = fixtureMatchupEdges(ratios, game.home, game.away);
+    homeWins = fixtureStatWins(rankings, game.home, game.away);
+    awayWins = fixtureStatWins(rankings, game.away, game.home);
   } catch {
     // team stats are best-effort; the rest of the page still renders
   }
-  const ledFor = (name: string) =>
-    new Set<StatType>(
-      edges ? (Object.keys(edges) as StatType[]).filter((s) => edges![s] === name) : [],
-    );
   const hasTeamStats = !!(homeRanking || awayRanking || homeForm || awayForm);
 
   const hasData = board ? STAT_TYPES.some((s) => board!.byStat[s].length > 0) : false;
@@ -118,19 +115,19 @@ export default async function GamePage({ params }: { params: { id: string } }) {
           </div>
           <div className="flex items-start justify-between gap-3">
             <div className="flex-1">
-              <div className="font-semibold text-white">{game.home}</div>
-              <TeamFormAndRanks
-                form={homeForm}
-                ranking={homeRanking}
-                ledStats={ledFor(game.home)}
-              />
+              <div className={`font-semibold ${teamNameClass(homeWins.size)}`}>
+                {game.home}
+              </div>
+              <TeamFormAndRanks form={homeForm} ranking={homeRanking} wins={homeWins} />
             </div>
             <div className="flex-1 text-right">
-              <div className="font-semibold text-white">{game.away}</div>
+              <div className={`font-semibold ${teamNameClass(awayWins.size)}`}>
+                {game.away}
+              </div>
               <TeamFormAndRanks
                 form={awayForm}
                 ranking={awayRanking}
-                ledStats={ledFor(game.away)}
+                wins={awayWins}
                 align="right"
               />
             </div>

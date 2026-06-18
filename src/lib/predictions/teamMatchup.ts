@@ -143,3 +143,21 @@ export function fixtureTeamRanking(
 ): TeamRanking | null {
   return rankings.get(canonicalTeam(team) ?? team) ?? null;
 }
+
+/** Stats on which `team` out-ranks `opponent` in this fixture (lower rank = better). */
+export function fixtureStatWins(
+  rankings: Map<string, TeamRanking>,
+  team: string,
+  opponent: string,
+): Set<StatType> {
+  const wins = new Set<StatType>();
+  const t = fixtureTeamRanking(rankings, team);
+  const o = fixtureTeamRanking(rankings, opponent);
+  if (!t || !o) return wins;
+  for (const stat of STATS) {
+    const tr = t.rank[stat];
+    const or = o.rank[stat];
+    if (tr && or && tr < or) wins.add(stat);
+  }
+  return wins;
+}
