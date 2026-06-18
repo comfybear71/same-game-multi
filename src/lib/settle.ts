@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 
 import { db } from "@/db";
 import { betLegs, bets, games, playerGameStats, type LegResult } from "@/db/schema";
@@ -172,21 +172,18 @@ export async function applyResultMatches(
 }
 
 /**
- * Fill in actual values for legs that settled by result (e.g. from a screenshot
- * with the tick but no readable number) once AFL Tables publishes the official
- * figure. Only touches already-settled legs whose actualValue is still missing —
- * it never changes a result or overwrites a number we already have.
+ * Reconcile actual values on already-settled legs against the official AFL
+ * Tables figure once it publishes — the same source the fixtures' previous
+ * results show. Refreshes the number whether it was missing or came from a
+ * screenshot/manual entry, so the data we train the model on always matches
+ * the real result. It never changes a leg's hit/miss (the bookie decides the
+ * payout); only the recorded number is updated.
  */
 export async function backfillSettledActuals(): Promise<number> {
   const legs = await db
     .select()
     .from(betLegs)
-    .where(
-      and(
-        inArray(betLegs.result, ["hit", "miss"]),
-        isNull(betLegs.actualValue),
-      ),
-    );
+    .where(inArray(betLegs.result, ["hit", "miss"]));
 
   let filled = 0;
   for (const leg of legs) {
@@ -208,7 +205,7 @@ export async function backfillSettledActuals(): Promise<number> {
     const actualValue = (stat as unknown as Record<string, number | null>)[
       leg.statType
     ];
-    if (actualValue == null) continue;
+    if (actualValue == null || actualValue === leg.actualValue) continue;
     await db
       .update(betLegs)
       .set({ actualValue })

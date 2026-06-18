@@ -81,14 +81,14 @@ export function UploadResultButton({ betId }: { betId: number }) {
   }
 
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-2">
       <button
         type="button"
-        className="text-[11px] text-slate-500 underline hover:text-slate-300"
+        className="btn w-full"
         disabled={busy}
         onClick={() => fileRef.current?.click()}
       >
-        {busy ? "reading result…" : "upload result screenshot"}
+        {busy ? "Reading result…" : "📷 Upload result screenshot"}
       </button>
       <input
         ref={fileRef}
@@ -99,10 +99,10 @@ export function UploadResultButton({ betId }: { betId: number }) {
       />
 
       {pending ? (
-        <div className="rounded-lg border border-accent-pending/40 bg-accent-pending/5 p-2 text-[11px]">
-          <p className="text-slate-300">
-            Matched {pending.preview.matched}/{pending.preview.total} legs. Couldn&apos;t
-            match:
+        <div className="rounded-lg border border-accent-pending/40 bg-accent-pending/5 p-3 text-sm">
+          <p className="text-slate-200">
+            Matched {pending.preview.matched} of {pending.preview.total} legs. These
+            ones weren&apos;t found in the screenshot:
           </p>
           <ul className="mt-1 text-slate-400">
             {pending.preview.unmatchedStored.map((l, i) => (
@@ -111,28 +111,28 @@ export function UploadResultButton({ betId }: { betId: number }) {
               </li>
             ))}
           </ul>
-          <div className="mt-1.5 flex gap-2">
+          <div className="mt-3 flex gap-2">
             <button
               type="button"
-              className="font-semibold text-accent-win"
+              className="btn"
               disabled={busy}
               onClick={confirmApply}
             >
-              settle matched anyway
+              Settle matched legs
             </button>
             <button
               type="button"
-              className="text-slate-500"
+              className="nav-link"
               disabled={busy}
               onClick={() => setPending(null)}
             >
-              cancel
+              Cancel
             </button>
           </div>
         </div>
       ) : null}
 
-      {error ? <p className="text-[11px] text-accent-loss">{error}</p> : null}
+      {error ? <p className="text-sm text-accent-loss">{error}</p> : null}
     </div>
   );
 }

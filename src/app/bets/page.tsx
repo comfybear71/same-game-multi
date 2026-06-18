@@ -194,15 +194,13 @@ function BetSlip({ slip }: { slip: BetWithLegs }) {
           );
         })}
       </ul>
-      {slip.status === "pending" ? (
-        <div className="mt-3 border-t border-surface-border pt-3">
-          <UploadResultButton betId={slip.id} />
-          <p className="mt-1 text-[11px] text-slate-500">
-            Upload the bookmaker&apos;s &ldquo;Resulted&rdquo; screen to settle this
-            slip from the actual numbers.
-          </p>
-        </div>
-      ) : null}
+      <div className="mt-3 border-t border-surface-border pt-3">
+        <UploadResultButton betId={slip.id} />
+        <p className="mt-2 text-xs text-slate-500">
+          Take a screenshot of this bet&apos;s results in the Sportsbet app, then tap
+          the button above to fill in the scores automatically.
+        </p>
+      </div>
       {slip.screenshotUrl || slip.resultScreenshotUrl ? (
         <div className="mt-3 flex gap-2">
           {slip.screenshotUrl ? (
