@@ -1,26 +1,15 @@
 import "dotenv/config";
 
-import { neon } from "@neondatabase/serverless";
-import { drizzle } from "drizzle-orm/neon-http";
-import { migrate } from "drizzle-orm/neon-http/migrator";
+import { runMigrations } from "./runMigrations";
 
-// Standalone migration runner: `npm run db:migrate`.
-// Reads DATABASE_URL from the environment (.env.local in dev).
-async function main() {
-  const url = process.env.DATABASE_URL;
-  if (!url) {
-    throw new Error("DATABASE_URL is not set. Add it to .env.local.");
-  }
-
-  const sql = neon(url);
-  const db = drizzle(sql);
-
-  console.log("Running migrations from ./drizzle ...");
-  await migrate(db, { migrationsFolder: "./drizzle" });
-  console.log("Migrations complete.");
-}
-
-main().catch((err) => {
-  console.error("Migration failed:", err);
-  process.exit(1);
-});
+// Standalone migration runner: `npm run db:migrate` (reads DATABASE_URL from
+// .env.local). For deploys you can instead trigger /api/admin/migrate from the
+// running app, which migrates over Neon's serverless driver.
+runMigrations()
+  .then((r) => {
+    console.log(r.applied ? "Migrations complete." : "No DATABASE_URL — nothing to do.");
+  })
+  .catch((err) => {
+    console.error("Migration failed:", err);
+    process.exit(1);
+  });

@@ -8,6 +8,8 @@ import {
   getRecentResults,
   getUpcomingGames,
 } from "@/lib/data/games";
+import { getTeamRatios, type TeamRatios } from "@/lib/data/teamStats";
+import { fixtureMatchupEdges } from "@/lib/predictions/teamMatchup";
 
 export const dynamic = "force-dynamic";
 
@@ -16,19 +18,22 @@ export default async function HomePage() {
   let upcoming: Game[] = [];
   let results: Game[] = [];
   let inPlay: Game[] = [];
+  let teamRatios: Map<string, TeamRatios> = new Map();
   let dbError: string | null = null;
 
   try {
-    [nextGame, upcoming, results, inPlay] = await Promise.all([
+    [nextGame, upcoming, results, inPlay, teamRatios] = await Promise.all([
       getNextGame(),
       getUpcomingGames(),
       getRecentResults(),
       getInPlayGames(),
+      getTeamRatios(),
     ]);
   } catch (err) {
     dbError = (err as Error).message;
   }
 
+  const edgesFor = (g: Game) => fixtureMatchupEdges(teamRatios, g.home, g.away);
   const restUpcoming = upcoming.filter((g) => g.id !== nextGame?.id);
 
   return (
@@ -76,7 +81,7 @@ export default async function HomePage() {
           <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-accent">
             Next game
           </h2>
-          <GameCard game={nextGame} featured />
+          <GameCard game={nextGame} featured edges={edgesFor(nextGame)} />
         </section>
       ) : !dbError ? (
         <div className="card">
@@ -94,7 +99,7 @@ export default async function HomePage() {
           </h2>
           <div className="grid gap-3 sm:grid-cols-2">
             {restUpcoming.map((g) => (
-              <GameCard key={g.id} game={g} />
+              <GameCard key={g.id} game={g} edges={edgesFor(g)} />
             ))}
           </div>
         </section>

@@ -1,7 +1,9 @@
 import Link from "next/link";
 
 import { LegResultControls } from "@/components/LegResultControls";
+import { RunMigrationsButton } from "@/components/RunMigrationsButton";
 import { SettleNowButton } from "@/components/SettleNowButton";
+import { UploadResultButton } from "@/components/UploadResultButton";
 import { auth } from "@/lib/auth";
 import {
   getBetsForUser,
@@ -77,6 +79,10 @@ export default async function BetsPage() {
           ))}
         </div>
       )}
+
+      <footer className="border-t border-surface-border pt-4">
+        <RunMigrationsButton />
+      </footer>
     </div>
   );
 }
@@ -188,21 +194,39 @@ function BetSlip({ slip }: { slip: BetWithLegs }) {
           );
         })}
       </ul>
-      {slip.screenshotUrl ? (
-        <a
-          href={slip.screenshotUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="mt-3 inline-block"
-        >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={slip.screenshotUrl}
-            alt="bet slip"
-            className="max-h-28 rounded-lg border border-surface-border"
-          />
-        </a>
+      {slip.status === "pending" ? (
+        <div className="mt-3 border-t border-surface-border pt-3">
+          <UploadResultButton betId={slip.id} />
+          <p className="mt-1 text-[11px] text-slate-500">
+            Upload the bookmaker&apos;s &ldquo;Resulted&rdquo; screen to settle this
+            slip from the actual numbers.
+          </p>
+        </div>
+      ) : null}
+      {slip.screenshotUrl || slip.resultScreenshotUrl ? (
+        <div className="mt-3 flex gap-2">
+          {slip.screenshotUrl ? (
+            <Screenshot url={slip.screenshotUrl} label="Slip" />
+          ) : null}
+          {slip.resultScreenshotUrl ? (
+            <Screenshot url={slip.resultScreenshotUrl} label="Result" />
+          ) : null}
+        </div>
       ) : null}
     </div>
+  );
+}
+
+function Screenshot({ url, label }: { url: string; label: string }) {
+  return (
+    <a href={url} target="_blank" rel="noreferrer" className="inline-block">
+      <span className="mb-1 block text-[11px] text-slate-500">{label}</span>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={url}
+        alt={`bet ${label.toLowerCase()}`}
+        className="max-h-28 rounded-lg border border-surface-border"
+      />
+    </a>
   );
 }

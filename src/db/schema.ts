@@ -269,8 +269,11 @@ export const bets = pgTable("bets", {
   totalStake: doublePrecision("total_stake"),
   status: betStatusEnum("status").notNull().default("pending"),
   notes: text("notes"),
-  // Screenshot of the whole slip (Vercel Blob URL).
+  // Screenshot of the whole slip at placement time (Vercel Blob URL).
   screenshotUrl: text("screenshot_url"),
+  // Screenshot of the bookmaker's "Resulted" screen, uploaded after the game to
+  // settle the slip from the actual per-leg outcomes (Vercel Blob URL).
+  resultScreenshotUrl: text("result_screenshot_url"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

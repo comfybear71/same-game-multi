@@ -22,6 +22,13 @@
       "when": 1781414363396,
       "tag": "0002_brief_the_hand",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1781793540801,
+      "tag": "0003_wide_marten_broadcloak",
+      "breakpoints": true
     }
   ]
 }

@@ -11,8 +11,10 @@ import {
 import { canonicalTeam } from "@/lib/afl/teams";
 import { canonicalVenue } from "@/lib/afl/venues";
 import { getPlayerHistory, type PlayerHistory } from "@/lib/ingest/aflTables";
+import { getTeamSeasonStats } from "@/lib/ingest/wheelo";
 import { runAllModels } from "./engine";
-import { buildInputs, buildStatFeatures } from "./features";
+import { buildInputs, buildStatFeatures, STAT_TYPES } from "./features";
+import { matchupFactor, teamRatios } from "./teamMatchup";
 import { DEFAULT_PARAMS } from "./types";
 
 // Generate and persist Models A/B/C predictions for every player who has a
@@ -109,6 +111,9 @@ export async function generatePredictions(gameId: number): Promise<GenerateResul
   const idByKey = new Map<string, number>();
   for (const row of playerRows) idByKey.set(`${row.name}|${row.team}`, row.id);
 
+  // One team-stats fetch for the whole game (Wheelo season aggregates, for + against).
+  const ratios = teamRatios(await getTeamSeasonStats(season));
+
   // Build prediction + feature rows, backfill bookmaker line player ids.
   const predRows: (typeof predictions.$inferInsert)[] = [];
   const featureRows: (typeof playerGameFeatures.$inferInsert)[] = [];
@@ -124,11 +129,16 @@ export async function generatePredictions(gameId: number): Promise<GenerateResul
     const opponent =
       history.team === homeC ? awayC : history.team === awayC ? homeC : null;
 
+    const teamFactors = Object.fromEntries(
+      STAT_TYPES.map((stat) => [stat, matchupFactor(ratios, history.team, opponent, stat)]),
+    ) as Record<(typeof STAT_TYPES)[number], number>;
+
     const inputs = buildInputs(history, {
       season,
       opponent,
       venue,
       formWindow: DEFAULT_PARAMS.formWindow,
+      teamFactors,
     });
     for (const input of inputs) {
       for (const out of runAllModels(input, DEFAULT_PARAMS)) {
