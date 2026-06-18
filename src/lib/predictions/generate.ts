@@ -11,7 +11,11 @@ import {
 import { canonicalTeam } from "@/lib/afl/teams";
 import { canonicalVenue } from "@/lib/afl/venues";
 import { getPlayerCalibration } from "@/lib/data/calibration";
-import { getPlayerHistory, type PlayerHistory } from "@/lib/ingest/aflTables";
+import {
+  getPlayerHistory,
+  recentFantasyAverage,
+  type PlayerHistory,
+} from "@/lib/ingest/aflTables";
 import { getTeamSeasonStats } from "@/lib/ingest/wheelo";
 import { calKey } from "./calibration";
 import { runAllModels } from "./engine";
@@ -100,11 +104,21 @@ export async function generatePredictions(gameId: number): Promise<GenerateResul
         name: r.name,
         team: r.history.team,
         jumper: r.history.jumper,
+        dob: r.history.bio.dob,
+        heightCm: r.history.bio.heightCm,
+        weightKg: r.history.bio.weightKg,
+        recentFantasyAvg: recentFantasyAverage(r.history.gameLog),
       })),
     )
     .onConflictDoUpdate({
       target: [players.name, players.team],
-      set: { jumper: sql`excluded.jumper` },
+      set: {
+        jumper: sql`excluded.jumper`,
+        dob: sql`excluded.dob`,
+        heightCm: sql`excluded.height_cm`,
+        weightKg: sql`excluded.weight_kg`,
+        recentFantasyAvg: sql`excluded.recent_fantasy_avg`,
+      },
     });
   const playerRows = await db
     .select({ id: players.id, name: players.name, team: players.team })

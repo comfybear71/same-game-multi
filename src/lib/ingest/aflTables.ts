@@ -27,6 +27,13 @@ export interface PlayerGameLogEntry {
   marks: number;
   tackles: number;
   goals: number;
+  fantasy: number; // AFL Fantasy points for the game (computed from raw stats)
+}
+
+export interface PlayerBio {
+  dob: string | null; // ISO yyyy-mm-dd
+  heightCm: number | null;
+  weightKg: number | null;
 }
 
 export interface VenueSplit {
@@ -43,7 +50,26 @@ export interface PlayerHistory {
   venueSplits: VenueSplit[];
   team: string | null; // canonical team from the most recent season
   jumper: number | null; // most recent guernsey number
+  bio: PlayerBio;
 }
+
+// AFL Fantasy scoring weights, applied to the raw match stats.
+const FANTASY = {
+  kick: 3,
+  handball: 2,
+  mark: 3,
+  tackle: 4,
+  goal: 6,
+  behind: 1,
+  hitout: 1,
+  freeFor: 1,
+  freeAgainst: -1,
+};
+
+const MONTHS: Record<string, string> = {
+  jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
+  jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12",
+};
 
 /** Build the AFL Tables URL for a player name (best effort). */
 export function playerUrl(name: string, slugOverride?: string | null): string {
@@ -101,6 +127,19 @@ export function parseGameLog(html: string): PlayerGameLogEntry[] {
       const gm = cells[0].replace(/[^0-9]/g, "");
       if (!/^\d+$/.test(gm)) continue;
       const jumperRaw = cells[4].replace(/[^0-9]/g, "");
+      // Columns: KI 5, MK 6, HB 7, DI 8, GL 9, BH 10, HO 11, TK 12, … FF 17, FA 18.
+      const ff = cells.length > 17 ? toInt(cells[17]) : 0;
+      const fa = cells.length > 18 ? toInt(cells[18]) : 0;
+      const fantasy =
+        toInt(cells[5]) * FANTASY.kick +
+        toInt(cells[7]) * FANTASY.handball +
+        toInt(cells[6]) * FANTASY.mark +
+        toInt(cells[12]) * FANTASY.tackle +
+        toInt(cells[9]) * FANTASY.goal +
+        toInt(cells[10]) * FANTASY.behind +
+        toInt(cells[11]) * FANTASY.hitout +
+        ff * FANTASY.freeFor +
+        fa * FANTASY.freeAgainst;
       games.push({
         season,
         round: cells[2],
@@ -110,10 +149,39 @@ export function parseGameLog(html: string): PlayerGameLogEntry[] {
         disposals: toInt(cells[8]),
         goals: toInt(cells[9]),
         tackles: toInt(cells[12]),
+        fantasy,
       });
     }
   }
   return games;
+}
+
+/** Parse the bio header ("Born: 24-Nov-1995 … Height: 193 cm Weight: 93 kg"). */
+export function parseBio(html: string): PlayerBio {
+  const head = html.slice(0, 2500).replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ");
+  const born = head.match(/Born:\s*(\d{1,2})-([A-Za-z]{3})-(\d{4})/);
+  let dob: string | null = null;
+  if (born) {
+    const mm = MONTHS[born[2].toLowerCase()];
+    if (mm) dob = `${born[3]}-${mm}-${born[1].padStart(2, "0")}`;
+  }
+  const h = head.match(/Height:\s*(\d+)\s*cm/);
+  const w = head.match(/Weight:\s*(\d+)\s*kg/);
+  return {
+    dob,
+    heightCm: h ? parseInt(h[1], 10) : null,
+    weightKg: w ? parseInt(w[1], 10) : null,
+  };
+}
+
+/** Mean AFL Fantasy points over the most recent `window` games. */
+export function recentFantasyAverage(
+  log: PlayerGameLogEntry[],
+  window = 5,
+): number | null {
+  const vals = log.slice(-window).map((g) => g.fantasy);
+  if (vals.length === 0) return null;
+  return vals.reduce((a, b) => a + b, 0) / vals.length;
 }
 
 /** The player's team in the most recent season (canonical), if determinable. */
@@ -207,7 +275,13 @@ function nameCandidates(name: string): string[] {
 }
 
 function emptyHistory(): PlayerHistory {
-  return { gameLog: [], venueSplits: [], team: null, jumper: null };
+  return {
+    gameLog: [],
+    venueSplits: [],
+    team: null,
+    jumper: null,
+    bio: { dob: null, heightCm: null, weightKg: null },
+  };
 }
 
 /** Fetch + parse one AFL Tables URL. Returns null if missing/empty. */
@@ -237,6 +311,7 @@ async function fetchHistoryAt(url: string): Promise<PlayerHistory | null> {
       venueSplits: parseVenueSplits(html),
       team: parseLatestTeam(html),
       jumper,
+      bio: parseBio(html),
     };
   } catch {
     return null;
