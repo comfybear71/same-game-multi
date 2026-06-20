@@ -20,6 +20,7 @@ export default async function NewBetPage() {
 
   const options = games.map((g) => ({
     id: g.id,
+    round: g.round ?? null,
     label: `R${g.round ?? "?"} · ${g.home} v ${g.away}`,
   }));
 

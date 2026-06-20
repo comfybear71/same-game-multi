@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import type { StatType } from "@/db/schema";
@@ -24,13 +23,7 @@ const TIERS: { key: RiskTier; label: string; blurb: string; color: string }[] = 
   { key: "high", label: "High risk", blurb: "Longshot", color: "text-accent-pending" },
 ];
 
-function estOddsOf(legs: SuggestedLeg[]): number | null {
-  if (legs.length === 0) return null;
-  return Math.round(legs.reduce((p, l) => p * (l.odds ?? 1), 1) * 100) / 100;
-}
-
 export function SuggestedMultis({ gameId }: { gameId: number }) {
-  const router = useRouter();
   const [focus, setFocus] = useState<StatType | "any">("any");
   const [legCount, setLegCount] = useState(DEFAULT_LEGS);
   const [data, setData] = useState<Suggestion[] | null>(null);
@@ -58,28 +51,14 @@ export function SuggestedMultis({ gameId }: { gameId: number }) {
 
   const current = data?.find((s) => s.tier === active) ?? null;
 
-  function logBet(legs: SuggestedLeg[]) {
-    const prefill = {
-      gameId,
-      totalOdds: estOddsOf(legs),
-      legs: legs.map((l) => ({
-        playerName: l.playerName,
-        statType: l.statType,
-        line: l.line,
-        odds: l.odds,
-      })),
-    };
-    sessionStorage.setItem("betPrefill", JSON.stringify(prefill));
-    router.push("/bets/new");
-  }
-
   return (
     <section className="card space-y-3">
       <div>
         <h2 className="text-lg font-semibold text-white">Suggested multis</h2>
         <p className="text-sm text-slate-400">
           AI-picked from our predictions vs the bookie lines. Choose how many
-          legs and a risk level, then trim the list before you log it.
+          legs and a risk level to explore the board&apos;s best combinations.
+          Place the bet in your bookie app, then log it from the Bets tab.
         </p>
       </div>
 
@@ -158,7 +137,7 @@ export function SuggestedMultis({ gameId }: { gameId: number }) {
       {error ? <p className="text-sm text-accent-loss">{error}</p> : null}
 
       {current ? (
-        <SuggestionCard key={`${active}-${focus}-${legCount}`} s={current} onLog={logBet} />
+        <SuggestionCard key={`${active}-${focus}-${legCount}`} s={current} />
       ) : null}
     </section>
   );
@@ -178,13 +157,7 @@ function multiOdds(legs: EditableLeg[]): number | null {
   return Math.round(legs.reduce((p, l) => p * (l.estOdds ?? 1), 1) * 100) / 100;
 }
 
-function SuggestionCard({
-  s,
-  onLog,
-}: {
-  s: Suggestion;
-  onLog: (legs: SuggestedLeg[]) => void;
-}) {
+function SuggestionCard({ s }: { s: Suggestion }) {
   const [legs, setLegs] = useState<EditableLeg[]>(() => toEditable(s.legs));
 
   // Resync when a new suggestion arrives for the same tier — e.g. the leg-count
@@ -213,18 +186,6 @@ function SuggestionCard({
         const target = Math.max(1, l.target + delta);
         return { ...l, target, estOdds: estimateOddsAtTarget(l.line, l.odds, target) };
       }),
-    );
-  }
-
-  // Push the edited targets back onto each leg as a clean half-line (so it logs
-  // and displays as "{target}+"), carrying the re-estimated odds.
-  function log() {
-    onLog(
-      legs.map((l) => ({
-        ...l,
-        line: l.target === lineTarget(l.line) ? l.line : l.target - 0.5,
-        odds: l.estOdds,
-      })),
     );
   }
 
@@ -310,19 +271,14 @@ function SuggestionCard({
         </ul>
       )}
 
-      <div className="flex items-center justify-between border-t border-surface-border pt-2">
-        <div>
-          <div className="text-xs text-slate-400">Estimated odds</div>
-          <div className="text-lg font-bold text-white">
-            {estOdds != null ? `$${estOdds.toFixed(2)}` : "—"}
-          </div>
-          <div className="text-[11px] text-slate-500">
-            estimate — confirm real price in the bookie app
-          </div>
+      <div className="border-t border-surface-border pt-2">
+        <div className="text-xs text-slate-400">Estimated odds</div>
+        <div className="text-lg font-bold text-white">
+          {estOdds != null ? `$${estOdds.toFixed(2)}` : "—"}
         </div>
-        <button className="btn" onClick={log} disabled={legs.length === 0}>
-          Log this bet
-        </button>
+        <div className="text-[11px] text-slate-500">
+          estimate — confirm real price in the bookie app
+        </div>
       </div>
     </div>
   );

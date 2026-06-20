@@ -142,9 +142,11 @@ export function StatBoardView({
   const [team, setTeam] = useState<string>("all");
   const [sort, setSort] = useState<SortKey>("edge");
 
+  // Show every player we have a prediction for. Players without a bookmaker
+  // line for this stat (edge == null) sort to the bottom under the default
+  // "Edge" sort, so lined picks still lead — but nobody is hidden.
   const all = board.byStat[stat].filter((r) => team === "all" || r.team === team);
-  const lined = all.filter((r) => r.line != null);
-  const rows = sortRows(lined.length > 0 ? lined : all, sort);
+  const rows = sortRows(all, sort);
 
   return (
     <div className="space-y-3">
