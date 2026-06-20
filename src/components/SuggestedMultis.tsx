@@ -115,7 +115,12 @@ export function SuggestedMultis({ gameId }: { gameId: number }) {
       {error ? <p className="text-sm text-accent-loss">{error}</p> : null}
 
       {data ? (
-        <SuggestionCard key={`${focus}-${legCount}`} s={data} gameId={gameId} />
+        <SuggestionCard
+          key={`${focus}-${legCount}`}
+          s={data}
+          gameId={gameId}
+          focus={focus}
+        />
       ) : null}
 
       {info ? (
@@ -285,7 +290,15 @@ function legKey(playerId: number, statType: string): string {
   return `${playerId}:${statType}`;
 }
 
-function SuggestionCard({ s, gameId }: { s: Suggestion; gameId: number }) {
+function SuggestionCard({
+  s,
+  gameId,
+  focus,
+}: {
+  s: Suggestion;
+  gameId: number;
+  focus: StatType | "any";
+}) {
   const [legs, setLegs] = useState<EditableLeg[]>(() => toEditable(s.legs));
 
   // Resync when a new suggestion arrives — e.g. the leg-count fetch resolves
@@ -404,7 +417,12 @@ function SuggestionCard({ s, gameId }: { s: Suggestion; gameId: number }) {
         </ul>
       )}
 
-      <AddPlayerPanel gameId={gameId} existingKeys={existingKeys} onAdd={addLeg} />
+      <AddPlayerPanel
+        gameId={gameId}
+        focus={focus}
+        existingKeys={existingKeys}
+        onAdd={addLeg}
+      />
 
       <div className="flex items-end justify-between gap-4 border-t border-surface-border pt-2">
         <div>
@@ -435,10 +453,12 @@ function SuggestionCard({ s, gameId }: { s: Suggestion; gameId: number }) {
 // the auto-pick.
 function AddPlayerPanel({
   gameId,
+  focus,
   existingKeys,
   onAdd,
 }: {
   gameId: number;
+  focus: StatType | "any";
   existingKeys: Set<string>;
   onAdd: (leg: SuggestedLeg) => void;
 }) {
@@ -479,8 +499,12 @@ function AddPlayerPanel({
     );
   }
 
+  // Keep the picker to the active focus's market — building a Marks multi
+  // should only offer Marks legs, etc. "Any" stays open to every market.
   const pool = (candidates ?? []).filter(
-    (c) => !existingKeys.has(legKey(c.playerId, c.statType)),
+    (c) =>
+      !existingKeys.has(legKey(c.playerId, c.statType)) &&
+      (focus === "any" || c.statType === focus),
   );
   const q = query.trim().toLowerCase();
   const filtered = q ? pool.filter((c) => c.playerName.toLowerCase().includes(q)) : pool;
