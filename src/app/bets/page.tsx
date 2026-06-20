@@ -136,9 +136,16 @@ function RoundSection({
           {s.pending > 0 ? ` · ${s.pending} pending` : ""}
         </span>
       </summary>
-      <div className="space-y-3">
+      {/* Slips scroll horizontally within the round so the page stays short as
+          weeks pile up — one card per swipe on mobile, a row on desktop. */}
+      <div className="-mx-1 flex snap-x snap-mandatory gap-3 overflow-x-auto px-1 pb-2">
         {group.slips.map((slip) => (
-          <BetSlip key={slip.id} slip={slip} />
+          <div
+            key={slip.id}
+            className="w-[85vw] max-w-sm shrink-0 snap-start sm:w-80"
+          >
+            <BetSlip slip={slip} />
+          </div>
         ))}
       </div>
     </details>
