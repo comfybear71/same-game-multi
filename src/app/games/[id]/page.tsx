@@ -56,7 +56,7 @@ export default async function GamePage({ params }: { params: { id: string } }) {
     if (email) {
       const userId = await userIdForEmail(email);
       if (userId) {
-        myLegs = await getUserBetTracker(userId, game.id);
+        myLegs = await getUserBetTracker(userId, game.id, game.round);
         playerRecord = (await getPlayerBettingRecord(userId)).byKey;
       }
     }

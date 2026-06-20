@@ -12,14 +12,16 @@ import { getPlayerBettingRecord, playerRecordKey } from "@/lib/data/bets";
 import { getPlayerNews, type InjuryNews } from "@/lib/ingest/injuries";
 import { DEFAULT_LEGS, MAX_LEGS, MIN_LEGS } from "./suggestLimits";
 
-// Build risk-tiered same-game-multi suggestions from our own data, sized to
-// however many legs the punter wants on one ticket (1-25). Deterministic +
-// transparent: we score each candidate leg from the bookmaker line + odds and
-// our model (prediction edge + recent hit rate), nudged by the punter's own
-// betting history on that player + stat, then take the top N per tier. Claude
-// adds the plain-English rationale separately (see lib/ai/explainMultis).
+// Build a same-game-multi suggestion from our own data, sized to however many
+// legs the punter wants on one ticket (1-25). Deterministic + transparent: we
+// score each candidate leg from the bookmaker line + odds and our model
+// (prediction edge + recent hit rate), nudged by the punter's own betting
+// history on that player + stat, then rank every eligible leg by confidence
+// and take the top N. Risk isn't a separate tier to pick — it's just what
+// happens to the combined chance as N grows (each added leg multiplies the
+// modelled chance of the whole ticket landing further down). Claude adds the
+// plain-English rationale separately (see lib/ai/explainMultis).
 
-export type RiskTier = "cautious" | "medium" | "high";
 export type StatFocus = StatType | "any";
 
 export { MIN_LEGS, MAX_LEGS, DEFAULT_LEGS };
@@ -41,10 +43,11 @@ export interface SuggestedLeg {
 }
 
 export interface Suggestion {
-  tier: RiskTier;
   legs: SuggestedLeg[];
   estOdds: number | null;
   avgConfidence: number;
+  /** Modelled chance the whole ticket lands — product of each leg's confidence. */
+  combinedChance: number | null;
   rationale?: string;
 }
 
@@ -186,46 +189,29 @@ function pickN(pool: SuggestedLeg[], n: number): SuggestedLeg[] {
   return out;
 }
 
-function finalize(tier: RiskTier, legs: SuggestedLeg[]): Suggestion {
+function finalize(legs: SuggestedLeg[]): Suggestion {
   const estOdds =
     legs.length > 0
       ? Math.round(legs.reduce((p, l) => p * (l.odds ?? 1), 1) * 100) / 100
       : null;
   const avgConfidence =
     legs.length > 0 ? legs.reduce((s, l) => s + l.confidence, 0) / legs.length : 0;
-  return { tier, legs, estOdds, avgConfidence };
+  const combinedChance =
+    legs.length > 0 ? legs.reduce((p, l) => p * l.confidence, 1) : null;
+  return { legs, estOdds, avgConfidence, combinedChance };
 }
 
-/** Blended score used by the "medium" tier: mostly confidence, some value tilt. */
-function mediumScore(l: SuggestedLeg): number {
-  const oddsNorm = clamp(((l.odds ?? 1) - 1) / 4, 0, 1);
-  return 0.7 * l.confidence + 0.3 * oddsNorm;
-}
-
-// Build three risk tiers, each the top `legCount` distinct-player legs from
-// its own sorted pool — so the punter picks both the ticket size (1-25) and
-// the risk flavour independently:
-//   cautious = sorted by model confidence (safest bankers first)
-//   medium   = confidence blended with a value tilt toward better odds
-//   high     = sorted by odds (the longest shots our model still likes)
+/** Build one ranked multi: the top `legCount` distinct-player legs by confidence. */
 export async function buildSuggestions(
   gameId: number,
   focus: StatFocus = "any",
   legCount: number = DEFAULT_LEGS,
   userId: number | null = null,
-): Promise<Suggestion[]> {
+): Promise<Suggestion> {
   const n = clamp(Math.round(legCount), MIN_LEGS, MAX_LEGS);
   const historyByKey = userId != null ? (await getPlayerBettingRecord(userId)).byKey : {};
   const legs = await candidateLegs(gameId, focus, historyByKey);
   const positive = legs.filter((l) => l.odds != null && l.edge > 0);
-
   const byConfidence = [...positive].sort((a, b) => b.confidence - a.confidence);
-  const byMedium = [...positive].sort((a, b) => mediumScore(b) - mediumScore(a));
-  const byOdds = [...positive].sort((a, b) => (b.odds ?? 0) - (a.odds ?? 0));
-
-  return [
-    finalize("cautious", pickN(byConfidence, n)),
-    finalize("medium", pickN(byMedium, n)),
-    finalize("high", pickN(byOdds, n)),
-  ];
+  return finalize(pickN(byConfidence, n));
 }

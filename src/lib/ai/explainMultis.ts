@@ -1,24 +1,19 @@
 import { env } from "@/lib/env";
-import type { RiskTier, Suggestion } from "@/lib/predictions/suggest";
+import type { Suggestion } from "@/lib/predictions/suggest";
 
-// Add a short, friendly rationale to each risk tier. Uses Claude when
+// Add a short, friendly rationale to the suggested multi. Uses Claude when
 // ANTHROPIC_API_KEY is set; otherwise falls back to a sensible templated line.
 
 const MODEL = "claude-haiku-4-5-20251001";
 const API_URL = "https://api.anthropic.com/v1/messages";
 
-const FALLBACK: Record<RiskTier, string> = {
-  cautious:
-    "Our safest picks — strong recent form with predictions sitting comfortably over the line.",
-  medium:
-    "A balanced multi — good value where our model still likes the price.",
-  high: "A longshot — bigger payout, lower chance, with some spicier picks our model rates.",
-};
+const FALLBACK =
+  "Ranked by our model's confidence — the steadiest legs first. Add more for a bigger payout; each one multiplies into a lower combined chance.";
 
 function summarise(s: Suggestion) {
   return {
-    tier: s.tier,
     estOdds: s.estOdds,
+    combinedChance: s.combinedChance,
     legs: s.legs.map((l) => ({
       player: l.playerName,
       stat: l.statType,
@@ -32,16 +27,16 @@ function summarise(s: Suggestion) {
   };
 }
 
-export async function explainMultis(suggestions: Suggestion[]): Promise<Suggestion[]> {
+export async function explainMultis(suggestion: Suggestion): Promise<Suggestion> {
   if (!env.ANTHROPIC_API_KEY) {
-    return suggestions.map((s) => ({ ...s, rationale: FALLBACK[s.tier] }));
+    return { ...suggestion, rationale: FALLBACK };
   }
 
-  const prompt = `You are explaining AFL same-game multi suggestions to a casual punter (keep it warm and simple, no jargon).
-For each tier, write ONE short sentence (max 28 words) on why these picks suit that risk level, referencing the form/lines where it helps.
+  const prompt = `You are explaining an AFL same-game multi suggestion to a casual punter (keep it warm and simple, no jargon).
+Write ONE short sentence (max 28 words) on why these picks were chosen, referencing the form/lines where it helps.
 If a leg has a "news" field (an injury cloud, a managed/rested tag, or a late team-news note), weave that in plainly — e.g. flag a "test" as a slight risk. Players already ruled out have been removed.
-Tiers data: ${JSON.stringify(suggestions.map(summarise))}
-Respond with ONLY a JSON object: {"cautious": string, "medium": string, "high": string}.`;
+Suggestion data: ${JSON.stringify(summarise(suggestion))}
+Respond with ONLY a JSON object: {"rationale": string}.`;
 
   try {
     const res = await fetch(API_URL, {
@@ -53,7 +48,7 @@ Respond with ONLY a JSON object: {"cautious": string, "medium": string, "high": 
       },
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: 400,
+        max_tokens: 200,
         messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
       }),
     });
@@ -62,13 +57,10 @@ Respond with ONLY a JSON object: {"cautious": string, "medium": string, "high": 
     const text = json.content?.find((c) => c.type === "text")?.text ?? "";
     const start = text.indexOf("{");
     const end = text.lastIndexOf("}");
-    const parsed = JSON.parse(text.slice(start, end + 1)) as Record<RiskTier, string>;
-    return suggestions.map((s) => ({
-      ...s,
-      rationale: parsed[s.tier] || FALLBACK[s.tier],
-    }));
+    const parsed = JSON.parse(text.slice(start, end + 1)) as { rationale?: string };
+    return { ...suggestion, rationale: parsed.rationale || FALLBACK };
   } catch (err) {
     console.warn("[explainMultis] falling back:", err);
-    return suggestions.map((s) => ({ ...s, rationale: FALLBACK[s.tier] }));
+    return { ...suggestion, rationale: FALLBACK };
   }
 }
