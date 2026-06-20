@@ -279,3 +279,21 @@ export async function buildSuggestions(
   const rest = byConfidence(withOdds.filter((l) => l.edge <= 0));
   return finalize(pickN([...positive, ...rest], n));
 }
+
+/**
+ * Every bettable leg for a game, across all stat types, best confidence
+ * first — the picker behind "+ Add player". A real SGM is freeform once
+ * you start editing it, so this deliberately isn't scoped to the active
+ * focus tab: a punter building a "Goals" multi might still want to add a
+ * Disposals leg for a player they like.
+ */
+export async function listCandidateLegs(
+  gameId: number,
+  userId: number | null = null,
+): Promise<SuggestedLeg[]> {
+  const historyByKey = userId != null ? (await getPlayerBettingRecord(userId)).byKey : {};
+  const legs = await candidateLegs(gameId, "any", historyByKey);
+  return legs
+    .filter((l) => l.odds != null)
+    .sort((a, b) => b.confidence - a.confidence);
+}

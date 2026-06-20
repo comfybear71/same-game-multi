@@ -114,7 +114,9 @@ export function SuggestedMultis({ gameId }: { gameId: number }) {
       {loading ? <p className="text-sm text-slate-400">Thinking…</p> : null}
       {error ? <p className="text-sm text-accent-loss">{error}</p> : null}
 
-      {data ? <SuggestionCard key={`${focus}-${legCount}`} s={data} /> : null}
+      {data ? (
+        <SuggestionCard key={`${focus}-${legCount}`} s={data} gameId={gameId} />
+      ) : null}
 
       {info ? (
         <SuggestionInfoModal suggestion={data} onClose={() => setInfo(false)} />
@@ -279,7 +281,11 @@ function multiOdds(legs: EditableLeg[]): number | null {
   return Math.round(legs.reduce((p, l) => p * (l.estOdds ?? 1), 1) * 100) / 100;
 }
 
-function SuggestionCard({ s }: { s: Suggestion }) {
+function legKey(playerId: number, statType: string): string {
+  return `${playerId}:${statType}`;
+}
+
+function SuggestionCard({ s, gameId }: { s: Suggestion; gameId: number }) {
   const [legs, setLegs] = useState<EditableLeg[]>(() => toEditable(s.legs));
 
   // Resync when a new suggestion arrives — e.g. the leg-count fetch resolves
@@ -290,14 +296,15 @@ function SuggestionCard({ s }: { s: Suggestion }) {
     setLegs(toEditable(s.legs));
   }, [s.legs]);
 
-  if (s.legs.length === 0) {
-    return <p className="text-sm text-slate-400">Not enough lines for this many legs yet.</p>;
-  }
-
   const estOdds = multiOdds(legs);
+  const existingKeys = new Set(legs.map((l) => legKey(l.playerId, l.statType)));
 
   function remove(playerId: number, statType: string) {
     setLegs((prev) => prev.filter((l) => !(l.playerId === playerId && l.statType === statType)));
+  }
+
+  function addLeg(candidate: SuggestedLeg) {
+    setLegs((prev) => [...prev, ...toEditable([candidate])]);
   }
 
   // Nudge a leg's target up/down a whole step and re-estimate its odds.
@@ -316,7 +323,11 @@ function SuggestionCard({ s }: { s: Suggestion }) {
       {s.rationale ? <p className="text-sm text-slate-200">{s.rationale}</p> : null}
 
       {legs.length === 0 ? (
-        <p className="text-sm text-slate-400">All legs removed — pick at least one.</p>
+        <p className="text-sm text-slate-400">
+          {s.legs.length === 0
+            ? "Not enough lines for this many legs yet — add players below."
+            : "All legs removed — add players below or pick at least one."}
+        </p>
       ) : (
         <ul className="space-y-2">
           {legs.map((l) => {
@@ -393,6 +404,8 @@ function SuggestionCard({ s }: { s: Suggestion }) {
         </ul>
       )}
 
+      <AddPlayerPanel gameId={gameId} existingKeys={existingKeys} onAdd={addLeg} />
+
       <div className="flex items-end justify-between gap-4 border-t border-surface-border pt-2">
         <div>
           <div className="text-xs text-slate-400">Estimated odds</div>
@@ -410,6 +423,131 @@ function SuggestionCard({ s }: { s: Suggestion }) {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// Lets the punter add a leg the auto-pick didn't surface — any bettable
+// (player, stat) pair for the game, not just the active focus tab, since a
+// real SGM ticket is freeform once you start editing it. Fetches the full
+// candidate pool lazily (only once the picker is opened) so browsing the
+// list isn't on the critical path for the common case of just accepting
+// the auto-pick.
+function AddPlayerPanel({
+  gameId,
+  existingKeys,
+  onAdd,
+}: {
+  gameId: number;
+  existingKeys: Set<string>;
+  onAdd: (leg: SuggestedLeg) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [candidates, setCandidates] = useState<SuggestedLeg[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+
+  useEffect(() => {
+    if (!open || candidates != null) return;
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    fetch(`/api/games/${gameId}/candidates`)
+      .then((r) => r.json())
+      .then((json) => {
+        if (cancelled) return;
+        if (!json.ok) throw new Error(json.error || "failed");
+        setCandidates(json.legs);
+      })
+      .catch((e) => !cancelled && setError((e as Error).message))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [open, gameId, candidates]);
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="w-full rounded-lg border border-dashed border-surface-border py-2 text-sm font-medium text-slate-400 hover:border-accent hover:text-accent"
+      >
+        + Add player
+      </button>
+    );
+  }
+
+  const pool = (candidates ?? []).filter(
+    (c) => !existingKeys.has(legKey(c.playerId, c.statType)),
+  );
+  const q = query.trim().toLowerCase();
+  const filtered = q ? pool.filter((c) => c.playerName.toLowerCase().includes(q)) : pool;
+
+  return (
+    <div className="rounded-lg border border-surface-border p-2.5 space-y-2">
+      <div className="flex items-center gap-2">
+        <input
+          autoFocus
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search player…"
+          className="min-w-0 flex-1 rounded border border-surface-border bg-surface px-2 py-1 text-sm text-white placeholder:text-slate-500"
+        />
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          className="text-slate-500 hover:text-white"
+          aria-label="Close add player"
+        >
+          ✕
+        </button>
+      </div>
+
+      {loading ? <p className="text-xs text-slate-400">Loading players…</p> : null}
+      {error ? <p className="text-xs text-accent-loss">{error}</p> : null}
+
+      {!loading && !error ? (
+        filtered.length === 0 ? (
+          <p className="text-xs text-slate-400">
+            {pool.length === 0 ? "No other eligible players for this game." : "No match."}
+          </p>
+        ) : (
+          <ul className="max-h-64 space-y-1 overflow-y-auto">
+            {filtered.map((c) => {
+              const cc = teamColors(c.team);
+              const target = lineTarget(c.line);
+              return (
+                <li key={legKey(c.playerId, c.statType)}>
+                  <button
+                    type="button"
+                    onClick={() => onAdd(c)}
+                    className="flex w-full items-center gap-2 rounded px-1.5 py-1 text-left hover:bg-surface"
+                  >
+                    <span
+                      className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-[11px] font-bold"
+                      style={{ background: cc.bg, color: cc.fg }}
+                    >
+                      {c.jumper ?? "–"}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-sm text-white">
+                      {c.playerName}
+                    </span>
+                    <span className="text-xs capitalize text-slate-400">
+                      {c.statType} {target}+
+                    </span>
+                    <span className="text-xs text-slate-300">
+                      {c.odds != null ? `$${c.odds.toFixed(2)}` : "—"}
+                    </span>
+                    <span className="font-bold text-accent">+</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )
+      ) : null}
     </div>
   );
 }
