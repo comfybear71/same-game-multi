@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, lt, lte, ne, or } from "drizzle-orm";
+import { and, asc, desc, eq, gte, lt, lte, ne, or, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import { games, type Game } from "@/db/schema";
@@ -69,7 +69,14 @@ export async function getGameById(id: number): Promise<Game | null> {
   return rows[0] ?? null;
 }
 
-/** Find a game by its two team names (any order) — most recent match. */
+/**
+ * Find a game by its two team names (any order) — the fixture between them
+ * closest to right now. Two teams can meet twice a season (home & away), so
+ * picking "most recent by kickoff" (i.e. the latest one on the fixture list)
+ * would silently link a bet slip read today to a rematch weeks away. A slip
+ * is always read for the game that's about to start or just finished, so the
+ * nearest-in-time fixture — not the furthest-in-future one — is correct.
+ */
 export async function findGameByTeams(
   teamA: string | null,
   teamB: string | null,
@@ -86,7 +93,7 @@ export async function findGameByTeams(
         and(eq(games.home, b), eq(games.away, a)),
       ),
     )
-    .orderBy(desc(games.commenceTime))
+    .orderBy(sql`abs(extract(epoch from (${games.commenceTime} - now())))`)
     .limit(1);
   return rows[0]?.id ?? null;
 }

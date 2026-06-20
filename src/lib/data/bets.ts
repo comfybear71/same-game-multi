@@ -63,12 +63,17 @@ function normaliseName(name: string): string {
 
 /**
  * The user's legs that belong to a game — matched by leg.gameId OR (for legs
- * that weren't linked) by player name against the game's predicted players.
- * Enriched with jumper/team/our prediction for the live "your bets" panel.
+ * that weren't linked to a game) by player name against the game's predicted
+ * players, scoped to the same round. The round scope matters: a player turns
+ * up in this game's predicted roster most weeks, so without it an unlinked
+ * leg from an old round leaks into every later game he plays — i.e. stale
+ * bets showing up on this week's page. Enriched with jumper/team/our
+ * prediction for the live "your bets" panel.
  */
 export async function getUserBetTracker(
   userId: number,
   gameId: number,
+  round: number | null = null,
 ): Promise<BetTrackerLeg[]> {
   const gamePlayers = await db
     .select({
@@ -96,6 +101,7 @@ export async function getUserBetTracker(
     .select({
       playerName: betLegs.playerName,
       gameId: betLegs.gameId,
+      betRound: bets.round,
       statType: betLegs.statType,
       line: betLegs.line,
       odds: betLegs.odds,
@@ -108,7 +114,9 @@ export async function getUserBetTracker(
   const out: BetTrackerLeg[] = [];
   for (const leg of legs) {
     const n = leg.playerName ? normaliseName(leg.playerName) : "";
-    const belongs = leg.gameId === gameId || (leg.gameId == null && gameNames.has(n));
+    const sameRound = round != null && leg.betRound === round;
+    const belongs =
+      leg.gameId === gameId || (leg.gameId == null && sameRound && gameNames.has(n));
     if (!belongs) continue;
     const m = meta.get(n);
     out.push({

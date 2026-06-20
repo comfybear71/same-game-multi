@@ -6,7 +6,7 @@ import type { StatType } from "@/db/schema";
 import { teamColors } from "@/lib/afl/teamColors";
 import { lineTarget, signed } from "@/lib/format";
 import { estimateOddsAtTarget } from "@/lib/predictions/altLine";
-import type { RiskTier, Suggestion, SuggestedLeg } from "@/lib/predictions/suggest";
+import type { Suggestion, SuggestedLeg } from "@/lib/predictions/suggest";
 import { DEFAULT_LEGS, MAX_LEGS, MIN_LEGS } from "@/lib/predictions/suggestLimits";
 
 const FOCUSES: { key: StatType | "any"; label: string }[] = [
@@ -17,27 +17,15 @@ const FOCUSES: { key: StatType | "any"; label: string }[] = [
   { key: "goals", label: "Goals" },
 ];
 
-const TIERS: { key: RiskTier; label: string; blurb: string; color: string }[] = [
-  { key: "cautious", label: "Cautious", blurb: "Safest", color: "text-accent-win" },
-  { key: "medium", label: "Medium", blurb: "Balanced", color: "text-accent" },
-  { key: "high", label: "High risk", blurb: "Longshot", color: "text-accent-pending" },
-];
-
-// How each tier ranks its pool — plain English for the "why" popup.
-const TIER_STRATEGY: Record<RiskTier, string> = {
-  cautious:
-    "Ranked purely by our model's confidence — the steadiest bankers most likely to land, whatever the price.",
-  medium:
-    "Confidence blended with value — strong picks where the odds still pay a little more than the safest bankers.",
-  high: "Ranked by price — the longest shots our model still rates as live for a bigger payout.",
-};
+// Plain-English strategy for the "why" popup.
+const STRATEGY =
+  "Ranked purely by our model's confidence — the steadiest legs first. Adding legs grows the payout, but each one multiplies into the combined chance, so that drops as the ticket grows.";
 
 export function SuggestedMultis({ gameId }: { gameId: number }) {
   const [focus, setFocus] = useState<StatType | "any">("any");
   const [legCount, setLegCount] = useState(DEFAULT_LEGS);
-  const [data, setData] = useState<Suggestion[] | null>(null);
-  const [active, setActive] = useState<RiskTier | null>(null);
-  const [info, setInfo] = useState<RiskTier | null>(null);
+  const [data, setData] = useState<Suggestion | null>(null);
+  const [info, setInfo] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -50,7 +38,7 @@ export function SuggestedMultis({ gameId }: { gameId: number }) {
       .then((json) => {
         if (cancelled) return;
         if (!json.ok) throw new Error(json.error || "failed");
-        setData(json.suggestions);
+        setData(json.suggestion);
       })
       .catch((e) => !cancelled && setError((e as Error).message))
       .finally(() => !cancelled && setLoading(false));
@@ -59,16 +47,15 @@ export function SuggestedMultis({ gameId }: { gameId: number }) {
     };
   }, [gameId, focus, legCount]);
 
-  const current = data?.find((s) => s.tier === active) ?? null;
-
   return (
     <section className="card space-y-3">
       <div>
-        <h2 className="text-lg font-semibold text-white">Suggested multis</h2>
+        <h2 className="text-lg font-semibold text-white">Suggested multi</h2>
         <p className="text-sm text-slate-400">
-          AI-picked from our predictions vs the bookie lines. Choose how many
-          legs and a risk level to explore the board&apos;s best combinations.
-          Place the bet in your bookie app, then log it from the Bets tab.
+          AI-picked from our predictions vs the bookie lines, ranked by confidence.
+          Choose how many legs — more legs means a bigger payout but a lower
+          combined chance. Place the bet in your bookie app, then log it from the
+          Bets tab.
         </p>
       </div>
 
@@ -77,10 +64,7 @@ export function SuggestedMultis({ gameId }: { gameId: number }) {
         {FOCUSES.map((f) => (
           <button
             key={f.key}
-            onClick={() => {
-              setFocus(f.key);
-              setActive(null);
-            }}
+            onClick={() => setFocus(f.key)}
             className={`whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium ${
               focus === f.key
                 ? "bg-slate-200 text-surface"
@@ -115,77 +99,41 @@ export function SuggestedMultis({ gameId }: { gameId: number }) {
           </button>
         </div>
         <span className="text-[11px] text-slate-500">up to {MAX_LEGS} on one ticket</span>
-      </div>
-
-      {/* Tier buttons */}
-      <div className="grid grid-cols-3 gap-2">
-        {TIERS.map((t) => {
-          const s = data?.find((x) => x.tier === t.key);
-          const disabled = !s || s.legs.length === 0;
-          return (
-            <div key={t.key} className="relative">
-              <button
-                disabled={disabled}
-                onClick={() => setActive(t.key)}
-                className={`h-full w-full rounded-xl border p-3 pr-7 text-left transition disabled:opacity-40 ${
-                  active === t.key ? "border-accent" : "border-surface-border"
-                }`}
-              >
-                <div className={`text-sm font-bold ${t.color}`}>{t.label}</div>
-                <div className="text-[11px] text-slate-400">
-                  {t.blurb} · {s ? s.legs.length : 0} legs
-                </div>
-                <div className="mt-1 text-xs text-slate-300">
-                  {s && s.estOdds != null ? `~$${s.estOdds.toFixed(2)}` : "—"}
-                </div>
-              </button>
-              {s && s.legs.length > 0 ? (
-                <button
-                  type="button"
-                  aria-label={`Why these ${t.label} picks`}
-                  onClick={() => setInfo(t.key)}
-                  className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full border border-surface-border bg-surface text-[11px] font-bold leading-none text-slate-400 hover:border-accent hover:text-accent"
-                >
-                  i
-                </button>
-              ) : null}
-            </div>
-          );
-        })}
+        {data && data.legs.length > 0 ? (
+          <button
+            type="button"
+            aria-label="Why these picks"
+            onClick={() => setInfo(true)}
+            className="ml-auto flex h-5 w-5 items-center justify-center rounded-full border border-surface-border bg-surface text-[11px] font-bold leading-none text-slate-400 hover:border-accent hover:text-accent"
+          >
+            i
+          </button>
+        ) : null}
       </div>
 
       {loading ? <p className="text-sm text-slate-400">Thinking…</p> : null}
       {error ? <p className="text-sm text-accent-loss">{error}</p> : null}
 
-      {current ? (
-        <SuggestionCard key={`${active}-${focus}-${legCount}`} s={current} />
-      ) : null}
+      {data ? <SuggestionCard key={`${focus}-${legCount}`} s={data} /> : null}
 
       {info ? (
-        <TierInfoModal
-          tier={info}
-          suggestion={data?.find((s) => s.tier === info) ?? null}
-          onClose={() => setInfo(null)}
-        />
+        <SuggestionInfoModal suggestion={data} onClose={() => setInfo(false)} />
       ) : null}
     </section>
   );
 }
 
-// Read-only "why did the AI pick this?" popup for one risk tier. Surfaces the
-// deterministic factors behind each leg (projection vs line, recent form, your
-// own record, any team news, price) so the decision-making is transparent and
-// can be talked through / refined against real-world knowledge.
-function TierInfoModal({
-  tier,
+// Read-only "why did the AI pick this?" popup. Surfaces the deterministic
+// factors behind each leg (projection vs line, recent form, your own record,
+// any team news, price) so the decision-making is transparent and can be
+// talked through / refined against real-world knowledge.
+function SuggestionInfoModal({
   suggestion,
   onClose,
 }: {
-  tier: RiskTier;
   suggestion: Suggestion | null;
   onClose: () => void;
 }) {
-  const meta = TIERS.find((t) => t.key === tier)!;
   const legs = suggestion?.legs ?? [];
 
   return (
@@ -194,7 +142,7 @@ function TierInfoModal({
       onClick={onClose}
       role="dialog"
       aria-modal="true"
-      aria-label={`${meta.label} picks — how they were chosen`}
+      aria-label="How these picks were chosen"
     >
       <div
         className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-2xl border border-surface-border bg-surface-card p-4 shadow-xl"
@@ -205,7 +153,7 @@ function TierInfoModal({
             <div className="text-[11px] uppercase tracking-wide text-slate-500">
               How these were chosen
             </div>
-            <h3 className={`text-lg font-bold ${meta.color}`}>{meta.label}</h3>
+            <h3 className="text-lg font-bold text-accent">Suggested multi</h3>
           </div>
           <button
             type="button"
@@ -217,7 +165,7 @@ function TierInfoModal({
           </button>
         </div>
 
-        <p className="mt-2 text-sm text-slate-300">{TIER_STRATEGY[tier]}</p>
+        <p className="mt-2 text-sm text-slate-300">{STRATEGY}</p>
 
         {suggestion?.rationale ? (
           <p className="mt-2 rounded-lg bg-surface px-3 py-2 text-sm text-slate-200">
@@ -230,7 +178,7 @@ function TierInfoModal({
             Why each leg made the cut
           </div>
           {legs.length === 0 ? (
-            <p className="text-sm text-slate-400">No legs in this tier.</p>
+            <p className="text-sm text-slate-400">No legs picked yet.</p>
           ) : (
             legs.map((l) => <LegReasoning key={`${l.playerId}-${l.statType}`} l={l} />)
           )}
@@ -334,16 +282,16 @@ function multiOdds(legs: EditableLeg[]): number | null {
 function SuggestionCard({ s }: { s: Suggestion }) {
   const [legs, setLegs] = useState<EditableLeg[]>(() => toEditable(s.legs));
 
-  // Resync when a new suggestion arrives for the same tier — e.g. the leg-count
-  // fetch resolves after the card already mounted, so s.legs grows from the
-  // stale set the card first seeded with. Without this the list stays frozen at
-  // whatever was loaded at mount (the bug where asking for 10 legs showed 4).
+  // Resync when a new suggestion arrives — e.g. the leg-count fetch resolves
+  // after the card already mounted, so s.legs grows from the stale set the
+  // card first seeded with. Without this the list stays frozen at whatever
+  // was loaded at mount (the bug where asking for 10 legs showed 4).
   useEffect(() => {
     setLegs(toEditable(s.legs));
   }, [s.legs]);
 
   if (s.legs.length === 0) {
-    return <p className="text-sm text-slate-400">Not enough lines for this tier yet.</p>;
+    return <p className="text-sm text-slate-400">Not enough lines for this many legs yet.</p>;
   }
 
   const estOdds = multiOdds(legs);
@@ -445,13 +393,21 @@ function SuggestionCard({ s }: { s: Suggestion }) {
         </ul>
       )}
 
-      <div className="border-t border-surface-border pt-2">
-        <div className="text-xs text-slate-400">Estimated odds</div>
-        <div className="text-lg font-bold text-white">
-          {estOdds != null ? `$${estOdds.toFixed(2)}` : "—"}
+      <div className="flex items-end justify-between gap-4 border-t border-surface-border pt-2">
+        <div>
+          <div className="text-xs text-slate-400">Estimated odds</div>
+          <div className="text-lg font-bold text-white">
+            {estOdds != null ? `$${estOdds.toFixed(2)}` : "—"}
+          </div>
+          <div className="text-[11px] text-slate-500">
+            estimate — confirm real price in the bookie app
+          </div>
         </div>
-        <div className="text-[11px] text-slate-500">
-          estimate — confirm real price in the bookie app
+        <div className="text-right">
+          <div className="text-xs text-slate-400">Modelled chance</div>
+          <div className="text-lg font-bold text-white">
+            {s.combinedChance != null ? `${Math.round(s.combinedChance * 100)}%` : "—"}
+          </div>
         </div>
       </div>
     </div>
