@@ -44,9 +44,9 @@ Rules:
 - One entry in "legs" per player selection. A player may appear in several legs (different markets) — list each separately.
 - "player" is the player's full name as shown.
 - "statType": map the market to one of disposals, marks, tackles, goals. If it's a different market, use null.
-- "line": the numeric threshold. For an "N+" market (e.g. "22+ Disposals"), use N minus 0.5 (so 22+ -> 21.5).
-- "actual": the actual value the player got — the number in the coloured pill next to the leg. If not visible, null.
-- "outcome": "won" if the leg shows a tick / is green / marked won, "lost" if it shows a cross / is red / marked lost, else null.
+- "line": the numeric threshold from the market name. For an "N+" market (e.g. "22+ Disposals"), use N minus 0.5 (so 22+ -> 21.5).
+- "outcome": THE MOST IMPORTANT FIELD. Read the result indicator for EVERY leg: a green tick / "✓" / green highlight = "won"; a red cross / "✗" / red highlight = "lost". Read it carefully per-leg; do not assume a leg won.
+- "actual": the value the player ACTUALLY achieved — read it from the progress bar or coloured pill, NOT from the market name. On these layouts the market shows a target (e.g. "19+ Disposals") and the bar shows the achieved value beside it. On a LOSING leg the achieved value is BELOW the target (e.g. target 19, achieved 18) — do not copy the target. If the leg shows a cross/lost, the achieved value must be below the target; if you cannot clearly read the real achieved number, use null rather than guessing the target.
 - "betId": the bookmaker's bet / receipt id if shown (e.g. "O/1000025035/0000044/D"), else null.
 - "totalOdds"/"totalStake": the multi's combined odds and the stake if shown, else null.
 - "legCount": the total number of legs in the multi if stated (e.g. "14 Legs"), else null.
@@ -160,14 +160,30 @@ function normaliseName(name: string): string {
     .trim();
 }
 
-/** Settled result for one leg: prefer the actual number, fall back to the tick. */
+/**
+ * Settled result for one leg. The bookmaker's own tick/cross is authoritative:
+ * it's the literal settlement of the leg and is visually unambiguous in the
+ * screenshot. The OCR'd "actual" number is far less reliable — on some
+ * "Resulted" layouts the model reads the market's target (e.g. the 19 in
+ * "19+ Disposals") instead of the achieved value on the bar, which made every
+ * leg look like it exactly met its line and falsely settled losing slips as
+ * won. So we decide hit/miss from the tick/cross, and only keep the number
+ * when it's consistent with that ruling; otherwise we drop it and let the
+ * morning AFL Tables backfill supply the real figure. We fall back to the
+ * number only when no tick/cross could be read.
+ */
 function legResult(
   line: number,
   actual: number | null,
   outcome: "won" | "lost" | null,
 ): { result: "hit" | "miss"; actualValue: number | null } | null {
+  if (outcome) {
+    const result = outcome === "won" ? "hit" : "miss";
+    const consistent =
+      actual == null || (result === "hit" ? actual > line : actual <= line);
+    return { result, actualValue: consistent ? actual : null };
+  }
   if (actual != null) return { result: actual > line ? "hit" : "miss", actualValue: actual };
-  if (outcome) return { result: outcome === "won" ? "hit" : "miss", actualValue: null };
   return null;
 }
 

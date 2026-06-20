@@ -3,29 +3,39 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+import type { LegResult } from "@/db/schema";
 import { targetLabel } from "@/lib/format";
 
-// Manual override for a pending leg that auto-settlement can't reach (e.g.
-// the bet wasn't linked to a game/player, or AFL Tables never published the
-// game). Lets you record the real result by hand instead of it sitting on
-// "pending" forever.
-export function LegResultControls({ legId, line }: { legId: number; line: number }) {
+// Manual override for a leg's result — either one auto-settlement can't
+// reach (no linked player/game, or AFL Tables never published the game), or
+// to correct one the AI result-screenshot read got wrong (a misjudged
+// tick/cross, or an actual value it couldn't read cleanly).
+export function LegResultControls({
+  legId,
+  line,
+  result,
+  actualValue,
+}: {
+  legId: number;
+  line: number;
+  result: LegResult;
+  actualValue: number | null;
+}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [actual, setActual] = useState("");
+  const [actual, setActual] = useState(actualValue != null ? String(actualValue) : "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function setResult(result: "hit" | "miss" | "void") {
+  async function setResult(next: "hit" | "miss" | "void") {
     setSaving(true);
     setError(null);
     try {
-      const actualValue =
-        result === "void" || actual === "" ? null : Number(actual);
+      const actualValueOut = next === "void" || actual === "" ? null : Number(actual);
       const res = await fetch(`/api/bets/legs/${legId}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ result, actualValue }),
+        body: JSON.stringify({ result: next, actualValue: actualValueOut }),
       });
       const json = await res.json();
       if (!res.ok || !json.ok) throw new Error(json.error || "failed");
@@ -44,7 +54,7 @@ export function LegResultControls({ legId, line }: { legId: number; line: number
         className="text-[11px] text-slate-500 underline hover:text-slate-300"
         onClick={() => setOpen(true)}
       >
-        set manually
+        {result === "pending" ? "set manually" : "correct"}
       </button>
     );
   }
