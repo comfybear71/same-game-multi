@@ -236,7 +236,22 @@ export async function buildSuggestions(
   const n = clamp(Math.round(legCount), MIN_LEGS, MAX_LEGS);
   const historyByKey = userId != null ? (await getPlayerBettingRecord(userId)).byKey : {};
   const legs = await candidateLegs(gameId, focus, historyByKey);
-  const positive = legs.filter((l) => l.odds != null && l.edge > 0);
-  const byConfidence = [...positive].sort((a, b) => b.confidence - a.confidence);
-  return finalize(pickN(byConfidence, n));
+
+  // A leg is only bettable if we have a price for it. Within that, prefer legs
+  // the model rates over the line (+edge), best confidence first.
+  const byConfidence = (ls: SuggestedLeg[]) =>
+    [...ls].sort((a, b) => b.confidence - a.confidence);
+  const withOdds = legs.filter((l) => l.odds != null);
+  const positive = byConfidence(withOdds.filter((l) => l.edge > 0));
+
+  // Top up toward the requested leg count with the next-best legs when the
+  // +edge pool is short: an efficient bookie market only leaves ~half the
+  // propped players above their line, so asking for a 10-leg disposals multi
+  // was silently returning just the 5 with an edge. The punter chose the leg
+  // count (and thus the risk), so fill it when the game has the players —
+  // these top-up legs carry a non-positive edge (shown per leg in the "why"
+  // popup) rather than being dropped. Identical output to before whenever the
+  // +edge pool already covers n.
+  const rest = byConfidence(withOdds.filter((l) => l.edge <= 0));
+  return finalize(pickN([...positive, ...rest], n));
 }
