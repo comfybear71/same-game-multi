@@ -201,15 +201,39 @@ async function candidateLegs(
   return legs;
 }
 
-/** Greedily take up to n distinct-player legs from a sorted pool. */
+/**
+ * Greedily take up to n legs from a sorted pool, best first.
+ *
+ * Pass 1 keeps to one leg per player — the spread a small ticket wants, and
+ * identical to the old behaviour whenever distinct players can fill n. Pass 2
+ * only runs if that falls short, stacking a player's other markets (e.g.
+ * disposals + marks + goals on the one player) to reach the requested count.
+ * A real same-game multi allows several markets on the same player, just not
+ * the same market twice — so we dedup by (player, stat), never repeating a leg.
+ * This is what lets an "Any" ticket climb toward the 25-leg max; a single-stat
+ * focus has one market per player so pass 2 finds nothing and it stays bounded
+ * by how many players the bookie props for that stat.
+ */
 function pickN(pool: SuggestedLeg[], n: number): SuggestedLeg[] {
   const out: SuggestedLeg[] = [];
-  const used = new Set<number>();
+  const usedPlayers = new Set<number>();
+  const usedLegs = new Set<string>();
+  const legKey = (l: SuggestedLeg) => `${l.playerId}:${l.statType}`;
+
   for (const l of pool) {
     if (out.length >= n) break;
-    if (used.has(l.playerId)) continue;
+    if (usedPlayers.has(l.playerId)) continue;
     out.push(l);
-    used.add(l.playerId);
+    usedPlayers.add(l.playerId);
+    usedLegs.add(legKey(l));
+  }
+  if (out.length < n) {
+    for (const l of pool) {
+      if (out.length >= n) break;
+      if (usedLegs.has(legKey(l))) continue;
+      out.push(l);
+      usedLegs.add(legKey(l));
+    }
   }
   return out;
 }
