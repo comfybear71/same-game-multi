@@ -39,13 +39,13 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     // presses don't re-bill Claude. Refreshes when predictions/odds change.
     // The version segment lets a logic change invalidate stale cached results.
     // Keyed per-user since picks are nudged by that user's own bet history.
-    const suggestions = await cached(
-      `suggest:v3:${gameId}:${focus}:${legCount}:${userId ?? "anon"}`,
+    const suggestion = await cached(
+      `suggest:v4:${gameId}:${focus}:${legCount}:${userId ?? "anon"}`,
       20 * 60,
       async () =>
         explainMultis(await buildSuggestions(gameId, focus, legCount, userId)),
     );
-    return NextResponse.json({ ok: true, focus, legCount, suggestions });
+    return NextResponse.json({ ok: true, focus, legCount, suggestion });
   } catch (err) {
     return NextResponse.json(
       { ok: false, error: (err as Error).message },
