@@ -246,9 +246,12 @@ function BetSlip({ slip }: { slip: BetWithLegs }) {
                   {leg.result}
                 </span>
               </div>
-              {leg.result === "pending" ? (
-                <LegResultControls legId={leg.id} line={leg.line} />
-              ) : null}
+              <LegResultControls
+                legId={leg.id}
+                line={leg.line}
+                result={leg.result}
+                actualValue={leg.actualValue}
+              />
             </li>
           );
         })}
