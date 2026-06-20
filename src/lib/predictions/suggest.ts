@@ -62,6 +62,27 @@ function clamp(x: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, x));
 }
 
+/**
+ * Pick which line to bet for a player from the ladder the bookie offers.
+ * Bet the highest rung the projection still clears: it keeps the line (and so
+ * the payout) as high as possible while leaving a positive edge.
+ *
+ * This is what lets goals (and the other over-only ladder markets) show up at
+ * all. Goals are quoted as a ladder — 0.5, 1.5, 2.5… — and collapsing it to a
+ * median put the line at ~1.5/2.5, above most forwards' projected goals, so
+ * every goal leg looked like a negative-edge miss and was filtered out. Picking
+ * the clearable rung surfaces them at a sensible line (e.g. the 0.5 "anytime
+ * goalscorer" rung for a ~1-goal forward). Falls back to the lowest rung when
+ * the projection clears none, so the leg still exists and is dropped downstream
+ * by the edge>0 filter only if it genuinely has no edge.
+ */
+function chooseRung(rungs: number[], prediction: number): number | null {
+  if (rungs.length === 0) return null;
+  const sorted = [...rungs].sort((a, b) => a - b);
+  const clearable = sorted.filter((r) => r < prediction);
+  return clearable.length > 0 ? clearable[clearable.length - 1] : sorted[0];
+}
+
 function confidenceOf(hitRate: number | null, edge: number, line: number): number {
   const hr = hitRate ?? 0.5;
   // Full margin credit when the prediction clears the line by 15%+.
@@ -129,15 +150,19 @@ async function candidateLegs(
     getPlayerNews(roster),
   ]);
 
-  // Median line + median over-odds per (playerId, stat).
-  const lineGroups = new Map<string, number[]>();
-  const oddsGroups = new Map<string, number[]>();
+  // A (playerId, stat) usually exposes a whole ladder of lines, not one — the
+  // over-only marks/tackles/goals markets list 0.5, 1.5, 2.5… Collect the rungs
+  // on offer plus the odds quoted for each exact rung, so a chosen line can be
+  // paired with its real price instead of a meaningless median across the ladder.
+  const rungsByKey = new Map<string, Set<number>>();
+  const oddsByRung = new Map<string, number[]>(); // `${player}:${stat}:${line}` -> overOdds[]
   for (const l of lines) {
     if (l.playerId == null) continue;
     const k = `${l.playerId}:${l.statType}`;
-    (lineGroups.get(k) ?? lineGroups.set(k, []).get(k)!).push(l.line);
+    (rungsByKey.get(k) ?? rungsByKey.set(k, new Set()).get(k)!).add(l.line);
     if (l.overOdds != null) {
-      (oddsGroups.get(k) ?? oddsGroups.set(k, []).get(k)!).push(l.overOdds);
+      const rk = `${k}:${l.line}`;
+      (oddsByRung.get(rk) ?? oddsByRung.set(rk, []).get(rk)!).push(l.overOdds);
     }
   }
   const formByKey = new Map<string, number[]>();
@@ -147,9 +172,9 @@ async function candidateLegs(
   for (const p of preds) {
     if (focus !== "any" && p.statType !== focus) continue;
     const key = `${p.playerId}:${p.statType}`;
-    const line = median(lineGroups.get(key) ?? []);
+    const line = chooseRung([...(rungsByKey.get(key) ?? [])], p.value);
     if (line == null) continue;
-    const odds = median(oddsGroups.get(key) ?? []);
+    const odds = median(oddsByRung.get(`${key}:${line}`) ?? []);
     const form = formByKey.get(key) ?? [];
     const hitRate = form.length > 0 ? form.filter((v) => v > line).length / form.length : null;
     const edge = p.value - line;
