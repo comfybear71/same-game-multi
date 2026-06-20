@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import type { StatType } from "@/db/schema";
 
@@ -9,6 +9,7 @@ const STATS: StatType[] = ["disposals", "marks", "tackles", "goals"];
 
 interface GameOption {
   id: number;
+  round: number | null;
   label: string;
 }
 
@@ -19,6 +20,24 @@ interface LegInput {
   odds: string;
   confidence: string;
   notes: string;
+}
+
+interface BetPayload {
+  round?: number;
+  totalOdds?: number;
+  totalStake?: number;
+  status: "pending";
+  notes?: string;
+  screenshotUrl?: string;
+  gameId?: number;
+  legs: {
+    playerName?: string;
+    statType: StatType;
+    line: number;
+    odds?: number;
+    confidence?: number;
+    notes?: string;
+  }[];
 }
 
 function emptyLeg(): LegInput {
@@ -40,36 +59,6 @@ export function BetForm({ games }: { games: GameOption[] }) {
   const [notes, setNotes] = useState("");
   const [legs, setLegs] = useState<LegInput[]>([emptyLeg()]);
 
-  // Prefill from a "Suggested multi" handoff (sessionStorage).
-  useEffect(() => {
-    const raw = sessionStorage.getItem("betPrefill");
-    if (!raw) return;
-    sessionStorage.removeItem("betPrefill");
-    try {
-      const p = JSON.parse(raw) as {
-        gameId?: number;
-        totalOdds?: number | null;
-        legs?: { playerName?: string; statType?: StatType; line?: number; odds?: number }[];
-      };
-      if (p.gameId) setGameId(String(p.gameId));
-      if (p.totalOdds != null) setTotalOdds(String(p.totalOdds));
-      if (Array.isArray(p.legs) && p.legs.length > 0) {
-        setLegs(
-          p.legs.map((l) => ({
-            playerName: l.playerName ?? "",
-            statType: (l.statType as StatType) ?? "disposals",
-            line: l.line != null ? String(l.line) : "",
-            odds: l.odds != null ? String(l.odds) : "",
-            confidence: "",
-            notes: "",
-          })),
-        );
-      }
-    } catch {
-      /* ignore malformed prefill */
-    }
-  }, []);
-
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -86,6 +75,30 @@ export function BetForm({ games }: { games: GameOption[] }) {
       setError((err as Error).message);
     } finally {
       setUploading(false);
+    }
+  }
+
+  // POST a finished slip and return to the tracker. Used by both the manual
+  // "Save bet" button and the auto-save that fires after a successful AI read.
+  async function persist(payload: BetPayload): Promise<boolean> {
+    setSaving(true);
+    setError(null);
+    try {
+      if (payload.legs.length === 0) throw new Error("Add at least one leg with a line.");
+      const res = await fetch("/api/bets", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) throw new Error(json.error || "save failed");
+      router.push("/bets");
+      router.refresh();
+      return true;
+    } catch (err) {
+      setError((err as Error).message);
+      setSaving(false);
+      return false;
     }
   }
 
@@ -106,21 +119,52 @@ export function BetForm({ games }: { games: GameOption[] }) {
         totalStake: number | null;
         legs: { player: string; statType: StatType | null; line: number | null; odds: number | null }[];
       };
+      const matchedGameId: number | null = json.matchedGameId ?? null;
       if (s.totalOdds != null) setTotalOdds(String(s.totalOdds));
       if (s.totalStake != null) setTotalStake(String(s.totalStake));
-      if (json.matchedGameId) setGameId(String(json.matchedGameId));
-      const mapped = s.legs
-        .filter((l) => l.statType)
-        .map((l) => ({
+      if (matchedGameId) setGameId(String(matchedGameId));
+
+      // Legs we can actually settle: a recognised stat and a numeric line.
+      const valid = s.legs.filter(
+        (l): l is typeof l & { statType: StatType; line: number } =>
+          !!l.statType && l.line != null,
+      );
+      setLegs(
+        valid.map((l) => ({
           playerName: l.player,
-          statType: l.statType as StatType,
-          line: l.line != null ? String(l.line) : "",
+          statType: l.statType,
+          line: String(l.line),
           odds: l.odds != null ? String(l.odds) : "",
           confidence: "",
           notes: "",
-        }));
-      if (mapped.length > 0) setLegs(mapped);
-      else setError("Read the slip but found no disposals/marks/tackles/goals legs.");
+        })),
+      );
+      if (valid.length === 0) {
+        setError("Read the slip but found no disposals/marks/tackles/goals legs.");
+        return;
+      }
+
+      // The bet is already placed in Sportsbet, so there's nothing to edit —
+      // save what the AI read straight away. The form below stays populated as
+      // a fallback if the save fails.
+      const matchedRound =
+        matchedGameId != null
+          ? games.find((g) => g.id === matchedGameId)?.round ?? undefined
+          : undefined;
+      await persist({
+        round: matchedRound,
+        totalOdds: s.totalOdds ?? undefined,
+        totalStake: s.totalStake ?? undefined,
+        status: "pending",
+        screenshotUrl: screenshotUrl || undefined,
+        gameId: matchedGameId ?? undefined,
+        legs: valid.map((l) => ({
+          playerName: l.player || undefined,
+          statType: l.statType,
+          line: l.line,
+          odds: l.odds ?? undefined,
+        })),
+      });
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -133,42 +177,25 @@ export function BetForm({ games }: { games: GameOption[] }) {
   }
 
   async function save() {
-    setSaving(true);
-    setError(null);
-    try {
-      const payload = {
-        round: round ? Number(round) : undefined,
-        totalOdds: totalOdds ? Number(totalOdds) : undefined,
-        totalStake: totalStake ? Number(totalStake) : undefined,
-        status: "pending" as const,
-        notes: notes || undefined,
-        screenshotUrl: screenshotUrl || undefined,
-        gameId: gameId ? Number(gameId) : undefined,
-        legs: legs
-          .filter((l) => l.line !== "")
-          .map((l) => ({
-            playerName: l.playerName || undefined,
-            statType: l.statType,
-            line: Number(l.line),
-            odds: l.odds ? Number(l.odds) : undefined,
-            confidence: l.confidence ? Number(l.confidence) : undefined,
-            notes: l.notes || undefined,
-          })),
-      };
-      if (payload.legs.length === 0) throw new Error("Add at least one leg with a line.");
-      const res = await fetch("/api/bets", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const json = await res.json();
-      if (!res.ok || !json.ok) throw new Error(json.error || "save failed");
-      router.push("/bets");
-      router.refresh();
-    } catch (err) {
-      setError((err as Error).message);
-      setSaving(false);
-    }
+    await persist({
+      round: round ? Number(round) : undefined,
+      totalOdds: totalOdds ? Number(totalOdds) : undefined,
+      totalStake: totalStake ? Number(totalStake) : undefined,
+      status: "pending",
+      notes: notes || undefined,
+      screenshotUrl: screenshotUrl || undefined,
+      gameId: gameId ? Number(gameId) : undefined,
+      legs: legs
+        .filter((l) => l.line !== "")
+        .map((l) => ({
+          playerName: l.playerName || undefined,
+          statType: l.statType,
+          line: Number(l.line),
+          odds: l.odds ? Number(l.odds) : undefined,
+          confidence: l.confidence ? Number(l.confidence) : undefined,
+          notes: l.notes || undefined,
+        })),
+    });
   }
 
   return (
@@ -193,12 +220,13 @@ export function BetForm({ games }: { games: GameOption[] }) {
               alt="bet slip"
               className="max-h-72 rounded-lg border border-surface-border"
             />
-            <button className="btn" onClick={readSlip} disabled={reading}>
-              {reading ? "Reading slip…" : "Read slip with AI"}
+            <button className="btn" onClick={readSlip} disabled={reading || saving}>
+              {reading ? "Reading slip…" : saving ? "Saving…" : "Read slip & save"}
             </button>
             <p className="text-xs text-slate-500">
-              AI fills the legs below from your screenshot — check and fix anything
-              before saving.
+              AI reads the slip and logs the bet automatically — the bet&apos;s
+              already placed in Sportsbet, so there&apos;s nothing to edit. If the
+              read misses a leg, fix it below and tap Save bet.
             </p>
           </div>
         ) : null}
