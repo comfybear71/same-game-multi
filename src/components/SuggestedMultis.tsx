@@ -501,11 +501,16 @@ function AddPlayerPanel({
 
   // Keep the picker to the active focus's market — building a Marks multi
   // should only offer Marks legs, etc. "Any" stays open to every market.
-  const pool = (candidates ?? []).filter(
-    (c) =>
-      !existingKeys.has(legKey(c.playerId, c.statType)) &&
-      (focus === "any" || c.statType === focus),
-  );
+  // Order the genuine volume players first: rank by season average for the
+  // stat (the real ball-magnets / key forwards), so the best names are at
+  // the top of the list rather than whatever ranked by edge.
+  const pool = (candidates ?? [])
+    .filter(
+      (c) =>
+        !existingKeys.has(legKey(c.playerId, c.statType)) &&
+        (focus === "any" || c.statType === focus),
+    )
+    .sort((a, b) => (b.seasonAvg ?? -1) - (a.seasonAvg ?? -1));
   const q = query.trim().toLowerCase();
   const filtered = q ? pool.filter((c) => c.playerName.toLowerCase().includes(q)) : pool;
 
@@ -561,6 +566,11 @@ function AddPlayerPanel({
                     <span className="text-xs capitalize text-slate-400">
                       {c.statType} {target}+
                     </span>
+                    {c.seasonAvg != null ? (
+                      <span className="text-[11px] text-slate-500">
+                        avg {c.seasonAvg.toFixed(1)}
+                      </span>
+                    ) : null}
                     <span className="text-xs text-slate-300">
                       {c.odds != null ? `$${c.odds.toFixed(2)}` : "—"}
                     </span>

@@ -36,6 +36,7 @@ export interface SuggestedLeg {
   odds: number | null;
   prediction: number;
   edge: number;
+  seasonAvg: number | null; // season-long average for this stat (picker ranking)
   hitRate: number | null;
   confidence: number;
   history: { hits: number; bets: number } | null; // your own past bets on this player + stat
@@ -166,7 +167,11 @@ async function candidateLegs(
     }
   }
   const formByKey = new Map<string, number[]>();
-  for (const f of feats) formByKey.set(`${f.playerId}:${f.statType}`, f.recentForm ?? []);
+  const seasonAvgByKey = new Map<string, number | null>();
+  for (const f of feats) {
+    formByKey.set(`${f.playerId}:${f.statType}`, f.recentForm ?? []);
+    seasonAvgByKey.set(`${f.playerId}:${f.statType}`, f.seasonAverage ?? null);
+  }
 
   const legs: SuggestedLeg[] = [];
   for (const p of preds) {
@@ -192,6 +197,7 @@ async function candidateLegs(
       odds: odds == null ? null : Math.round(odds * 100) / 100,
       prediction: p.value,
       edge,
+      seasonAvg: seasonAvgByKey.get(key) ?? null,
       hitRate,
       confidence: clamp(base * newsMultiplier(news), 0, 1),
       history,
