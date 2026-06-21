@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import { games, lineupPlayers, players } from "@/db/schema";
@@ -118,6 +118,26 @@ export async function getLineupNames(
     out.push({ name: r.name, team: r.team });
   }
   return out;
+}
+
+/**
+ * How many lineup players are stored per game, for the given games. Lets the
+ * fixtures dashboard show "lineup already uploaded" so it isn't re-done. Games
+ * with no lineup are simply absent from the map.
+ */
+export async function getLineupCounts(
+  gameIds: number[],
+): Promise<Map<number, number>> {
+  if (gameIds.length === 0) return new Map();
+  const rows = await db
+    .select({
+      gameId: lineupPlayers.gameId,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(lineupPlayers)
+    .where(inArray(lineupPlayers.gameId, gameIds))
+    .groupBy(lineupPlayers.gameId);
+  return new Map(rows.map((r) => [r.gameId, r.count]));
 }
 
 /** The full stored lineup for a game (for display / review). */

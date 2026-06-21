@@ -15,12 +15,23 @@ interface SaveResult {
   dropped: string[];
 }
 
-export function LineupUploadButton({ gameId }: { gameId: number }) {
+export function LineupUploadButton({
+  gameId,
+  initialCount = 0,
+}: {
+  gameId: number;
+  // Lineup players already stored for this game (0 = none uploaded yet).
+  initialCount?: number;
+}) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<SaveResult | null>(null);
+
+  // Already uploaded (this load) once a fresh result lands or we started with one.
+  const storedCount = result?.stored ?? initialCount;
+  const hasLineup = storedCount > 0;
 
   async function onFiles(e: React.ChangeEvent<HTMLInputElement>) {
     const files = e.target.files;
@@ -49,13 +60,22 @@ export function LineupUploadButton({ gameId }: { gameId: number }) {
 
   return (
     <div className="space-y-1.5">
+      {hasLineup && !busy ? (
+        <p className="text-xs font-medium text-accent-win">
+          ✓ Lineup uploaded · {storedCount} players
+        </p>
+      ) : null}
       <button
         type="button"
-        className="btn w-full text-sm"
+        className={`w-full text-sm ${hasLineup ? "nav-link" : "btn"}`}
         disabled={busy}
         onClick={() => fileRef.current?.click()}
       >
-        {busy ? "Reading lineup…" : "📋 Upload lineup screenshot"}
+        {busy
+          ? "Reading lineup…"
+          : hasLineup
+            ? "↻ Replace lineup screenshot"
+            : "📋 Upload lineup screenshot"}
       </button>
       <input
         ref={fileRef}
