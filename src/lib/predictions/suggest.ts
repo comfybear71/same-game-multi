@@ -173,9 +173,14 @@ async function candidateLegs(
   for (const p of preds) {
     if (focus !== "any" && p.statType !== focus) continue;
     const key = `${p.playerId}:${p.statType}`;
-    const line = chooseRung([...(rungsByKey.get(key) ?? [])], p.value);
-    if (line == null) continue;
-    const odds = median(oddsByRung.get(`${key}:${line}`) ?? []);
+    // No bookmaker prop for this player+stat (common now that the squad seed
+    // comes from the free lineup screenshot rather than the paid Odds API) —
+    // fall back to our own projection as the line, same floor convention as
+    // the stat board's "AI pick". Odds stay null; the picker shows "—" and
+    // the punter sets their own target.
+    const bookieLine = chooseRung([...(rungsByKey.get(key) ?? [])], p.value);
+    const line = bookieLine ?? Math.floor(p.value) - 0.5;
+    const odds = bookieLine == null ? null : median(oddsByRung.get(`${key}:${line}`) ?? []);
     const form = formByKey.get(key) ?? [];
     const hitRate = form.length > 0 ? form.filter((v) => v > line).length / form.length : null;
     const edge = p.value - line;
@@ -361,11 +366,16 @@ export async function buildSuggestions(
 }
 
 /**
- * Every bettable leg for a game, across all stat types, best confidence
+ * Every predicted leg for a game, across all stat types, best confidence
  * first — the picker behind "+ Add player". A real SGM is freeform once
  * you start editing it, so this deliberately isn't scoped to the active
  * focus tab: a punter building a "Goals" multi might still want to add a
  * Disposals leg for a player they like.
+ *
+ * Unlike `buildSuggestions`, this doesn't require a real bookmaker price —
+ * a lineup-seeded player with no prop posted still has a model projection,
+ * and the punter can pick their own target without needing a quoted line.
+ * Those legs just show "—" for odds (see SuggestedMultis).
  */
 export async function listCandidateLegs(
   gameId: number,
@@ -373,7 +383,5 @@ export async function listCandidateLegs(
 ): Promise<SuggestedLeg[]> {
   const historyByKey = userId != null ? (await getPlayerBettingRecord(userId)).byKey : {};
   const legs = await candidateLegs(gameId, "any", historyByKey);
-  return legs
-    .filter((l) => l.odds != null)
-    .sort((a, b) => b.confidence - a.confidence);
+  return [...legs].sort((a, b) => b.confidence - a.confidence);
 }
