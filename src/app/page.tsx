@@ -106,6 +106,7 @@ export default async function HomePage() {
             ranks={ranksFor(nextGame)}
             form={formFor(nextGame)}
             wins={winsFor(nextGame)}
+            lineupUpload
           />
         </section>
       ) : !dbError ? (
@@ -130,6 +131,7 @@ export default async function HomePage() {
                 ranks={ranksFor(g)}
                 form={formFor(g)}
                 wins={winsFor(g)}
+                lineupUpload
               />
             ))}
           </div>
