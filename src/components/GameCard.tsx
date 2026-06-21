@@ -29,6 +29,7 @@ export function GameCard({
   form = null,
   wins = null,
   lineupUpload = false,
+  lineupCount = null,
 }: {
   game: Game;
   featured?: boolean;
@@ -37,6 +38,8 @@ export function GameCard({
   wins?: FixtureWins | null;
   // Show the "upload lineup screenshot" control (upcoming games only).
   lineupUpload?: boolean;
+  // How many lineup players are already stored for this game (0 = none yet).
+  lineupCount?: number | null;
 }) {
   const complete = game.status === "complete";
   return (
@@ -74,7 +77,7 @@ export function GameCard({
       </Link>
       {lineupUpload ? (
         <div className="mt-3 border-t border-surface-border pt-3">
-          <LineupUploadButton gameId={game.id} />
+          <LineupUploadButton gameId={game.id} initialCount={lineupCount ?? 0} />
         </div>
       ) : null}
     </div>

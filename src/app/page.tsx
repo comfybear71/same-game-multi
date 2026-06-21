@@ -11,6 +11,7 @@ import {
   type FormResult,
 } from "@/lib/data/games";
 import { getTeamRankings, type TeamRanking } from "@/lib/data/teamStats";
+import { getLineupCounts } from "@/lib/ingest/lineup";
 import { canonicalTeam } from "@/lib/afl/teams";
 import { fixtureStatWins, fixtureTeamRanking } from "@/lib/predictions/teamMatchup";
 
@@ -54,6 +55,16 @@ export default async function HomePage() {
     away: fixtureStatWins(teamRankings, g.away, g.home),
   });
   const restUpcoming = upcoming.filter((g) => g.id !== nextGame?.id);
+
+  // Which upcoming games already have a lineup, so the card shows "uploaded"
+  // and neither user re-does the housekeeping. Best-effort — never block render.
+  let lineupCounts: Map<number, number> = new Map();
+  const upcomingIds = [nextGame?.id, ...restUpcoming.map((g) => g.id)].filter(
+    (id): id is number => id != null,
+  );
+  if (upcomingIds.length > 0) {
+    lineupCounts = await getLineupCounts(upcomingIds).catch(() => new Map());
+  }
 
   return (
     <div className="space-y-8">
@@ -107,6 +118,7 @@ export default async function HomePage() {
             form={formFor(nextGame)}
             wins={winsFor(nextGame)}
             lineupUpload
+            lineupCount={lineupCounts.get(nextGame.id) ?? 0}
           />
         </section>
       ) : !dbError ? (
@@ -132,6 +144,7 @@ export default async function HomePage() {
                 form={formFor(g)}
                 wins={winsFor(g)}
                 lineupUpload
+                lineupCount={lineupCounts.get(g.id) ?? 0}
               />
             ))}
           </div>
