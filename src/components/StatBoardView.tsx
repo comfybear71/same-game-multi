@@ -53,13 +53,14 @@ const TIER_STYLE: Record<Tier, string> = {
   Aggressive: "bg-accent-loss/20 text-accent-loss",
 };
 
-type SortKey = "edge" | "hitRate" | "prediction" | "seasonAvg" | "name";
+type SortKey = "edge" | "hitRate" | "prediction" | "seasonAvg" | "fantasy" | "name";
 
 const SORT_OPTIONS: { key: SortKey; label: string }[] = [
   { key: "edge", label: "Edge" },
   { key: "hitRate", label: "Hit rate" },
   { key: "prediction", label: "Projection" },
   { key: "seasonAvg", label: "Season avg" },
+  { key: "fantasy", label: "Fantasy" },
   { key: "name", label: "Name" },
 ];
 
@@ -75,7 +76,9 @@ function sortRows(rows: PlayerStatRow[], key: SortKey): PlayerStatRow[] {
         ? r.hitRate
         : key === "prediction"
           ? r.prediction
-          : r.seasonAvg;
+          : key === "seasonAvg"
+            ? r.seasonAvg
+            : r.recentFantasyAvg;
   return [...rows].sort((a, b) => {
     const av = value(a);
     const bv = value(b);
@@ -257,18 +260,6 @@ function PlayerStatCard({
   // Last 5, displayed oldest -> newest with the most recent highlighted.
   const last5 = row.recentForm.slice(0, 5).reverse();
 
-  // "Why": base from form/season (Model B), then the adjustment to the headline
-  // (Model C) — the player-calibration part exactly, the rest as matchup.
-  const base = row.models.B;
-  const form5 = row.recentForm.slice(0, 5);
-  const formAvg = form5.length
-    ? Math.round(form5.reduce((a, b) => a + b, 0) / form5.length)
-    : null;
-  const calDelta = base != null ? Math.round(((row.calibration?.factor ?? 1) - 1) * base) : 0;
-  const totalDelta =
-    base != null && row.prediction != null ? Math.round(row.prediction - base) : 0;
-  const matchupDelta = totalDelta - calDelta;
-
   return (
     <div className="card">
       <div className="flex items-start gap-3">
@@ -305,6 +296,14 @@ function PlayerStatCard({
           <div className="text-xs text-slate-400">
             {row.team}
             {row.seasonAvg != null ? ` · Season avg ${floorStat(row.seasonAvg)}` : ""}
+            {row.recentFantasyAvg != null ? (
+              <>
+                {" · "}
+                <span className="text-slate-300">
+                  Fantasy {Math.round(row.recentFantasyAvg)}
+                </span>
+              </>
+            ) : null}
           </div>
         </div>
         <div className="text-right">
@@ -371,15 +370,6 @@ function PlayerStatCard({
             </div>
           ) : null}
           {bioLine ? <div className="text-slate-400">{bioLine}</div> : null}
-          {row.recentFantasyAvg != null ? (
-            <div className="text-slate-400">
-              Fantasy{" "}
-              <span className="font-semibold text-white">
-                {Math.round(row.recentFantasyAvg)}
-              </span>{" "}
-              avg (last 5)
-            </div>
-          ) : null}
           <div className="text-[11px] text-slate-600">Weather &amp; position coming soon.</div>
         </div>
       ) : null}
@@ -482,22 +472,6 @@ function PlayerStatCard({
         </div>
       ) : null}
 
-      {/* Why: how the projection was built */}
-      {base != null && row.prediction != null ? (
-        <div className="mt-2 text-[11px] text-slate-400">
-          <span className="font-semibold text-slate-300">Why:</span> form{" "}
-          {formAvg ?? "–"}, season {row.seasonAvg != null ? floorStat(row.seasonAvg) : "–"}{" "}
-          → {floorStat(base)}
-          {matchupDelta !== 0 ? ` · matchup ${signed(matchupDelta)}` : ""}
-          {calDelta !== 0 ? ` · our read ${signed(calDelta)}` : ""} →{" "}
-          <span className="font-semibold text-white">{floorStat(row.prediction)}</span>
-        </div>
-      ) : null}
-
-      {/* Model detail (de-emphasised) */}
-      <div className="mt-1 text-[11px] text-slate-500">
-        Models · A {floorStatLabel(row.models.A)} · B {floorStatLabel(row.models.B)} · C {floorStatLabel(row.models.C)}
-      </div>
     </div>
   );
 }
