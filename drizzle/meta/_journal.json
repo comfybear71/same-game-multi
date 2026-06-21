@@ -43,6 +43,13 @@
       "when": 1781802837363,
       "tag": "0005_redundant_abomination",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1782015625371,
+      "tag": "0006_secret_komodo",
+      "breakpoints": true
     }
   ]
 }

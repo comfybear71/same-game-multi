@@ -35,6 +35,13 @@ export const gameStatusEnum = pgEnum("game_status", [
   "complete",
 ]);
 
+/** Where a named player sits in the team sheet for a game. */
+export const lineupStatusEnum = pgEnum("lineup_status", [
+  "named", // in the starting/on-field 18 + positional bench
+  "interchange",
+  "emergency",
+]);
+
 /** Lifecycle of a bet slip (same-game multi). */
 export const betStatusEnum = pgEnum("bet_status", [
   "pending",
@@ -126,6 +133,46 @@ export const games = pgTable(
   (t) => ({
     commenceIdx: index("games_commence_idx").on(t.commenceTime),
     roundIdx: index("games_round_idx").on(t.season, t.round),
+  }),
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Lineups (named team sheet for a game, read from an AFL app/website screenshot)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// One row per named player in a game's official team sheet. This is the squad
+// "seed" that prediction generation runs off — replacing the paid Odds API's
+// player list. Captured before the game from a Match Centre / Line-Ups
+// screenshot via Claude vision. Refreshing a game's lineup replaces its rows.
+export const lineupPlayers = pgTable(
+  "lineup_players",
+  {
+    id: serial("id").primaryKey(),
+    gameId: integer("game_id")
+      .notNull()
+      .references(() => games.id, { onDelete: "cascade" }),
+    // Canonical club (one of the game's two teams).
+    team: text("team").notNull(),
+    // Full player name as resolved (first + last where possible).
+    playerName: text("player_name").notNull(),
+    jumper: integer("jumper"),
+    // Free-text on-field position from the team sheet, e.g. "Half Back",
+    // "Followers". Null for interchange/emergency where no position is shown.
+    position: text("position"),
+    status: lineupStatusEnum("status").notNull().default("named"),
+    // Backfilled to our players row once resolved during prediction generation.
+    playerId: integer("player_id").references(() => players.id, {
+      onDelete: "set null",
+    }),
+    // Blob URL of the screenshot this row came from (audit / re-read).
+    sourceUrl: text("source_url"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    gamePlayerUnique: unique("lineup_game_player_unique").on(t.gameId, t.team, t.playerName),
+    gameIdx: index("lineup_game_idx").on(t.gameId),
   }),
 );
 
@@ -382,6 +429,15 @@ export const gamesRelations = relations(games, ({ many }) => ({
   playerGameStats: many(playerGameStats),
   predictions: many(predictions),
   bookmakerLines: many(bookmakerLines),
+  lineupPlayers: many(lineupPlayers),
+}));
+
+export const lineupPlayersRelations = relations(lineupPlayers, ({ one }) => ({
+  game: one(games, { fields: [lineupPlayers.gameId], references: [games.id] }),
+  player: one(players, {
+    fields: [lineupPlayers.playerId],
+    references: [players.id],
+  }),
 }));
 
 export const playersRelations = relations(players, ({ many }) => ({
@@ -425,6 +481,8 @@ export type PlayerGameStat = typeof playerGameStats.$inferSelect;
 export type Prediction = typeof predictions.$inferSelect;
 export type PlayerGameFeature = typeof playerGameFeatures.$inferSelect;
 export type BookmakerLine = typeof bookmakerLines.$inferSelect;
+export type LineupPlayer = typeof lineupPlayers.$inferSelect;
+export type LineupStatus = (typeof lineupStatusEnum.enumValues)[number];
 export type Bet = typeof bets.$inferSelect;
 export type BetLeg = typeof betLegs.$inferSelect;
 export type ModelAccuracy = typeof modelAccuracy.$inferSelect;

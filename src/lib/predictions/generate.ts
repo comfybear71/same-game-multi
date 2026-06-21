@@ -4,6 +4,7 @@ import { db } from "@/db";
 import {
   bookmakerLines,
   games,
+  lineupPlayers,
   players,
   playerGameFeatures,
   predictions,
@@ -16,6 +17,7 @@ import {
   recentFantasyAverage,
   type PlayerHistory,
 } from "@/lib/ingest/aflTables";
+import { getLineupNames } from "@/lib/ingest/lineup";
 import { getTeamSeasonStats } from "@/lib/ingest/wheelo";
 import { calKey } from "./calibration";
 import { runAllModels } from "./engine";
@@ -68,12 +70,17 @@ export async function generatePredictions(gameId: number): Promise<GenerateResul
   const homeC = canonicalTeam(game.home) ?? game.home;
   const awayC = canonicalTeam(game.away) ?? game.away;
 
-  // Distinct propped players for this game.
-  const lineRows = await db
-    .select({ name: bookmakerLines.playerName })
-    .from(bookmakerLines)
-    .where(eq(bookmakerLines.gameId, gameId));
-  const names = [...new Set(lineRows.map((r) => r.name))];
+  // Squad seed: prefer the screenshot-read lineup (free, official team sheet);
+  // fall back to the bookmaker's propped players if no lineup is uploaded.
+  const lineupNames = (await getLineupNames(gameId)).map((r) => r.name);
+  let names = [...new Set(lineupNames)];
+  if (names.length === 0) {
+    const lineRows = await db
+      .select({ name: bookmakerLines.playerName })
+      .from(bookmakerLines)
+      .where(eq(bookmakerLines.gameId, gameId));
+    names = [...new Set(lineRows.map((r) => r.name))];
+  }
   if (names.length === 0) {
     return { gameId, playersProcessed: 0, predictionsWritten: 0, unresolved: [] };
   }
@@ -144,6 +151,10 @@ export async function generatePredictions(gameId: number): Promise<GenerateResul
       .update(bookmakerLines)
       .set({ playerId })
       .where(and(eq(bookmakerLines.gameId, gameId), eq(bookmakerLines.playerName, name)));
+    await db
+      .update(lineupPlayers)
+      .set({ playerId })
+      .where(and(eq(lineupPlayers.gameId, gameId), eq(lineupPlayers.playerName, name)));
 
     const opponent =
       history.team === homeC ? awayC : history.team === awayC ? homeC : null;
