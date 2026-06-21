@@ -9,6 +9,7 @@ import type { PlayerBetRecord } from "@/lib/data/bets";
 import type { PlayerStatRow, StatBoard } from "@/lib/data/statboard";
 import { floorStat, floorStatLabel, lineTarget, signed } from "@/lib/format";
 import type { InjuryStatus } from "@/lib/ingest/injuries";
+import { clearProbability } from "@/lib/predictions/probability";
 
 // Mirror of playerRecordKey's normalisation (kept identical to lib/data/bets).
 function recordKey(name: string, stat: string): string {
@@ -133,6 +134,62 @@ const NEWS_CHIP: Record<InjuryStatus, { label: string; cls: string } | null> = {
   available: { label: "NAMED", cls: "bg-accent-win/20 text-accent-win ring-accent-win/40" },
   unknown: null,
 };
+
+// Pure analysis, no recommendation: for each candidate whole-number target
+// around our projection, the modelled chance the player clears it (P(count ≥ T),
+// shrunk for small samples). Lets you read off your own "softer safer number" —
+// e.g. projected 32, but 27+ lands ~84% — rather than the app picking one.
+function ClearChanceLadder({
+  prediction,
+  form,
+  statLabel,
+}: {
+  prediction: number;
+  form: number[];
+  statLabel: string;
+}) {
+  const proj = Math.floor(prediction);
+  // One rung above the projection (the "stretch") down to a good way below it,
+  // so a softer number like projected 32 → 27+ is on the ladder to read off.
+  const lo = Math.max(1, proj - 6);
+  const rungs: { target: number; pct: number; isProj: boolean }[] = [];
+  for (let t = proj + 1; t >= lo; t--) {
+    // line = t - 0.5 makes the winning count exactly t (an "t+" market).
+    rungs.push({
+      target: t,
+      pct: Math.round(clearProbability({ prediction, line: t - 0.5, form }) * 100),
+      isProj: t === proj,
+    });
+  }
+  return (
+    <div className="mt-3">
+      <div className="mb-1 text-[11px] uppercase tracking-wide text-slate-500">
+        Chance to clear · {statLabel}
+      </div>
+      <div className="flex gap-1 overflow-x-auto pb-1">
+        {rungs.map((r) => {
+          const cls =
+            r.pct >= 80
+              ? "text-accent-win"
+              : r.pct >= 60
+                ? "text-accent-pending"
+                : "text-accent-loss";
+          return (
+            <div
+              key={r.target}
+              className={`flex min-w-[3rem] flex-col items-center rounded px-2 py-1 ${
+                r.isProj ? "bg-accent/15 ring-1 ring-accent/40" : "bg-surface"
+              }`}
+            >
+              <span className="text-xs font-semibold text-slate-200">{r.target}+</span>
+              <span className={`text-xs font-bold ${cls}`}>{r.pct}%</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 export function StatBoardView({
   board,
@@ -341,6 +398,16 @@ function PlayerStatCard({
           )}
         </div>
       </div>
+
+      {/* Clear-chance ladder: the modelled odds of each target landing, so you
+          can choose your own safer number off the analysis (app never picks). */}
+      {row.prediction != null && row.recentForm.length >= 2 ? (
+        <ClearChanceLadder
+          prediction={row.prediction}
+          form={row.recentForm}
+          statLabel={statLabel}
+        />
+      ) : null}
 
       {/* Info popover: opponent record + news detail (bio/weather to come) */}
       {showInfo ? (
