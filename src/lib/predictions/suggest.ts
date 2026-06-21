@@ -10,6 +10,7 @@ import {
 } from "@/db/schema";
 import { getPlayerBettingRecord, playerRecordKey } from "@/lib/data/bets";
 import { getPlayerNews, type InjuryNews } from "@/lib/ingest/injuries";
+import { clearProbability } from "./probability";
 import { DEFAULT_LEGS, MAX_LEGS, MIN_LEGS } from "./suggestLimits";
 
 // Build a same-game-multi suggestion from our own data, sized to however many
@@ -83,13 +84,6 @@ function chooseRung(rungs: number[], prediction: number): number | null {
   const sorted = [...rungs].sort((a, b) => a - b);
   const clearable = sorted.filter((r) => r < prediction);
   return clearable.length > 0 ? clearable[clearable.length - 1] : sorted[0];
-}
-
-function confidenceOf(hitRate: number | null, edge: number, line: number): number {
-  const hr = hitRate ?? 0.5;
-  // Full margin credit when the prediction clears the line by 15%+.
-  const margin = clamp(edge / (0.15 * Math.max(line, 1)), 0, 1);
-  return clamp(0.55 * hr + 0.45 * margin, 0, 1);
 }
 
 /**
@@ -188,7 +182,11 @@ async function candidateLegs(
     const history = historyByKey[playerRecordKey(p.name, p.statType)] ?? null;
     const news = newsByPlayer.get(p.playerId) ?? null;
     if (news?.status === "out") continue; // never suggest a ruled-out player
-    const base = withHistory(confidenceOf(hitRate, edge, line), history);
+    // Confidence is now the modelled probability of clearing the line (shrunk
+    // for small samples), not a raw recent hit-rate — so a one-game player
+    // can't read as a near-certainty. Edge + hitRate are still stored for the
+    // single-stat ranking and the card's display.
+    const base = withHistory(clearProbability({ prediction: p.value, line, form }), history);
     legs.push({
       playerId: p.playerId,
       playerName: p.name,
