@@ -37,6 +37,7 @@ export interface SuggestedLeg {
   prediction: number;
   edge: number;
   seasonAvg: number | null; // season-long average for this stat (picker ranking)
+  fantasyAvg: number | null; // recent AFL Fantasy average — proxy for player quality
   hitRate: number | null;
   confidence: number;
   history: { hits: number; bets: number } | null; // your own past bets on this player + stat
@@ -133,6 +134,7 @@ async function candidateLegs(
       name: players.name,
       jumper: players.jumper,
       team: players.team,
+      recentFantasyAvg: players.recentFantasyAvg,
       statType: predictions.statType,
       value: predictions.predictedValue,
     })
@@ -198,6 +200,7 @@ async function candidateLegs(
       prediction: p.value,
       edge,
       seasonAvg: seasonAvgByKey.get(key) ?? null,
+      fantasyAvg: p.recentFantasyAvg,
       hitRate,
       confidence: clamp(base * newsMultiplier(news), 0, 1),
       history,
@@ -244,6 +247,69 @@ function pickN(pool: SuggestedLeg[], n: number): SuggestedLeg[] {
   return out;
 }
 
+/**
+ * Spread a ticket across markets instead of taking a straight confidence
+ * ranking. A pure ranking floods an "Any" ticket with whichever market scores
+ * easiest (usually marks at the 2+ rung — near-100% hit rates and a tiny line
+ * that saturates the edge margin), so a 10-leg "Any" came back 9 marks.
+ *
+ * Here we group legs by stat, rank each market by confidence nudged toward the
+ * genuine best players (fantasy average is a good proxy for player quality),
+ * then round-robin across markets — strongest market first — so the ticket
+ * reads disposals/marks/tackles/goals rather than one stat repeated. Pass 1
+ * keeps to distinct players for variety on small tickets; pass 2 then allows a
+ * player's other markets to reach the requested count on bigger tickets.
+ */
+function pickSpread(pool: SuggestedLeg[], n: number): SuggestedLeg[] {
+  const maxFantasy = Math.max(0, ...pool.map((l) => l.fantasyAvg ?? 0));
+  // Confidence (0..1) leads; fantasy adds at most a 0.15 nudge so the best
+  // players surface within a market without overriding a clearly better bet.
+  const score = (l: SuggestedLeg) =>
+    l.confidence + (maxFantasy > 0 ? 0.15 * ((l.fantasyAvg ?? 0) / maxFantasy) : 0);
+
+  const byStat = new Map<StatType, SuggestedLeg[]>();
+  for (const l of pool) {
+    (byStat.get(l.statType) ?? byStat.set(l.statType, []).get(l.statType)!).push(l);
+  }
+  for (const arr of byStat.values()) arr.sort((a, b) => score(b) - score(a));
+
+  // Lead with the market whose best available leg scores highest, so the first
+  // legs of a small ticket are the strongest picks, not whatever's first in a
+  // fixed order.
+  const statOrder = [...byStat.keys()].sort(
+    (a, b) => score(byStat.get(b)![0]) - score(byStat.get(a)![0]),
+  );
+
+  const out: SuggestedLeg[] = [];
+  const usedLegs = new Set<string>();
+  const usedPlayers = new Set<number>();
+  const legKey = (l: SuggestedLeg) => `${l.playerId}:${l.statType}`;
+
+  const fill = (allowRepeatPlayer: boolean) => {
+    let progress = true;
+    while (out.length < n && progress) {
+      progress = false;
+      for (const stat of statOrder) {
+        if (out.length >= n) break;
+        const next = (byStat.get(stat) ?? []).find(
+          (l) =>
+            !usedLegs.has(legKey(l)) &&
+            (allowRepeatPlayer || !usedPlayers.has(l.playerId)),
+        );
+        if (!next) continue;
+        out.push(next);
+        usedLegs.add(legKey(next));
+        usedPlayers.add(next.playerId);
+        progress = true;
+      }
+    }
+  };
+
+  fill(false); // distinct players, spread across markets
+  fill(true); // then a player's other markets to reach n on bigger tickets
+  return out;
+}
+
 function finalize(legs: SuggestedLeg[]): Suggestion {
   const estOdds =
     legs.length > 0
@@ -267,11 +333,21 @@ export async function buildSuggestions(
   const historyByKey = userId != null ? (await getPlayerBettingRecord(userId)).byKey : {};
   const legs = await candidateLegs(gameId, focus, historyByKey);
 
-  // A leg is only bettable if we have a price for it. Within that, prefer legs
-  // the model rates over the line (+edge), best confidence first.
+  // A leg is only bettable if we have a price for it.
+  const withOdds = legs.filter((l) => l.odds != null);
+
+  // "Any" spreads the ticket across all four markets (round-robin, best players
+  // first) instead of a straight confidence ranking that floods with whichever
+  // market scores easiest — see pickSpread. A single-stat focus has only one
+  // market, so it keeps the straight ranking: +edge legs first, then top up.
+  if (focus === "any") {
+    return finalize(pickSpread(withOdds, n));
+  }
+
+  // Within a single market, prefer legs the model rates over the line (+edge),
+  // best confidence first.
   const byConfidence = (ls: SuggestedLeg[]) =>
     [...ls].sort((a, b) => b.confidence - a.confidence);
-  const withOdds = legs.filter((l) => l.odds != null);
   const positive = byConfidence(withOdds.filter((l) => l.edge > 0));
 
   // Top up toward the requested leg count with the next-best legs when the
