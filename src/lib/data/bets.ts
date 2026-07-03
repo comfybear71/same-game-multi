@@ -4,6 +4,7 @@ import { db } from "@/db";
 import {
   betLegs,
   bets,
+  games,
   players,
   predictions,
   users,
@@ -13,6 +14,104 @@ import {
 
 export interface BetWithLegs extends Bet {
   legs: BetLeg[];
+}
+
+export interface BetFixture {
+  gameId: number;
+  home: string;
+  away: string;
+}
+
+export interface EnrichedBetLeg extends BetLeg {
+  jumper: number | null;
+  team: string | null;
+}
+
+export interface EnrichedBetSlip extends Bet {
+  legs: EnrichedBetLeg[];
+  fixture: BetFixture | null;
+}
+
+/** Bets with game fixture + player jumper/team for the tracker UI. */
+export async function getEnrichedBetsForUser(userId: number): Promise<EnrichedBetSlip[]> {
+  const slips = await getBetsForUser(userId);
+  if (slips.length === 0) return [];
+
+  const gameIds = new Set<number>();
+  const playerIds = new Set<number>();
+  for (const slip of slips) {
+    for (const leg of slip.legs) {
+      if (leg.gameId != null) gameIds.add(leg.gameId);
+      if (leg.playerId != null) playerIds.add(leg.playerId);
+    }
+  }
+
+  const gamesById = new Map<number, BetFixture>();
+  if (gameIds.size > 0) {
+    const rows = await db
+      .select({ id: games.id, home: games.home, away: games.away })
+      .from(games)
+      .where(inArray(games.id, [...gameIds]));
+    for (const g of rows) {
+      gamesById.set(g.id, { gameId: g.id, home: g.home, away: g.away });
+    }
+  }
+
+  const playersById = new Map<number, { jumper: number | null; team: string }>();
+  const playersByName = new Map<string, { jumper: number | null; team: string }>();
+  if (playerIds.size > 0) {
+    const rows = await db
+      .select({ id: players.id, name: players.name, jumper: players.jumper, team: players.team })
+      .from(players)
+      .where(inArray(players.id, [...playerIds]));
+    for (const p of rows) {
+      playersById.set(p.id, { jumper: p.jumper, team: p.team });
+      playersByName.set(normaliseName(p.name), { jumper: p.jumper, team: p.team });
+    }
+  }
+
+  const rosterByGame = new Map<number, Map<string, { jumper: number | null; team: string }>>();
+  if (gameIds.size > 0) {
+    const rosterRows = await db
+      .select({
+        gameId: predictions.gameId,
+        name: players.name,
+        jumper: players.jumper,
+        team: players.team,
+      })
+      .from(predictions)
+      .innerJoin(players, eq(predictions.playerId, players.id))
+      .where(inArray(predictions.gameId, [...gameIds]));
+    for (const row of rosterRows) {
+      const byName =
+        rosterByGame.get(row.gameId) ??
+        rosterByGame.set(row.gameId, new Map()).get(row.gameId)!;
+      byName.set(normaliseName(row.name), { jumper: row.jumper, team: row.team });
+    }
+  }
+
+  return slips.map((slip) => {
+    const gameId = slip.legs.find((l) => l.gameId != null)?.gameId ?? null;
+    const fixture = gameId != null ? gamesById.get(gameId) ?? null : null;
+
+    const legs: EnrichedBetLeg[] = slip.legs.map((leg) => {
+      let meta = leg.playerId != null ? playersById.get(leg.playerId) : undefined;
+      if (!meta && leg.playerName) {
+        const n = normaliseName(leg.playerName);
+        meta = playersByName.get(n);
+        if (!meta && leg.gameId != null) {
+          meta = rosterByGame.get(leg.gameId)?.get(n);
+        }
+      }
+      return {
+        ...leg,
+        jumper: meta?.jumper ?? null,
+        team: meta?.team ?? null,
+      };
+    });
+
+    return { ...slip, legs, fixture };
+  });
 }
 
 /** Resolve our internal user id from the session email. */
@@ -47,6 +146,8 @@ export async function getBetsForUser(userId: number): Promise<BetWithLegs[]> {
 }
 
 export interface BetTrackerLeg {
+  legId: number;
+  betId: number;
   playerName: string | null;
   jumper: number | null;
   team: string | null;
@@ -54,11 +155,16 @@ export interface BetTrackerLeg {
   line: number;
   odds: number | null;
   result: string;
+  actualValue: number | null;
   prediction: number | null; // our Model C view, as a live proxy
 }
 
-function normaliseName(name: string): string {
+export function normalisePlayerName(name: string): string {
   return name.toLowerCase().replace(/[^a-z\s]/g, "").replace(/\s+/g, " ").trim();
+}
+
+function normaliseName(name: string): string {
+  return normalisePlayerName(name);
 }
 
 /**
@@ -99,6 +205,8 @@ export async function getUserBetTracker(
 
   const legs = await db
     .select({
+      legId: betLegs.id,
+      betId: betLegs.betId,
       playerName: betLegs.playerName,
       gameId: betLegs.gameId,
       betRound: bets.round,
@@ -106,6 +214,7 @@ export async function getUserBetTracker(
       line: betLegs.line,
       odds: betLegs.odds,
       result: betLegs.result,
+      actualValue: betLegs.actualValue,
     })
     .from(betLegs)
     .innerJoin(bets, eq(betLegs.betId, bets.id))
@@ -120,6 +229,8 @@ export async function getUserBetTracker(
     if (!belongs) continue;
     const m = meta.get(n);
     out.push({
+      legId: leg.legId,
+      betId: leg.betId,
       playerName: leg.playerName,
       jumper: m?.jumper ?? null,
       team: m?.team ?? null,
@@ -127,6 +238,7 @@ export async function getUserBetTracker(
       line: leg.line,
       odds: leg.odds,
       result: leg.result,
+      actualValue: leg.actualValue,
       prediction: predByKey.get(`${n}:${leg.statType}`) ?? null,
     });
   }
@@ -162,6 +274,53 @@ export interface PlayerRecordIndex {
 /** Lookup key for a player's record on a given stat. Mirror in any client. */
 export function playerRecordKey(name: string, stat: string): string {
   return `${normaliseName(name)}:${stat}`;
+}
+
+/** All-stats strike rate for lineup badges (Review round roster, game lineup). */
+export interface PlayerHistorySummary {
+  hits: number;
+  bets: number;
+  /** Most-backed stat — used for "last time" on the badge tooltip. */
+  lastResult: "hit" | "miss";
+  lastStat: string;
+}
+
+/** Roll per-stat records into one row per player name. */
+export function indexPlayerHistoryByName(
+  list: PlayerBetRecord[],
+): Record<string, PlayerHistorySummary> {
+  const acc = new Map<
+    string,
+    PlayerHistorySummary & { topBets: number }
+  >();
+
+  for (const r of list) {
+    const key = normaliseName(r.playerName);
+    let row = acc.get(key);
+    if (!row) {
+      row = { hits: 0, bets: 0, lastResult: r.lastResult, lastStat: r.statType, topBets: 0 };
+      acc.set(key, row);
+    }
+    row.hits += r.hits;
+    row.bets += r.bets;
+    if (r.bets >= row.topBets) {
+      row.topBets = r.bets;
+      row.lastResult = r.lastResult;
+      row.lastStat = r.statType;
+    }
+  }
+
+  const out: Record<string, PlayerHistorySummary> = {};
+  for (const [key, row] of acc) {
+    if (row.bets === 0) continue;
+    out[key] = {
+      hits: row.hits,
+      bets: row.bets,
+      lastResult: row.lastResult,
+      lastStat: row.lastStat,
+    };
+  }
+  return out;
 }
 
 /** Aggregate a user's settled legs into a per-player, per-stat record. */
@@ -286,5 +445,110 @@ export function summarise(slips: BetWithLegs[]): BetSummary {
     staked,
     returned,
     roi,
+  };
+}
+
+export interface MultiLegGroup {
+  legCount: number;
+  slips: number;
+  pending: number;
+  won: number;
+  lost: number;
+  /** Slip-level strike rate (won / settled slips). */
+  slipStrike: number | null;
+  /** Individual legs hit across these multis. */
+  legHits: number;
+  legSettled: number;
+  legStrike: number | null;
+  roi: number | null;
+  staked: number;
+}
+
+export interface MultiAnalytics {
+  totalMultis: number;
+  pending: number;
+  won: number;
+  lost: number;
+  totalLegs: number;
+  avgLegs: number;
+  /** One row per distinct leg count, ascending (3-leg, 21-leg, …). */
+  byLegCount: MultiLegGroup[];
+}
+
+function roiForSlips(slips: BetWithLegs[]): number | null {
+  let settledStake = 0;
+  let returned = 0;
+  for (const s of slips) {
+    const stake = s.totalStake ?? 0;
+    if (s.status === "won") {
+      settledStake += stake;
+      returned += stake * (s.totalOdds ?? 0);
+    } else if (s.status === "lost") {
+      settledStake += stake;
+    }
+  }
+  return settledStake > 0 ? (returned - settledStake) / settledStake : null;
+}
+
+/** Group slips by leg count for review — 3-leg vs 25-leg performance. */
+export function analyseMultis(slips: BetWithLegs[]): MultiAnalytics {
+  const byCount = new Map<number, BetWithLegs[]>();
+  for (const s of slips) {
+    const n = s.legs.length;
+    const arr = byCount.get(n);
+    if (arr) arr.push(s);
+    else byCount.set(n, [s]);
+  }
+
+  const byLegCount: MultiLegGroup[] = [...byCount.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([legCount, group]) => {
+      let pending = 0;
+      let won = 0;
+      let lost = 0;
+      let legHits = 0;
+      let legSettled = 0;
+      let staked = 0;
+      for (const s of group) {
+        staked += s.totalStake ?? 0;
+        if (s.status === "pending") pending++;
+        else if (s.status === "won") won++;
+        else if (s.status === "lost") lost++;
+        for (const leg of s.legs) {
+          if (leg.result === "hit") {
+            legHits++;
+            legSettled++;
+          } else if (leg.result === "miss") {
+            legSettled++;
+          }
+        }
+      }
+      const settled = won + lost;
+      return {
+        legCount,
+        slips: group.length,
+        pending,
+        won,
+        lost,
+        slipStrike: settled > 0 ? won / settled : null,
+        legHits,
+        legSettled,
+        legStrike: legSettled > 0 ? legHits / legSettled : null,
+        roi: roiForSlips(group),
+        staked,
+      };
+    });
+
+  const totalLegs = slips.reduce((n, s) => n + s.legs.length, 0);
+  const summary = summarise(slips);
+
+  return {
+    totalMultis: slips.length,
+    pending: summary.pending,
+    won: summary.won,
+    lost: summary.lost,
+    totalLegs,
+    avgLegs: slips.length > 0 ? totalLegs / slips.length : 0,
+    byLegCount,
   };
 }

@@ -4,12 +4,22 @@ import { signIn } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 
+const AUTH_ERROR_MESSAGES: Record<string, string> = {
+  Configuration:
+    "Auth is misconfigured. Set NEXTAUTH_SECRET in .env.local (run npm run setup:local), then restart the dev server.",
+  AccessDenied: "That email isn't on the allowlist.",
+  CredentialsSignin: "That email isn't on the allowlist.",
+};
+
 function LoginForm() {
   const params = useSearchParams();
   const callbackUrl = params.get("callbackUrl") || "/";
+  const authError = params.get("error");
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(
+    authError ? (AUTH_ERROR_MESSAGES[authError] ?? "Sign-in failed. Try again.") : null,
+  );
   const [loading, setLoading] = useState(false);
 
   async function onSubmit(e: React.FormEvent) {
@@ -34,7 +44,7 @@ function LoginForm() {
   return (
     <div className="mx-auto mt-16 max-w-sm">
       <div className="card">
-        <h1 className="mb-1 text-xl font-bold text-white">AFL Multi Tracker</h1>
+        <h1 className="mb-1 text-xl font-bold text-white">Matty&apos;s got big balls multi tracker</h1>
         <p className="mb-4 text-sm text-slate-400">
           Invite-only. Sign in with an allowlisted email.
         </p>

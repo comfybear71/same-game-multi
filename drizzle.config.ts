@@ -1,3 +1,5 @@
+import "./src/db/loadDotenvLocal";
+
 import { defineConfig } from "drizzle-kit";
 
 // drizzle-kit reads DATABASE_URL from the environment. Loaded from .env.local

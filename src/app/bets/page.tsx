@@ -1,15 +1,17 @@
 import Link from "next/link";
 
+import { DeleteBetButton } from "@/components/DeleteBetButton";
+import { EditLegMarket } from "@/components/EditLegMarket";
 import { LegResultControls } from "@/components/LegResultControls";
 import { RunMigrationsButton } from "@/components/RunMigrationsButton";
-import { SettleNowButton } from "@/components/SettleNowButton";
 import { UploadResultButton } from "@/components/UploadResultButton";
 import { auth } from "@/lib/auth";
+import { teamColors } from "@/lib/afl/teamColors";
 import {
-  getBetsForUser,
+  getEnrichedBetsForUser,
   summarise,
   userIdForEmail,
-  type BetWithLegs,
+  type EnrichedBetSlip,
 } from "@/lib/data/bets";
 import { marginVsTarget, signed, targetLabel } from "@/lib/format";
 
@@ -19,12 +21,12 @@ export default async function BetsPage() {
   const session = await auth();
   const email = session?.user?.email;
 
-  let slips: BetWithLegs[] = [];
+  let slips: EnrichedBetSlip[] = [];
   let dbError: string | null = null;
   if (email) {
     try {
       const userId = await userIdForEmail(email);
-      if (userId) slips = await getBetsForUser(userId);
+      if (userId) slips = await getEnrichedBetsForUser(userId);
     } catch (err) {
       dbError = (err as Error).message;
     }
@@ -39,12 +41,9 @@ export default async function BetsPage() {
           <h1 className="text-2xl font-bold text-white">Bet tracker</h1>
           <p className="text-sm text-slate-400">Same-game multis and their legs.</p>
         </div>
-        <div className="flex items-center gap-2">
-          <SettleNowButton />
-          <Link href="/bets/new" className="btn">
-            + New bet
-          </Link>
-        </div>
+        <Link href="/bets/new" className="btn">
+          + New bet
+        </Link>
       </header>
 
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -96,12 +95,12 @@ function strikeRate(won: number, lost: number): string {
 interface RoundGroup {
   key: string;
   round: number | null;
-  slips: BetWithLegs[];
+  slips: EnrichedBetSlip[];
 }
 
 /** Group slips by round, newest round first, unrounded last. */
-function groupByRound(slips: BetWithLegs[]): RoundGroup[] {
-  const map = new Map<number | null, BetWithLegs[]>();
+function groupByRound(slips: EnrichedBetSlip[]): RoundGroup[] {
+  const map = new Map<number | null, EnrichedBetSlip[]>();
   for (const s of slips) {
     const k = s.round ?? null;
     const arr = map.get(k);
@@ -161,7 +160,7 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function BetSlip({ slip }: { slip: BetWithLegs }) {
+function BetSlip({ slip }: { slip: EnrichedBetSlip }) {
   const statusColor: Record<string, string> = {
     pending: "bg-accent-pending/15 text-accent-pending",
     won: "bg-accent-win/15 text-accent-win",
@@ -176,6 +175,16 @@ function BetSlip({ slip }: { slip: BetWithLegs }) {
 
   return (
     <div className="card">
+      {slip.fixture ? (
+        <div className="mb-2 border-b border-surface-border/60 pb-2">
+          <Link
+            href={`/games/${slip.fixture.gameId}`}
+            className="block text-sm font-semibold leading-snug text-white hover:text-accent"
+          >
+            {slip.fixture.home} v {slip.fixture.away}
+          </Link>
+        </div>
+      ) : null}
       <div className="flex items-center justify-between">
         <span className="text-sm text-slate-400">
           {slip.round ? `Round ${slip.round}` : "Multi"} · {slip.legs.length} legs
@@ -207,41 +216,52 @@ function BetSlip({ slip }: { slip: BetWithLegs }) {
             leg.actualValue != null
               ? marginVsTarget(leg.actualValue, leg.line)
               : null;
+          const colors = leg.team ? teamColors(leg.team) : null;
           return (
             <li key={leg.id} className="space-y-1 text-sm">
               <div className="flex justify-between gap-2">
-                <span className="text-slate-300">
-                  {leg.playerName ? (
-                    <span className="font-medium text-white">{leg.playerName} </span>
-                  ) : null}
-                  {leg.statType} {targetLabel(leg.line)}
-                  {leg.odds ? <span className="text-slate-500"> @ {leg.odds}</span> : null}
-                  {settled && leg.actualValue != null ? (
-                    <span className="text-slate-500">
-                      {" "}
-                      · got{" "}
-                      <span className="text-slate-300">{leg.actualValue}</span>
-                      {margin != null ? (
-                        <span
-                          className={
-                            margin >= 0 ? "text-accent-win" : "text-accent-loss"
-                          }
-                        >
-                          {" "}
-                          ({signed(margin)})
-                        </span>
-                      ) : null}
+                <div className="flex min-w-0 items-start gap-1.5">
+                  {colors ? (
+                    <span
+                      className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded text-[10px] font-bold"
+                      style={{ background: colors.bg, color: colors.fg }}
+                    >
+                      {leg.jumper ?? "–"}
                     </span>
                   ) : null}
-                </span>
+                  <span className="min-w-0 text-slate-300">
+                    {leg.playerName ? (
+                      <span className="font-medium text-white">{leg.playerName} </span>
+                    ) : null}
+                    {leg.statType} {targetLabel(leg.line)}
+                    {leg.odds ? <span className="text-slate-500"> @ {leg.odds}</span> : null}
+                    {settled && leg.actualValue != null ? (
+                      <span className="text-slate-500">
+                        {" "}
+                        · got{" "}
+                        <span className="text-slate-300">{leg.actualValue}</span>
+                        {margin != null ? (
+                          <span
+                            className={
+                              margin >= 0 ? "text-accent-win" : "text-accent-loss"
+                            }
+                          >
+                            {" "}
+                            ({signed(margin)})
+                          </span>
+                        ) : null}
+                      </span>
+                    ) : null}
+                  </span>
+                </div>
                 <span
-                  className={
+                  className={`shrink-0 ${
                     leg.result === "hit"
                       ? "text-accent-win"
                       : leg.result === "miss"
                         ? "text-accent-loss"
                         : "text-slate-500"
-                  }
+                  }`}
                 >
                   {leg.result}
                 </span>
@@ -252,10 +272,21 @@ function BetSlip({ slip }: { slip: BetWithLegs }) {
                 result={leg.result}
                 actualValue={leg.actualValue}
               />
+              <EditLegMarket
+                legId={leg.id}
+                statType={leg.statType}
+                line={leg.line}
+                result={leg.result}
+              />
             </li>
           );
         })}
       </ul>
+      {slip.status === "pending" ? (
+        <div className="mt-3 border-t border-surface-border pt-3">
+          <DeleteBetButton betId={slip.id} />
+        </div>
+      ) : null}
       <div className="mt-3 border-t border-surface-border pt-3">
         <UploadResultButton betId={slip.id} />
         <p className="mt-2 text-xs text-slate-500">

@@ -1,25 +1,31 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import { bookmakerLines, games } from "@/db/schema";
+import { env } from "@/lib/env";
 import { getPlayerProps, marketKeyToStat } from "./oddsApi";
 
 // Fetch The Odds API player props for a game and store the bookmaker lines.
-// These lines are both the squad seed (the players worth predicting) and the
-// benchmark for the Edge Finder (our model vs the bookie line).
+// Optional — predictions and lineups no longer depend on this. When skipped, the
+// stat board and multis use model projections; log bets via screenshot upload.
 
 export interface PropsSyncResult {
   gameId: number;
   lines: number;
   players: number;
+  skipped?: boolean;
+  skipReason?: "no_key" | "no_event_id";
 }
 
-/** Sync player prop lines for one game. Requires game.oddsApiId. */
+/** Sync player prop lines for one game. Skips quietly when Odds API is not configured. */
 export async function syncPlayerProps(gameId: number): Promise<PropsSyncResult> {
   const game = (await db.select().from(games).where(eq(games.id, gameId)).limit(1))[0];
   if (!game) throw new Error(`game ${gameId} not found`);
+  if (!env.ODDS_API_KEY) {
+    return { gameId, lines: 0, players: 0, skipped: true, skipReason: "no_key" };
+  }
   if (!game.oddsApiId) {
-    return { gameId, lines: 0, players: 0 };
+    return { gameId, lines: 0, players: 0, skipped: true, skipReason: "no_event_id" };
   }
 
   const event = await getPlayerProps(game.oddsApiId);
@@ -67,4 +73,13 @@ export async function syncPlayerProps(gameId: number): Promise<PropsSyncResult> 
   }
 
   return { gameId, lines: rows.length, players: playerNames.size };
+}
+
+/** How many bookmaker prop lines are stored for a game (0 = none synced yet). */
+export async function countBookmakerLines(gameId: number): Promise<number> {
+  const rows = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(bookmakerLines)
+    .where(eq(bookmakerLines.gameId, gameId));
+  return rows[0]?.count ?? 0;
 }

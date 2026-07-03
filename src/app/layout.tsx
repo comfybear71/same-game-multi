@@ -7,7 +7,7 @@ import { Providers } from "./providers";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "AFL Multi Tracker",
+  title: "Matty's got big balls multi tracker",
   description: "AFL same-game multi prediction and bet tracking.",
 };
 

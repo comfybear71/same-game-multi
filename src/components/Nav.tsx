@@ -14,7 +14,7 @@ export function Nav({ email }: { email?: string | null }) {
       <nav className="mx-auto flex max-w-5xl items-center justify-between gap-2 px-4 py-3">
         <Link href="/" className="flex items-center gap-2 font-bold text-white">
           <span className="text-accent">●</span>
-          <span>AFL Multi Tracker</span>
+          <span>Matty&apos;s got big balls multi tracker</span>
         </Link>
         <div className="flex items-center gap-1">
           {/* Section links live in the bottom tab bar on mobile. */}

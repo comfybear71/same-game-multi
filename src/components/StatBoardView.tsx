@@ -7,7 +7,7 @@ import type { StatType } from "@/db/schema";
 import { teamColors } from "@/lib/afl/teamColors";
 import type { PlayerBetRecord } from "@/lib/data/bets";
 import type { PlayerStatRow, StatBoard } from "@/lib/data/statboard";
-import { floorStat, floorStatLabel, lineTarget, signed } from "@/lib/format";
+import { floorStat } from "@/lib/format";
 import type { InjuryStatus } from "@/lib/ingest/injuries";
 import { clearProbability } from "@/lib/predictions/probability";
 
@@ -28,58 +28,54 @@ const STAT_TABS: { key: StatType; label: string }[] = [
   { key: "goals", label: "Goals" },
 ];
 
-type Tier = "Safe" | "Balanced" | "Aggressive";
-
-// Per-leg confidence, using the SAME formula the multi builder sorts its
-// Cautious tier by (lib/predictions/suggest.ts confidenceOf): recent hit rate
-// blended with how far our prediction clears the line. So a "Safe" tag here is
-// exactly what the Cautious tier picks first.
-function confidenceTier(
-  edge: number | null,
-  hitRate: number | null,
-  line: number | null,
-): Tier | null {
-  if (edge == null || line == null) return null;
-  const hr = hitRate ?? 0.5;
-  const margin = Math.max(0, Math.min(1, edge / (0.15 * Math.max(line, 1))));
-  const score = Math.max(0, Math.min(1, 0.55 * hr + 0.45 * margin));
-  if (score >= 0.66) return "Safe";
-  if (score >= 0.45) return "Balanced";
-  return "Aggressive";
-}
-
-const TIER_STYLE: Record<Tier, string> = {
-  Safe: "bg-accent-win/20 text-accent-win",
-  Balanced: "bg-accent-pending/20 text-accent-pending",
-  Aggressive: "bg-accent-loss/20 text-accent-loss",
-};
-
-type SortKey = "edge" | "hitRate" | "prediction" | "seasonAvg" | "fantasy" | "name";
+type SortKey =
+  | "lastGame"
+  | "last5Avg"
+  | "seasonAvg"
+  | "fantasy"
+  | "prediction"
+  | "vsOpponent"
+  | "name";
 
 const SORT_OPTIONS: { key: SortKey; label: string }[] = [
-  { key: "edge", label: "Edge" },
-  { key: "hitRate", label: "Hit rate" },
-  { key: "prediction", label: "Projection" },
+  { key: "lastGame", label: "Last game" },
+  { key: "last5Avg", label: "Last 5 avg" },
   { key: "seasonAvg", label: "Season avg" },
   { key: "fantasy", label: "Fantasy" },
+  { key: "prediction", label: "Projection" },
+  { key: "vsOpponent", label: "vs Opponent" },
   { key: "name", label: "Name" },
 ];
 
-/** Sort rows by the chosen key — numeric keys descending, nulls last. */
+function last5Avg(form: number[]): number | null {
+  if (form.length === 0) return null;
+  const slice = form.slice(0, 5);
+  return slice.reduce((a, b) => a + b, 0) / slice.length;
+}
+
+/** Sort rows by AFL Tables stats — numeric keys descending, nulls last. */
 function sortRows(rows: PlayerStatRow[], key: SortKey): PlayerStatRow[] {
   if (key === "name") {
     return [...rows].sort((a, b) => a.name.localeCompare(b.name));
   }
-  const value = (r: PlayerStatRow): number | null =>
-    key === "edge"
-      ? r.edge
-      : key === "hitRate"
-        ? r.hitRate
-        : key === "prediction"
-          ? r.prediction
-          : key === "seasonAvg"
-            ? r.seasonAvg
-            : r.recentFantasyAvg;
+  const value = (r: PlayerStatRow): number | null => {
+    switch (key) {
+      case "lastGame":
+        return r.recentForm[0] ?? null;
+      case "last5Avg":
+        return last5Avg(r.recentForm);
+      case "seasonAvg":
+        return r.seasonAvg;
+      case "fantasy":
+        return r.recentFantasyAvg;
+      case "prediction":
+        return r.prediction;
+      case "vsOpponent":
+        return r.vsOpponentAvg;
+      default:
+        return null;
+    }
+  };
   return [...rows].sort((a, b) => {
     const av = value(a);
     const bv = value(b);
@@ -200,11 +196,8 @@ export function StatBoardView({
 }) {
   const [stat, setStat] = useState<StatType>("disposals");
   const [team, setTeam] = useState<string>("all");
-  const [sort, setSort] = useState<SortKey>("edge");
+  const [sort, setSort] = useState<SortKey>("fantasy");
 
-  // Show every player we have a prediction for. Players without a bookmaker
-  // line for this stat (edge == null) sort to the bottom under the default
-  // "Edge" sort, so lined picks still lead — but nobody is hidden.
   const all = board.byStat[stat].filter((r) => team === "all" || r.team === team);
   const rows = sortRows(all, sort);
 
@@ -305,15 +298,9 @@ function PlayerStatCard({
   ]
     .filter(Boolean)
     .join(" · ");
-  // Whole-number view: the count the player must reach, and our floored
-  // (downside-favouring) projection. The call + edge derive from these so
-  // everything on the card stays decimal-free and internally consistent.
-  const needed = row.line != null ? lineTarget(row.line) : null;
   const proj = row.prediction != null ? floorStat(row.prediction) : null;
-  const hasCall = proj != null && needed != null;
-  const over = hasCall ? proj >= needed : null;
-  const wholeEdge = hasCall ? proj - needed : null;
-  const tier = confidenceTier(row.edge, row.hitRate, row.line);
+  const lastGame = row.recentForm[0] ?? null;
+  const formAvg = last5Avg(row.recentForm);
   // Last 5, displayed oldest -> newest with the most recent highlighted.
   const last5 = row.recentForm.slice(0, 5).reverse();
 
@@ -352,7 +339,9 @@ function PlayerStatCard({
           </div>
           <div className="text-xs text-slate-400">
             {row.team}
-            {row.seasonAvg != null ? ` · Season avg ${floorStat(row.seasonAvg)}` : ""}
+            {lastGame != null ? ` · Last ${floorStat(lastGame)}` : ""}
+            {row.seasonAvg != null ? ` · Avg ${floorStat(row.seasonAvg)}` : ""}
+            {formAvg != null ? ` · L5 ${floorStat(formAvg)}` : ""}
             {row.recentFantasyAvg != null ? (
               <>
                 {" · "}
@@ -364,37 +353,15 @@ function PlayerStatCard({
           </div>
         </div>
         <div className="text-right">
-          {hasCall ? (
+          {proj != null ? (
             <>
-              <div
-                className={`text-sm font-bold ${
-                  over ? "text-accent-win" : "text-accent-loss"
-                }`}
-              >
-                {over ? "OVER" : "UNDER"} {proj}
-              </div>
-              <div className="text-xs text-slate-400">
-                Need {needed}+
-                {wholeEdge != null ? (
-                  <span className={over ? "text-accent-win" : "text-accent-loss"}>
-                    {" "}
-                    ({signed(wholeEdge)})
-                  </span>
-                ) : null}
-              </div>
-              {tier ? (
-                <div
-                  className={`mt-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-bold ${TIER_STYLE[tier]}`}
-                >
-                  {tier}
-                </div>
+              <div className="text-sm font-bold text-white">Proj {proj}</div>
+              {lastGame != null ? (
+                <div className="text-xs text-slate-400">Last {floorStat(lastGame)}</div>
               ) : null}
             </>
           ) : (
-            <div className="text-sm text-slate-300">
-              Pred {floorStatLabel(row.prediction)}
-              <div className="text-xs text-slate-500">no line</div>
-            </div>
+            <div className="text-sm text-slate-500">—</div>
           )}
         </div>
       </div>
@@ -508,9 +475,9 @@ function PlayerStatCard({
               </span>
             );
           })}
-          {row.hitRate != null ? (
+          {row.hitRate != null && row.line != null ? (
             <span className="ml-auto text-[11px] text-slate-400">
-              Hit{" "}
+              Over line{" "}
               <span className="font-semibold text-white">
                 {Math.round(row.hitRate * 100)}%
               </span>

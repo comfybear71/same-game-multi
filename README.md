@@ -13,6 +13,9 @@ status and what's next.
 
 ## Local development
 
+See **[docs/LOCAL-DEV.md](docs/LOCAL-DEV.md)** for the full feature-branch
+workflow, auth troubleshooting, and safe merge process to `master`.
+
 Run these one at a time.
 
 ```bash
@@ -20,16 +23,17 @@ npm install
 ```
 
 ```bash
-cp .env.example .env.local
+npm run setup:local
 ```
 
 Fill in `.env.local` (see **Environment variables** below). At minimum you need
-`DATABASE_URL` and `NEXTAUTH_SECRET` to boot.
+`DATABASE_URL` and `ALLOWED_EMAILS`. `setup:local` generates `NEXTAUTH_SECRET`
+and sets `NEXTAUTH_URL=http://localhost:3000`.
 
-Generate a NextAuth secret:
+Optional sanity check before starting:
 
 ```bash
-openssl rand -base64 32
+npm run check:env
 ```
 
 Apply the database schema to your Neon database:
@@ -121,7 +125,7 @@ All listed in `.env.example`. Never commit real values.
 | --- | --- | --- |
 | `DATABASE_URL` | yes | Neon pooled Postgres connection string. |
 | `NEXTAUTH_SECRET` | yes | NextAuth JWT signing secret (`openssl rand -base64 32`). |
-| `NEXTAUTH_URL` | prod | App base URL (e.g. `https://your-app.vercel.app`). |
+| `NEXTAUTH_URL` | local+prod | `http://localhost:3000` locally; production URL on Vercel. |
 | `ALLOWED_EMAILS` | yes | Comma-separated allowlist of sign-in emails. |
 | `ODDS_API_KEY` | for odds | The Odds API paid key (player props). Never hardcode. |
 | `BLOB_READ_WRITE_TOKEN` | for uploads | Vercel Blob token for screenshots. |
@@ -135,6 +139,9 @@ All listed in `.env.example`. Never commit real values.
 | Command | Description |
 | --- | --- |
 | `npm run dev` | Local dev server. |
+| `npm run dev:safe` | Check env, then start dev server. |
+| `npm run setup:local` | Bootstrap/repair `.env.local` from `.env.example`. |
+| `npm run check:env` | Validate required env vars for local auth + DB. |
 | `npm run build` | Production build. |
 | `npm run start` | Run the production build. |
 | `npm run typecheck` | `tsc --noEmit`. |

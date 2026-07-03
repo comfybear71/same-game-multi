@@ -21,7 +21,7 @@ export const authOptions: NextAuthOptions = {
   // evaluation during `next build` doesn't throw when the secret is absent.
   secret: process.env.NEXTAUTH_SECRET,
   session: { strategy: "jwt" },
-  pages: { signIn: "/login" },
+  pages: { signIn: "/login", error: "/login" },
   providers: [
     CredentialsProvider({
       name: "Email allowlist",
