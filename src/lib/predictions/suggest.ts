@@ -11,6 +11,7 @@ import {
 import { getPlayerBettingRecord, playerRecordKey } from "@/lib/data/bets";
 import { getPlayerNews, type InjuryNews } from "@/lib/ingest/injuries";
 import { clearProbability } from "./probability";
+import { modelPropLine } from "./modelLine";
 import { DEFAULT_LEGS, MAX_LEGS, MIN_LEGS } from "./suggestLimits";
 
 // Build a same-game-multi suggestion from our own data, sized to however many
@@ -43,6 +44,8 @@ export interface SuggestedLeg {
   confidence: number;
   history: { hits: number; bets: number } | null; // your own past bets on this player + stat
   news: InjuryNews | null; // matched injury/team news ("test"/"managed" survive, "out" is dropped)
+  /** Recent per-game counts for this stat (most recent first) — for live chance updates. */
+  recentForm: number[];
 }
 
 export interface Suggestion {
@@ -179,7 +182,9 @@ async function candidateLegs(
     // the stat board's "AI pick". Odds stay null; the picker shows "—" and
     // the punter sets their own target.
     const bookieLine = chooseRung([...(rungsByKey.get(key) ?? [])], p.value);
-    const line = bookieLine ?? Math.floor(p.value) - 0.5;
+    const modelLine = modelPropLine(p.statType, p.value);
+    const line = bookieLine ?? modelLine;
+    if (line == null) continue;
     const odds = bookieLine == null ? null : median(oddsByRung.get(`${key}:${line}`) ?? []);
     const form = formByKey.get(key) ?? [];
     const hitRate = form.length > 0 ? form.filter((v) => v > line).length / form.length : null;
@@ -208,9 +213,29 @@ async function candidateLegs(
       confidence: clamp(base * newsMultiplier(news), 0, 1),
       history,
       news,
+      recentForm: form,
     });
   }
   return legs;
+}
+
+/** Decimal odds implied by model confidence when no bookmaker price exists. */
+function oddsFromConfidence(confidence: number): number | null {
+  if (confidence <= 0) return null;
+  const p = clamp(confidence, 0.03, 0.92);
+  return Math.round((1 / p) * 100) / 100;
+}
+
+/** Attach model-estimated prices so lineup/AFL-Tables legs can form a multi. */
+function withEstimatedOdds(legs: SuggestedLeg[]): SuggestedLeg[] {
+  return legs.map((l) =>
+    l.odds != null ? l : { ...l, odds: oddsFromConfidence(l.confidence) },
+  );
+}
+
+/** Legs we can rank into a ticket (real bookie price or model estimate). */
+function bettableLegs(legs: SuggestedLeg[]): SuggestedLeg[] {
+  return withEstimatedOdds(legs).filter((l) => l.odds != null);
 }
 
 /**
@@ -251,65 +276,46 @@ function pickN(pool: SuggestedLeg[], n: number): SuggestedLeg[] {
 }
 
 /**
- * Spread a ticket across markets instead of taking a straight confidence
- * ranking. A pure ranking floods an "Any" ticket with whichever market scores
- * easiest (usually marks at the 2+ rung — near-100% hit rates and a tiny line
- * that saturates the edge margin), so a 10-leg "Any" came back 9 marks.
- *
- * Here we group legs by stat, rank each market by confidence nudged toward the
- * genuine best players (fantasy average is a good proxy for player quality),
- * then round-robin across markets — strongest market first — so the ticket
- * reads disposals/marks/tackles/goals rather than one stat repeated. Pass 1
- * keeps to distinct players for variety on small tickets; pass 2 then allows a
- * player's other markets to reach the requested count on bigger tickets.
+ * One leg per player — their strongest market — then top N by fantasy + confidence.
+ * Avoids flooding the ticket with weak marks/tackles "1+" legs on midfielders
+ * when their disposals projection is the real bet.
  */
-function pickSpread(pool: SuggestedLeg[], n: number): SuggestedLeg[] {
-  const maxFantasy = Math.max(0, ...pool.map((l) => l.fantasyAvg ?? 0));
-  // Confidence (0..1) leads; fantasy adds at most a 0.15 nudge so the best
-  // players surface within a market without overriding a clearly better bet.
+function pickBestPerPlayer(pool: SuggestedLeg[], n: number): SuggestedLeg[] {
+  const positive = pool.filter((l) => l.edge > 0);
+  const source = positive.length > 0 ? positive : pool;
+  const maxFantasy = Math.max(0, ...source.map((l) => l.fantasyAvg ?? 0));
   const score = (l: SuggestedLeg) =>
-    l.confidence + (maxFantasy > 0 ? 0.15 * ((l.fantasyAvg ?? 0) / maxFantasy) : 0);
+    l.confidence + (maxFantasy > 0 ? 0.2 * ((l.fantasyAvg ?? 0) / maxFantasy) : 0);
 
-  const byStat = new Map<StatType, SuggestedLeg[]>();
-  for (const l of pool) {
-    (byStat.get(l.statType) ?? byStat.set(l.statType, []).get(l.statType)!).push(l);
+  const bestByPlayer = new Map<number, SuggestedLeg>();
+  for (const l of source) {
+    const prev = bestByPlayer.get(l.playerId);
+    if (!prev || score(l) > score(prev)) bestByPlayer.set(l.playerId, l);
   }
-  for (const arr of byStat.values()) arr.sort((a, b) => score(b) - score(a));
 
-  // Lead with the market whose best available leg scores highest, so the first
-  // legs of a small ticket are the strongest picks, not whatever's first in a
-  // fixed order.
-  const statOrder = [...byStat.keys()].sort(
-    (a, b) => score(byStat.get(b)![0]) - score(byStat.get(a)![0]),
-  );
-
+  const ranked = [...bestByPlayer.values()].sort((a, b) => score(b) - score(a));
   const out: SuggestedLeg[] = [];
   const usedLegs = new Set<string>();
-  const usedPlayers = new Set<number>();
   const legKey = (l: SuggestedLeg) => `${l.playerId}:${l.statType}`;
 
-  const fill = (allowRepeatPlayer: boolean) => {
-    let progress = true;
-    while (out.length < n && progress) {
-      progress = false;
-      for (const stat of statOrder) {
-        if (out.length >= n) break;
-        const next = (byStat.get(stat) ?? []).find(
-          (l) =>
-            !usedLegs.has(legKey(l)) &&
-            (allowRepeatPlayer || !usedPlayers.has(l.playerId)),
-        );
-        if (!next) continue;
-        out.push(next);
-        usedLegs.add(legKey(next));
-        usedPlayers.add(next.playerId);
-        progress = true;
-      }
-    }
-  };
+  for (const l of ranked) {
+    if (out.length >= n) break;
+    out.push(l);
+    usedLegs.add(legKey(l));
+  }
 
-  fill(false); // distinct players, spread across markets
-  fill(true); // then a player's other markets to reach n on bigger tickets
+  // Bigger tickets: add a player's next-best market if we still need legs.
+  if (out.length < n) {
+    const rest = [...source]
+      .filter((l) => !usedLegs.has(legKey(l)))
+      .sort((a, b) => score(b) - score(a));
+    for (const l of rest) {
+      if (out.length >= n) break;
+      out.push(l);
+      usedLegs.add(legKey(l));
+    }
+  }
+
   return out;
 }
 
@@ -334,24 +340,25 @@ export async function buildSuggestions(
 ): Promise<Suggestion> {
   const n = clamp(Math.round(legCount), MIN_LEGS, MAX_LEGS);
   const historyByKey = userId != null ? (await getPlayerBettingRecord(userId)).byKey : {};
-  const legs = await candidateLegs(gameId, focus, historyByKey);
+  const legs = bettableLegs(await candidateLegs(gameId, focus, historyByKey));
 
-  // A leg is only bettable if we have a price for it.
-  const withOdds = legs.filter((l) => l.odds != null);
+  if (legs.length === 0) {
+    return finalize([]);
+  }
 
   // "Any" spreads the ticket across all four markets (round-robin, best players
   // first) instead of a straight confidence ranking that floods with whichever
   // market scores easiest — see pickSpread. A single-stat focus has only one
   // market, so it keeps the straight ranking: +edge legs first, then top up.
   if (focus === "any") {
-    return finalize(pickSpread(withOdds, n));
+    return finalize(pickBestPerPlayer(legs, n));
   }
 
   // Within a single market, prefer legs the model rates over the line (+edge),
   // best confidence first.
   const byConfidence = (ls: SuggestedLeg[]) =>
     [...ls].sort((a, b) => b.confidence - a.confidence);
-  const positive = byConfidence(withOdds.filter((l) => l.edge > 0));
+  const positive = byConfidence(legs.filter((l) => l.edge > 0));
 
   // Top up toward the requested leg count with the next-best legs when the
   // +edge pool is short: an efficient bookie market only leaves ~half the
@@ -361,7 +368,7 @@ export async function buildSuggestions(
   // these top-up legs carry a non-positive edge (shown per leg in the "why"
   // popup) rather than being dropped. Identical output to before whenever the
   // +edge pool already covers n.
-  const rest = byConfidence(withOdds.filter((l) => l.edge <= 0));
+  const rest = byConfidence(legs.filter((l) => l.edge <= 0));
   return finalize(pickN([...positive, ...rest], n));
 }
 
@@ -383,5 +390,5 @@ export async function listCandidateLegs(
 ): Promise<SuggestedLeg[]> {
   const historyByKey = userId != null ? (await getPlayerBettingRecord(userId)).byKey : {};
   const legs = await candidateLegs(gameId, "any", historyByKey);
-  return [...legs].sort((a, b) => b.confidence - a.confidence);
+  return withEstimatedOdds([...legs].sort((a, b) => b.confidence - a.confidence));
 }

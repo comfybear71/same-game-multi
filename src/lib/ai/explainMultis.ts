@@ -28,6 +28,9 @@ function summarise(s: Suggestion) {
 }
 
 export async function explainMultis(suggestion: Suggestion): Promise<Suggestion> {
+  if (suggestion.legs.length === 0) {
+    return suggestion;
+  }
   if (!env.ANTHROPIC_API_KEY) {
     return { ...suggestion, rationale: FALLBACK };
   }

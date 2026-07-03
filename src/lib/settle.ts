@@ -143,6 +143,17 @@ export async function settleLegManually(
   await rollUpSlips([betId]);
 }
 
+/** Live in-game count — keeps result pending until AFL Tables auto-settle. */
+export async function updateLegLiveCount(
+  legId: number,
+  actualValue: number | null,
+): Promise<void> {
+  await db
+    .update(betLegs)
+    .set({ actualValue })
+    .where(eq(betLegs.id, legId));
+}
+
 /**
  * Settle a slip directly from a bookmaker "Resulted" screenshot: write each
  * matched leg's result + actual value, stamp the result screenshot on the bet,
@@ -213,6 +224,112 @@ export async function backfillSettledActuals(): Promise<number> {
     filled++;
   }
   return filled;
+}
+
+/** Settle all pending legs for one game that have AFL Tables actuals. */
+export async function settlePendingBetsForGame(gameId: number): Promise<SettleResult> {
+  const pendingLegs = await db
+    .select()
+    .from(betLegs)
+    .where(and(eq(betLegs.result, "pending"), eq(betLegs.gameId, gameId)));
+
+  let legsSettled = 0;
+  const touchedBetIds = new Set<number>();
+
+  for (const leg of pendingLegs) {
+    if (!leg.playerId) continue;
+
+    const game = (
+      await db.select().from(games).where(eq(games.id, leg.gameId!)).limit(1)
+    )[0];
+    if (!game || game.status !== "complete") continue;
+
+    const stat = (
+      await db
+        .select()
+        .from(playerGameStats)
+        .where(
+          and(
+            eq(playerGameStats.gameId, leg.gameId!),
+            eq(playerGameStats.playerId, leg.playerId),
+            eq(playerGameStats.settled, true),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!stat) continue;
+
+    const actualValue = (stat as unknown as Record<string, number | null>)[
+      leg.statType
+    ];
+    if (actualValue == null) continue;
+
+    const result = actualValue > leg.line ? "hit" : "miss";
+    await db
+      .update(betLegs)
+      .set({ result, actualValue })
+      .where(eq(betLegs.id, leg.id));
+    legsSettled++;
+    touchedBetIds.add(leg.betId);
+  }
+
+  const slipsSettled = await rollUpSlips([...touchedBetIds]);
+  return { legsSettled, slipsSettled };
+}
+
+/** Finalise pending legs from in-game tap counts (actualValue already stored). */
+export async function settleLegsFromLiveCounts(gameId: number): Promise<SettleResult> {
+  const pendingLegs = await db
+    .select()
+    .from(betLegs)
+    .where(and(eq(betLegs.result, "pending"), eq(betLegs.gameId, gameId)));
+
+  let legsSettled = 0;
+  const touchedBetIds = new Set<number>();
+
+  for (const leg of pendingLegs) {
+    if (leg.actualValue == null) continue;
+    const result = leg.actualValue > leg.line ? "hit" : "miss";
+    await db.update(betLegs).set({ result }).where(eq(betLegs.id, leg.id));
+    legsSettled++;
+    touchedBetIds.add(leg.betId);
+  }
+
+  const slipsSettled = await rollUpSlips([...touchedBetIds]);
+  return { legsSettled, slipsSettled };
+}
+
+export interface GameOverSettlement {
+  gameStatus: string | null;
+  statsRecorded: number;
+  fromStats: SettleResult;
+  fromLive: SettleResult;
+}
+
+/** Post-game: refresh Squiggle, scrape AFL Tables for this game, settle legs. */
+export async function runGameOverSettlement(gameId: number): Promise<GameOverSettlement> {
+  const game = (
+    await db.select().from(games).where(eq(games.id, gameId)).limit(1)
+  )[0];
+  if (!game) throw new Error("game not found");
+
+  const season = game.season ?? currentSeason();
+  await syncFixtures(season);
+
+  const statsResult = await settleGamePlayerStats(gameId);
+  const fromStats = await settlePendingBetsForGame(gameId);
+  const fromLive = await settleLegsFromLiveCounts(gameId);
+
+  const updated = (
+    await db.select({ status: games.status }).from(games).where(eq(games.id, gameId)).limit(1)
+  )[0];
+
+  return {
+    gameStatus: updated?.status ?? null,
+    statsRecorded: statsResult.recorded,
+    fromStats,
+    fromLive,
+  };
 }
 
 export interface SettlementPipelineResult {

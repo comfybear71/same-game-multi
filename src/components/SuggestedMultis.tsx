@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 
 import type { StatType } from "@/db/schema";
 import { teamColors } from "@/lib/afl/teamColors";
 import { lineTarget, signed } from "@/lib/format";
-import { estimateOddsAtTarget } from "@/lib/predictions/altLine";
+import { minLineTarget } from "@/lib/predictions/modelLine";
+import { clearProbability } from "@/lib/predictions/probability";
 import type { Suggestion, SuggestedLeg } from "@/lib/predictions/suggest";
 import { DEFAULT_LEGS, MAX_LEGS, MIN_LEGS } from "@/lib/predictions/suggestLimits";
 
@@ -21,19 +23,29 @@ const FOCUSES: { key: StatType | "any"; label: string }[] = [
 const STRATEGY =
   "Ranked purely by our model's confidence — the steadiest legs first. Adding legs grows the payout, but each one multiplies into the combined chance, so that drops as the ticket grows.";
 
-export function SuggestedMultis({ gameId }: { gameId: number }) {
+export function SuggestedMultis({
+  gameId,
+  round = null,
+}: {
+  gameId: number;
+  round?: number | null;
+}) {
   const [focus, setFocus] = useState<StatType | "any">("any");
   const [legCount, setLegCount] = useState(DEFAULT_LEGS);
   const [data, setData] = useState<Suggestion | null>(null);
   const [info, setInfo] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [refreshToken, setRefreshToken] = useState(0);
+  const [editableLegs, setEditableLegs] = useState<EditableLeg[]>([]);
+  const lastAppliedRef = useRef(-1);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    fetch(`/api/games/${gameId}/suggest?focus=${focus}&legs=${legCount}`)
+    const refresh = refreshToken > 0 ? "&refresh=1" : "";
+    fetch(`/api/games/${gameId}/suggest?focus=${focus}&legs=${legCount}${refresh}`)
       .then((r) => r.json())
       .then((json) => {
         if (cancelled) return;
@@ -45,17 +57,29 @@ export function SuggestedMultis({ gameId }: { gameId: number }) {
     return () => {
       cancelled = true;
     };
-  }, [gameId, focus, legCount]);
+  }, [gameId, focus, legCount, refreshToken]);
+
+  // Only replace the punter's ticket when picks are first loaded or after ↻ New picks.
+  // Switching focus / leg count refetches suggestions for the info panel but keeps edits.
+  useEffect(() => {
+    if (!data) return;
+    if (lastAppliedRef.current === refreshToken) return;
+    setEditableLegs(toEditable(data.legs));
+    lastAppliedRef.current = refreshToken;
+  }, [data, refreshToken]);
 
   return (
     <section className="card space-y-3">
       <div>
         <h2 className="text-lg font-semibold text-white">Suggested multi</h2>
         <p className="text-sm text-slate-400">
-          AI-picked from our predictions vs the bookie lines, ranked by confidence.
-          Choose how many legs — more legs means a bigger payout but a lower
-          combined chance. Place the bet in your bookie app, then log it from the
-          Bets tab.
+          AI-picked from AFL Tables form and our model, ranked by confidence and
+          fantasy. Choose how many legs — more legs means a bigger payout but a
+          lower combined chance. Switch tabs (Any → Disposals → Goals, etc.) and use{" "}
+          <span className="text-slate-300">+ Add player</span> to build the full
+          ticket before you tap{" "}
+          <span className="text-slate-300">Log this multi</span>. You can log
+          again for a second slip on the same game.
         </p>
       </div>
 
@@ -99,12 +123,20 @@ export function SuggestedMultis({ gameId }: { gameId: number }) {
           </button>
         </div>
         <span className="text-[11px] text-slate-500">up to {MAX_LEGS} on one ticket</span>
+        <button
+          type="button"
+          onClick={() => setRefreshToken((n) => n + 1)}
+          disabled={loading}
+          className="whitespace-nowrap rounded-full border border-surface-border px-3 py-1 text-xs font-medium text-slate-300 hover:border-accent hover:text-accent disabled:opacity-40"
+        >
+          {loading ? "Loading…" : "↻ New picks"}
+        </button>
         {data && data.legs.length > 0 ? (
           <button
             type="button"
             aria-label="Why these picks"
             onClick={() => setInfo(true)}
-            className="ml-auto flex h-5 w-5 items-center justify-center rounded-full border border-surface-border bg-surface text-[11px] font-bold leading-none text-slate-400 hover:border-accent hover:text-accent"
+            className="flex h-5 w-5 items-center justify-center rounded-full border border-surface-border bg-surface text-[11px] font-bold leading-none text-slate-400 hover:border-accent hover:text-accent"
           >
             i
           </button>
@@ -116,10 +148,13 @@ export function SuggestedMultis({ gameId }: { gameId: number }) {
 
       {data ? (
         <SuggestionCard
-          key={`${focus}-${legCount}`}
           s={data}
+          legs={editableLegs}
+          setLegs={setEditableLegs}
           gameId={gameId}
+          round={round}
           focus={focus}
+          onLogged={() => setRefreshToken((t) => t + 1)}
         />
       ) : null}
 
@@ -262,28 +297,32 @@ function LegReasoning({ l }: { l: SuggestedLeg }) {
           <li className="text-accent-pending">News: {newsNote}</li>
         ) : null}
         <li>
-          Priced{" "}
-          <span className="font-semibold text-slate-200">
-            {l.odds != null ? `$${l.odds.toFixed(2)}` : "—"}
-          </span>
+          Priced in your bookie app — confirm the line before you bet.
         </li>
       </ul>
     </div>
   );
 }
 
-// A working copy of a suggested leg: `target` is the whole number the punter is
-// currently chasing (defaults to the bookie line, editable via the steppers),
-// and `estOdds` is the price re-estimated for that target.
-type EditableLeg = SuggestedLeg & { target: number; estOdds: number | null };
+// Editable leg: `target` is the whole number the punter is chasing.
+type EditableLeg = SuggestedLeg & { target: number };
 
 function toEditable(legs: SuggestedLeg[]): EditableLeg[] {
-  return legs.map((l) => ({ ...l, target: lineTarget(l.line), estOdds: l.odds }));
+  return legs.map((l) => ({ ...l, target: lineTarget(l.line) }));
 }
 
-function multiOdds(legs: EditableLeg[]): number | null {
+function legConfidence(l: EditableLeg): number {
+  const p = clearProbability({
+    prediction: l.prediction,
+    line: l.target - 0.5,
+    form: l.recentForm ?? [],
+  });
+  return Math.max(0, Math.min(1, p));
+}
+
+function combinedChance(legs: EditableLeg[]): number | null {
   if (legs.length === 0) return null;
-  return Math.round(legs.reduce((p, l) => p * (l.estOdds ?? 1), 1) * 100) / 100;
+  return legs.reduce((acc, l) => acc * legConfidence(l), 1);
 }
 
 function legKey(playerId: number, statType: string): string {
@@ -292,25 +331,32 @@ function legKey(playerId: number, statType: string): string {
 
 function SuggestionCard({
   s,
+  legs,
+  setLegs,
   gameId,
+  round,
   focus,
+  onLogged,
 }: {
   s: Suggestion;
+  legs: EditableLeg[];
+  setLegs: React.Dispatch<React.SetStateAction<EditableLeg[]>>;
   gameId: number;
+  round: number | null;
   focus: StatType | "any";
+  onLogged: () => void;
 }) {
-  const [legs, setLegs] = useState<EditableLeg[]>(() => toEditable(s.legs));
+  const router = useRouter();
+  const [logging, setLogging] = useState(false);
+  const [logError, setLogError] = useState<string | null>(null);
+  const [logSuccess, setLogSuccess] = useState<string | null>(null);
+  const [totalOdds, setTotalOdds] = useState("");
+  const [totalStake, setTotalStake] = useState("10");
+  const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
 
-  // Resync when a new suggestion arrives — e.g. the leg-count fetch resolves
-  // after the card already mounted, so s.legs grows from the stale set the
-  // card first seeded with. Without this the list stays frozen at whatever
-  // was loaded at mount (the bug where asking for 10 legs showed 4).
-  useEffect(() => {
-    setLegs(toEditable(s.legs));
-  }, [s.legs]);
-
-  const estOdds = multiOdds(legs);
   const existingKeys = new Set(legs.map((l) => legKey(l.playerId, l.statType)));
+  const ticketChance = combinedChance(legs);
 
   function remove(playerId: number, statType: string) {
     setLegs((prev) => prev.filter((l) => !(l.playerId === playerId && l.statType === statType)));
@@ -320,15 +366,73 @@ function SuggestionCard({
     setLegs((prev) => [...prev, ...toEditable([candidate])]);
   }
 
-  // Nudge a leg's target up/down a whole step and re-estimate its odds.
-  function changeTarget(playerId: number, statType: string, delta: number) {
+  function changeTarget(playerId: number, statType: StatType, delta: number) {
+    const floor = minLineTarget(statType);
     setLegs((prev) =>
       prev.map((l) => {
         if (l.playerId !== playerId || l.statType !== statType) return l;
-        const target = Math.max(1, l.target + delta);
-        return { ...l, target, estOdds: estimateOddsAtTarget(l.line, l.odds, target) };
+        const target = Math.max(floor, l.target + delta);
+        return { ...l, target };
       }),
     );
+  }
+
+  async function onSlipFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    setLogError(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/bets/upload", { method: "POST", body: fd });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "upload failed");
+      setScreenshotUrl(json.url);
+    } catch (err) {
+      setLogError((err as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function logMulti() {
+    if (legs.length === 0) return;
+    setLogging(true);
+    setLogError(null);
+    setLogSuccess(null);
+    try {
+      const res = await fetch("/api/bets", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          gameId,
+          round: round ?? undefined,
+          totalOdds: totalOdds ? Number(totalOdds) : undefined,
+          totalStake: totalStake ? Number(totalStake) : undefined,
+          screenshotUrl: screenshotUrl ?? undefined,
+          status: "pending",
+          legs: legs.map((l) => ({
+            playerName: l.playerName,
+            statType: l.statType,
+            line: l.target - 0.5,
+          })),
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) throw new Error(json.error || "save failed");
+      setTotalOdds("");
+      setScreenshotUrl(null);
+      setLogSuccess(
+        `Saved ${legs.length} legs. Build another multi here or open Bets to review.`,
+      );
+      onLogged();
+      router.refresh();
+    } catch (err) {
+      setLogError((err as Error).message);
+    } finally {
+      setLogging(false);
+    }
   }
 
   return (
@@ -338,7 +442,7 @@ function SuggestionCard({
       {legs.length === 0 ? (
         <p className="text-sm text-slate-400">
           {s.legs.length === 0
-            ? "Not enough lines for this many legs yet — add players below."
+            ? "Run Generate predictions first (needs an uploaded lineup). Legs are built from AFL Tables form and our model — no bookmaker API required."
             : "All legs removed — add players below or pick at least one."}
         </p>
       ) : (
@@ -365,7 +469,7 @@ function SuggestionCard({
                         type="button"
                         className="flex h-5 w-5 items-center justify-center rounded border border-surface-border text-slate-300 disabled:opacity-40"
                         onClick={() => changeTarget(l.playerId, l.statType, -1)}
-                        disabled={l.target <= 1}
+                        disabled={l.target <= minLineTarget(l.statType)}
                         aria-label={`Lower ${l.playerName} ${l.statType} target`}
                       >
                         −
@@ -394,6 +498,14 @@ function SuggestionCard({
                         · you {l.history.hits}/{l.history.bets}
                       </span>
                     ) : null}
+                    <span className="text-slate-500">
+                      · {Math.round(legConfidence(l) * 100)}% model
+                    </span>
+                    {l.fantasyAvg != null ? (
+                      <span className="text-slate-500">
+                        · fantasy {Math.round(l.fantasyAvg)}
+                      </span>
+                    ) : null}
                     {l.news && (l.news.status === "test" || l.news.status === "managed") ? (
                       <span className="font-semibold text-accent-pending">
                         · {l.news.status}
@@ -401,9 +513,6 @@ function SuggestionCard({
                     ) : null}
                   </div>
                 </div>
-                <span className="text-sm text-slate-300">
-                  {l.estOdds != null ? l.estOdds.toFixed(2) : "—"}
-                </span>
                 <button
                   className="text-slate-500 hover:text-accent-loss"
                   onClick={() => remove(l.playerId, l.statType)}
@@ -424,20 +533,83 @@ function SuggestionCard({
         onAdd={addLeg}
       />
 
-      <div className="flex items-end justify-between gap-4 border-t border-surface-border pt-2">
-        <div>
-          <div className="text-xs text-slate-400">Estimated odds</div>
-          <div className="text-lg font-bold text-white">
-            {estOdds != null ? `$${estOdds.toFixed(2)}` : "—"}
+      <div className="flex flex-wrap items-end justify-between gap-4 border-t border-surface-border pt-3">
+        <div className="space-y-2">
+          <div className="flex flex-wrap gap-3">
+            <label className="block text-sm">
+              <span className="text-slate-400">Total odds</span>
+              <input
+                className="input mt-1 w-24"
+                inputMode="decimal"
+                placeholder="301"
+                value={totalOdds}
+                onChange={(e) => setTotalOdds(e.target.value)}
+              />
+            </label>
+            <label className="block text-sm">
+              <span className="text-slate-400">Stake $</span>
+              <input
+                className="input mt-1 w-20"
+                inputMode="decimal"
+                value={totalStake}
+                onChange={(e) => setTotalStake(e.target.value)}
+              />
+            </label>
           </div>
-          <div className="text-[11px] text-slate-500">
-            estimate — confirm real price in the bookie app
+          <div className="space-y-2">
+            <label className="block text-sm">
+              <span className="text-slate-400">Slip screenshot (optional)</span>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={onSlipFile}
+                className="mt-1 block w-full max-w-sm text-xs text-slate-300 file:mr-2 file:rounded file:border-0 file:bg-surface file:px-2 file:py-1 file:text-xs file:font-medium file:text-slate-200"
+              />
+            </label>
+            {uploading ? <p className="text-xs text-slate-400">Uploading slip…</p> : null}
+            {screenshotUrl ? (
+              <div className="flex items-start gap-2">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={screenshotUrl}
+                  alt="Bet slip"
+                  className="max-h-24 rounded border border-surface-border"
+                />
+                <button
+                  type="button"
+                  className="text-xs text-slate-500 hover:text-accent-loss"
+                  onClick={() => setScreenshotUrl(null)}
+                >
+                  Remove
+                </button>
+              </div>
+            ) : null}
           </div>
+          <button
+            type="button"
+            className="btn"
+            onClick={logMulti}
+            disabled={logging || uploading || legs.length === 0}
+          >
+            {logging ? "Logging…" : `Log this multi (${legs.length} legs)`}
+          </button>
+          {logError ? <p className="text-sm text-accent-loss">{logError}</p> : null}
+          {logSuccess ? (
+            <p className="text-sm text-accent-win">{logSuccess}</p>
+          ) : null}
+          <p className="max-w-sm text-[11px] text-slate-500">
+            Only log once the ticket matches Sportsbet — you can add legs from
+            each stat tab first. Attach the slip screenshot for your records.
+          </p>
         </div>
         <div className="text-right">
           <div className="text-xs text-slate-400">Modelled chance</div>
           <div className="text-lg font-bold text-white">
-            {s.combinedChance != null ? `${Math.round(s.combinedChance * 100)}%` : "—"}
+            {ticketChance != null ? `${Math.round(ticketChance * 100)}%` : "—"}
+          </div>
+          <div className="max-w-xs text-[11px] text-slate-500">
+            All legs clear — fewer legs or lower targets raises this; more legs or
+            higher targets lowers it.
           </div>
         </div>
       </div>
@@ -571,9 +743,11 @@ function AddPlayerPanel({
                         avg {c.seasonAvg.toFixed(1)}
                       </span>
                     ) : null}
-                    <span className="text-xs text-slate-300">
-                      {c.odds != null ? `$${c.odds.toFixed(2)}` : "—"}
-                    </span>
+                    {c.fantasyAvg != null ? (
+                      <span className="text-[11px] text-slate-500">
+                        fantasy {Math.round(c.fantasyAvg)}
+                      </span>
+                    ) : null}
                     <span className="font-bold text-accent">+</span>
                   </button>
                 </li>

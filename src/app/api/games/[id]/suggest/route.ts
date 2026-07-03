@@ -33,18 +33,19 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     : DEFAULT_LEGS;
 
   const userId = await userIdForEmail(email);
+  const refresh = url.searchParams.get("refresh") === "1";
 
   try {
-    // Cache the (deterministic picks + Claude rationale) so repeated button
-    // presses don't re-bill Claude. Refreshes when predictions/odds change.
-    // The version segment lets a logic change invalidate stale cached results.
-    // Keyed per-user since picks are nudged by that user's own bet history.
-    const suggestion = await cached(
-      `suggest:v4:${gameId}:${focus}:${legCount}:${userId ?? "anon"}`,
-      20 * 60,
-      async () =>
-        explainMultis(await buildSuggestions(gameId, focus, legCount, userId)),
-    );
+    const build = async () =>
+      explainMultis(await buildSuggestions(gameId, focus, legCount, userId));
+
+    const suggestion = refresh
+      ? await build()
+      : await cached(
+          `suggest:v6:${gameId}:${focus}:${legCount}:${userId ?? "anon"}`,
+          20 * 60,
+          build,
+        );
     return NextResponse.json({ ok: true, focus, legCount, suggestion });
   } catch (err) {
     return NextResponse.json(

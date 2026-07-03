@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 
 import { auth } from "@/lib/auth";
+import { getLineupNames } from "@/lib/ingest/lineup";
 import { syncPlayerProps } from "@/lib/ingest/props";
 import { generatePredictions } from "@/lib/predictions/generate";
 
-// Manual: fetch player props for a game (The Odds API) and generate Models
-// A/B/C predictions for each propped player. Requires a signed-in user. Kept
-// out of the daily cron so paid prop calls stay on-demand.
+// Generate Models A/B/C from the uploaded lineup (AFL Tables stats). Optionally
+// refreshes bookmaker prop lines first when ODDS_API_KEY is configured.
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
@@ -22,6 +22,14 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
   try {
     const props = await syncPlayerProps(gameId);
     const gen = await generatePredictions(gameId);
+    if (gen.playersProcessed === 0) {
+      const lineup = await getLineupNames(gameId);
+      const hint =
+        lineup.length === 0
+          ? "Upload a lineup on the fixtures page first, then try again."
+          : "Couldn't resolve players from AFL Tables — check names in the lineup.";
+      return NextResponse.json({ ok: false, error: hint }, { status: 400 });
+    }
     return NextResponse.json({ ok: true, props, gen });
   } catch (err) {
     return NextResponse.json(

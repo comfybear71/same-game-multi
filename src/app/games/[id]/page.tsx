@@ -2,6 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { GeneratePredictionsButton } from "@/components/GeneratePredictionsButton";
+import { GameLineupPanel } from "@/components/RoundRosterPanel";
+import { LiveBetTracker } from "@/components/LiveBetTracker";
 import { LiveScoreboard } from "@/components/LiveScoreboard";
 import { StatBoardView } from "@/components/StatBoardView";
 import { SuggestedMultis } from "@/components/SuggestedMultis";
@@ -11,15 +13,16 @@ import { auth } from "@/lib/auth";
 import {
   getPlayerBettingRecord,
   getUserBetTracker,
+  indexPlayerHistoryByName,
   userIdForEmail,
   type BetTrackerLeg,
   type PlayerBetRecord,
+  type PlayerHistorySummary,
 } from "@/lib/data/bets";
 import { canonicalTeam } from "@/lib/afl/teams";
-import { teamColors } from "@/lib/afl/teamColors";
-import { floorStat, targetLabel } from "@/lib/format";
 import { getGameById, getRecentTeamForm, type FormResult } from "@/lib/data/games";
 import { getStatBoard, type StatBoard } from "@/lib/data/statboard";
+import { getGameLineupRoster, type RoundLineupPlayer } from "@/lib/data/roundRoster";
 import { getTeamRankings } from "@/lib/data/teamStats";
 import { STAT_TYPES } from "@/lib/predictions/features";
 import {
@@ -37,9 +40,21 @@ export default async function GamePage({ params }: { params: { id: string } }) {
 
   let game = null;
   let board: StatBoard | null = null;
+  let lineupPlayers: RoundLineupPlayer[] = [];
+  let lineupPhase: RoundLineupPlayer["phase"] = "upcoming";
   try {
     game = await getGameById(id);
-    if (game) board = await getStatBoard(id, game.home, game.away);
+    if (game) {
+      const [boardResult, lineupResult] = await Promise.all([
+        getStatBoard(id, game.home, game.away),
+        getGameLineupRoster(id),
+      ]);
+      board = boardResult;
+      lineupPlayers = lineupResult.players;
+      if (lineupResult.players[0]) lineupPhase = lineupResult.players[0].phase;
+      else if (game.status === "complete") lineupPhase = "played";
+      else if (game.commenceTime <= new Date()) lineupPhase = "live";
+    }
   } catch {
     game = game ?? null;
   }
@@ -50,6 +65,7 @@ export default async function GamePage({ params }: { params: { id: string } }) {
   // hint on each card).
   let myLegs: BetTrackerLeg[] = [];
   let playerRecord: Record<string, PlayerBetRecord> = {};
+  let playerHistory: Record<string, PlayerHistorySummary> = {};
   try {
     const session = await auth();
     const email = session?.user?.email;
@@ -57,7 +73,9 @@ export default async function GamePage({ params }: { params: { id: string } }) {
       const userId = await userIdForEmail(email);
       if (userId) {
         myLegs = await getUserBetTracker(userId, game.id, game.round);
-        playerRecord = (await getPlayerBettingRecord(userId)).byKey;
+        const recordIndex = await getPlayerBettingRecord(userId);
+        playerRecord = recordIndex.byKey;
+        playerHistory = indexPlayerHistoryByName(recordIndex.list);
       }
     }
   } catch {
@@ -137,97 +155,66 @@ export default async function GamePage({ params }: { params: { id: string } }) {
 
       <LiveScoreboard gameId={game.id} home={game.home} away={game.away} />
 
-      {myLegs.length > 0 ? <MyLegsPanel legs={myLegs} /> : null}
+      <GameLineupPanel
+        gameId={game.id}
+        home={game.home}
+        away={game.away}
+        phase={lineupPhase}
+        players={lineupPlayers}
+        round={game.round}
+        playerHistory={playerHistory}
+      />
+
+      {myLegs.length > 0 ? (
+        <LiveBetTracker legs={myLegs} gameId={game.id} />
+      ) : null}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-slate-400">
-          Recent form, season average and our prediction vs the bookie line.
+          AFL Tables form — season average, last game, fantasy and projections.
         </p>
         <GeneratePredictionsButton gameId={game.id} />
       </div>
 
       {hasData && board ? (
         <>
-          <SuggestedMultis gameId={game.id} />
+          <SuggestedMultis gameId={game.id} round={game.round} />
           <StatBoardView board={board} record={playerRecord} />
         </>
       ) : (
         <div className="card text-sm text-slate-400">
           {upcoming ? (
             <>
-              <p className="text-slate-300">No player lines yet for this game.</p>
-              <p className="mt-1">
-                Bookmakers usually post player props about a day or two before the
-                game. Check back closer to kickoff, then tap{" "}
-                <span className="font-medium text-slate-200">
-                  &ldquo;Fetch props &amp; predict&rdquo;
-                </span>
-                .
-              </p>
+              <p className="text-slate-300">No predictions yet for this game.</p>
+              <ol className="mt-2 list-inside list-decimal space-y-1">
+                {lineupPlayers.length === 0 ? (
+                  <li>
+                    Upload the lineup on the{" "}
+                    <Link href="/" className="text-accent hover:underline">
+                      fixtures
+                    </Link>{" "}
+                    page (AFL team sheet screenshot).
+                  </li>
+                ) : (
+                  <li>Lineup uploaded ({lineupPlayers.length} players).</li>
+                )}
+                <li>
+                  Tap{" "}
+                  <span className="font-medium text-slate-200">
+                    &ldquo;Generate predictions&rdquo;
+                  </span>{" "}
+                  above — pulls stats from AFL Tables for everyone in the lineup.
+                </li>
+              </ol>
             </>
           ) : (
             <p>
-              No predictions were generated for this game (player props weren&apos;t
-              available).
+              No predictions were generated for this game. Upload a lineup and run
+              Generate predictions before kickoff.
             </p>
           )}
         </div>
       )}
     </div>
-  );
-}
-
-function MyLegsPanel({ legs }: { legs: BetTrackerLeg[] }) {
-  const resultClass: Record<string, string> = {
-    hit: "text-accent-win",
-    miss: "text-accent-loss",
-    pending: "text-slate-400",
-    void: "text-slate-500",
-  };
-  const resultLabel: Record<string, string> = {
-    hit: "✓ hit",
-    miss: "✗ miss",
-    pending: "live",
-    void: "void",
-  };
-  return (
-    <section className="card border-accent/40">
-      <h2 className="text-sm font-semibold uppercase tracking-wide text-accent">
-        Your bets in this game
-      </h2>
-      <ul className="mt-3 space-y-2">
-        {legs.map((leg, i) => {
-          const c = teamColors(leg.team ?? "");
-          return (
-            <li key={i} className="flex items-center gap-3">
-              <span
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-xs font-bold"
-                style={{ background: c.bg, color: c.fg }}
-              >
-                {leg.jumper ?? "–"}
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium text-white">
-                  {leg.playerName ?? "Player"}
-                </div>
-                <div className="text-xs text-slate-400">
-                  <span className="capitalize">{leg.statType}</span> {targetLabel(leg.line)}
-                  {leg.prediction != null
-                    ? ` · we predict ${floorStat(leg.prediction)}`
-                    : ""}
-                </div>
-              </div>
-              <span className={`text-sm font-semibold ${resultClass[leg.result] ?? "text-slate-400"}`}>
-                {resultLabel[leg.result] ?? leg.result}
-              </span>
-            </li>
-          );
-        })}
-      </ul>
-      <p className="mt-3 text-xs text-slate-500">
-        Live running counts aren&apos;t available, but each leg ticks to ✓ or ✗
-        automatically once the game&apos;s player stats are published.
-      </p>
-    </section>
   );
 }

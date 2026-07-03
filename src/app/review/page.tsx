@@ -1,14 +1,25 @@
+import { MultiStatsPanel } from "@/components/MultiStatsPanel";
+import { PlayerRecordPanel } from "@/components/PlayerRecordPanel";
+import { RoundRosterPanel } from "@/components/RoundRosterPanel";
 import { auth } from "@/lib/auth";
 import { getLeaderboard, type Leaderboard } from "@/lib/data/accuracy";
 import {
+  analyseMultis,
   getBetsForUser,
   getPlayerBettingRecord,
+  indexPlayerHistoryByName,
   summarise,
   userIdForEmail,
+  type MultiAnalytics,
   type PlayerBetRecord,
+  type PlayerHistorySummary,
 } from "@/lib/data/bets";
 import { currentSeason } from "@/lib/cron";
-import { floorStat, targetLabel } from "@/lib/format";
+import {
+  getRoundRoster,
+  inferCurrentRound,
+  type RoundRoster,
+} from "@/lib/data/roundRoster";
 
 export const dynamic = "force-dynamic";
 
@@ -20,26 +31,42 @@ export default async function ReviewPage() {
   let roi: string = "—";
   let strike: string = "—";
   let playerRecord: PlayerBetRecord[] = [];
+  let playerHistory: Record<string, PlayerHistorySummary> = {};
+  let multiStats: MultiAnalytics = {
+    totalMultis: 0,
+    pending: 0,
+    won: 0,
+    lost: 0,
+    totalLegs: 0,
+    avgLegs: 0,
+    byLegCount: [],
+  };
   let dbError: string | null = null;
+  let roundRoster: RoundRoster | null = null;
 
   try {
     board = await getLeaderboard(season);
+    const currentRound = await inferCurrentRound(season);
+    if (currentRound != null) {
+      roundRoster = await getRoundRoster(season, currentRound);
+    }
     const email = session?.user?.email;
     if (email) {
       const userId = await userIdForEmail(email);
       if (userId) {
-        const summary = summarise(await getBetsForUser(userId));
+        const slips = await getBetsForUser(userId);
+        const summary = summarise(slips);
+        multiStats = analyseMultis(slips);
         roi = summary.roi == null ? "—" : `${(summary.roi * 100).toFixed(0)}%`;
         const settled = summary.won + summary.lost;
         strike = settled === 0 ? "—" : `${Math.round((summary.won / settled) * 100)}%`;
         playerRecord = (await getPlayerBettingRecord(userId)).list;
+        playerHistory = indexPlayerHistoryByName(playerRecord);
       }
     }
   } catch (err) {
     dbError = (err as Error).message;
   }
-
-  const hasData = board?.overall.some((o) => o.samples > 0);
 
   return (
     <div className="space-y-6">
@@ -50,8 +77,9 @@ export default async function ReviewPage() {
         </p>
       </header>
 
-      <section className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+      <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label="Best model" value={board?.bestModel ? `Model ${board.bestModel}` : "—"} />
+        <Stat label="Multis" value={multiStats.totalMultis > 0 ? String(multiStats.totalMultis) : "—"} />
         <Stat label="ROI" value={roi} />
         <Stat label="Strike rate" value={strike} />
       </section>
@@ -62,115 +90,54 @@ export default async function ReviewPage() {
         </div>
       ) : null}
 
-      <section className="card">
-        <h2 className="mb-3 text-lg font-semibold text-white">Model leaderboard</h2>
-        {hasData ? (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-xs uppercase tracking-wide text-slate-400">
-                  <th className="py-1 pr-4 font-medium">Model</th>
-                  <th className="py-1 pr-4 font-medium">Avg MAE</th>
-                  <th className="py-1 pr-4 font-medium">Line accuracy</th>
-                  <th className="py-1 pr-4 font-medium">Samples</th>
-                </tr>
-              </thead>
-              <tbody>
-                {board!.overall.map((o) => (
-                  <tr
-                    key={o.model}
-                    className={`border-t border-surface-border ${
-                      o.model === board!.bestModel ? "text-accent" : "text-slate-300"
-                    }`}
-                  >
-                    <td className="py-1.5 pr-4 font-semibold">Model {o.model}</td>
-                    <td className="py-1.5 pr-4">{o.avgMae == null ? "—" : o.avgMae.toFixed(2)}</td>
-                    <td className="py-1.5 pr-4">
-                      {o.avgLineAccuracy == null
-                        ? "—"
-                        : `${(o.avgLineAccuracy * 100).toFixed(0)}%`}
-                    </td>
-                    <td className="py-1.5 pr-4">{o.samples}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <p className="text-sm text-slate-400">
-            No settled predictions yet. After a round completes, the morning-after
-            cron records actuals and scores each model by mean absolute error and
-            line-call accuracy per stat. The most accurate model is highlighted to
-            guide the next week.
-          </p>
-        )}
-      </section>
+      <CollapsibleSection
+        title="Your multis"
+        description="Slip performance by ticket size — filter chips, compact table."
+      >
+        <MultiStatsPanel analytics={multiStats} />
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title="Round lineups"
+        description="One card per match — expand to see squads. Hit rate on the right if you've backed them before (✗ = last miss or below 50%)."
+      >
+        <RoundRosterPanel roster={roundRoster} playerHistory={playerHistory} />
+      </CollapsibleSection>
 
       <section className="card">
         <h2 className="mb-1 text-lg font-semibold text-white">Your player record</h2>
         <p className="mb-3 text-sm text-slate-400">
-          How each player has gone against the lines you&apos;ve backed — builds up
-          as your bets settle.
+          Split by stat — tap a summary card or filter pill. Sort to find your
+          best picks or who&apos;s been burning you.
         </p>
-        {playerRecord.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-xs uppercase tracking-wide text-slate-400">
-                  <th className="py-1 pr-4 font-medium">Player</th>
-                  <th className="py-1 pr-4 font-medium">Stat</th>
-                  <th className="py-1 pr-4 font-medium">Record</th>
-                  <th className="py-1 pr-4 font-medium">Avg line</th>
-                  <th className="py-1 pr-4 font-medium">Avg actual</th>
-                  <th className="py-1 pr-4 font-medium">Last time</th>
-                </tr>
-              </thead>
-              <tbody>
-                {playerRecord.map((r) => (
-                  <tr
-                    key={`${r.playerName}:${r.statType}`}
-                    className="border-t border-surface-border text-slate-300"
-                  >
-                    <td className="py-1.5 pr-4 font-semibold text-white">
-                      {r.playerName}
-                    </td>
-                    <td className="py-1.5 pr-4 capitalize">{r.statType}</td>
-                    <td className="py-1.5 pr-4">
-                      <span className="text-accent-win">{r.hits}</span>
-                      <span className="text-slate-500">/</span>
-                      <span>{r.bets}</span>
-                    </td>
-                    <td className="py-1.5 pr-4">{floorStat(r.avgLine)}</td>
-                    <td className="py-1.5 pr-4">
-                      {r.avgActual == null ? "—" : floorStat(r.avgActual)}
-                    </td>
-                    <td className="py-1.5 pr-4">
-                      {targetLabel(r.lastLine)} →{" "}
-                      <span
-                        className={
-                          r.lastResult === "hit"
-                            ? "text-accent-win"
-                            : "text-accent-loss"
-                        }
-                      >
-                        {r.lastActual ?? "—"} {r.lastResult === "hit" ? "✓" : "✗"}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <p className="text-sm text-slate-400">
-            No settled legs yet. Once your bets are graded the morning after each
-            game, every player you backed shows up here with their hit rate, the
-            average line you took vs what they actually got, and how they went last
-            time.
-          </p>
-        )}
+        <PlayerRecordPanel records={playerRecord} />
       </section>
     </div>
+  );
+}
+
+function CollapsibleSection({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <details className="card group">
+      <summary className="flex cursor-pointer list-none items-start gap-2">
+        <span className="mt-1 shrink-0 text-slate-600 transition-transform group-open:rotate-90">
+          ▸
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-lg font-semibold text-white">{title}</h2>
+          <p className="mt-0.5 text-sm text-slate-400">{description}</p>
+        </div>
+      </summary>
+      <div className="mt-3 border-t border-surface-border/60 pt-3">{children}</div>
+    </details>
   );
 }
 
