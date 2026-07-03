@@ -1,15 +1,19 @@
-# CLAUDE.md — AFL Multi Tracker
+# CLAUDE.md — Matty's got big balls multi tracker
 
-Guidance for Claude (and humans) working in this repo. Read this before making
+Guidance for AI assistants (Cursor, Claude, etc.) and humans working in this
+repo. **Read this and `HANDOFF.md` at the start of a session** before making
 changes.
 
 ## What this is
 
 A mobile-first + desktop web app for **AFL same-game multi** prediction and bet
-tracking. Solo / small-group tool, **not** a public product. **AFL only** — no
-other sport appears anywhere in the UI or data layer.
+tracking. Small private group tool among mates — **not** a commercial product.
+**AFL only** — no other sport appears anywhere in the UI or data layer.
 
 Operated from Perth: **all displayed times are AWST (UTC+8, no DST)**.
+
+**Repo:** public on GitHub (`comfybear71/same-game-multi`). **Never commit
+secrets** — see Security below.
 
 ## Stack (non-negotiable)
 
@@ -20,20 +24,36 @@ Operated from Perth: **all displayed times are AWST (UTC+8, no DST)**.
 - **Recharts** for charts.
 - Deploy target: **Vercel** (+ Vercel Cron, Vercel Blob).
 
+## Security (public repo)
+
+- **All secrets live in Vercel env vars and local `.env.local` only.** Never
+  commit `.env`, `.env.local`, API keys, `DATABASE_URL`, or `NEXTAUTH_SECRET`.
+- `.env.example` has **empty placeholders** — keep it that way.
+- `tmp/` is gitignored (local scrape probes).
+- Before any push: confirm Source Control / `git status` does not list `.env*`.
+- `ALLOWED_EMAILS` controls who can sign in — set in env, not in source.
+
 ## Conventions
 
-- **Branch:** do all work on a feature branch, never on `master`. The current
-  working branch is `claude/afl-multi-tracker-pt8lwr`. (The original brief named
-  `afl-claude`; align the name with the maintainer before merging.)
+- **Branch:** do work on a **feature branch**, merge to `master` via PR on
+  GitHub (or maintainer merge). Avoid force-pushing `master`.
 - **Commits:** clear, descriptive, imperative subject lines. Keep related
-  changes together.
-- **PRs:** open against `master`. Describe what changed, why, how it was
-  verified (typecheck/build/lint), and any new env vars. Don't merge to
-  `master` directly — the maintainer protects the branch and merges.
-- **Complete files only.** No partial snippets committed.
-- **Secrets:** never hardcode. Every secret comes from an env var listed in
-  `.env.example`. `ODDS_API_KEY` in particular must only ever be read from the
-  environment.
+  changes together. Complete files only — no partial snippets.
+- **PRs:** describe what changed, why, how verified (`typecheck` / `lint` /
+  `build`), and any new env vars.
+- **Secrets in code:** never hardcode. Every secret comes from an env var listed
+  in `.env.example`. `ODDS_API_KEY` must only ever be read from the environment.
+
+## Multi-user behaviour
+
+- Each signed-in user has their **own bets** (`bets.userId`). Review stats,
+  ROI, strike rate, player record, and multi analytics are **per user** — not
+  aggregated across the group.
+- **Round lineups** (uploaded squads) are **shared** — one admin uploads team
+  sheets; everyone sees the same named players for predictions.
+- **Fixture sync + lineup upload** are currently available to **any** allowlisted
+  user. Maintainer intent: only admin (`sfrench71@me.com`) should do
+  housekeeping — **admin gating not implemented yet** (see HANDOFF.md).
 
 ## Project layout
 
@@ -41,61 +61,90 @@ Operated from Perth: **all displayed times are AWST (UTC+8, no DST)**.
 src/
   app/
     api/
-      auth/[...nextauth]/route.ts   NextAuth handler
-      cron/refresh-fixtures/route.ts   daily fixtures + odds sync (Vercel Cron)
-      cron/settle-results/route.ts     morning-after results + settle + accuracy
-      games/[id]/predict/route.ts      fetch props + generate predictions
-      sync/route.ts                    manual fixture sync (signed-in users)
-    games/[id]/page.tsx             game detail (predictions table + chart)
-    bets/page.tsx                   bet tracker
-    review/page.tsx                 forecasting / accuracy dashboard
-    login/page.tsx                  invite-only sign in
-    page.tsx                        fixtures dashboard (next game + upcoming)
+      auth/[...nextauth]/route.ts      NextAuth handler
+      bets/route.ts                    create slip + legs
+      bets/[id]/route.ts               DELETE slip
+      bets/legs/[id]/route.ts          PATCH leg / DELETE leg
+      bets/[id]/result/route.ts        result screenshot → settle legs
+      bets/read/route.ts               AI read placement slip
+      bets/upload/route.ts             Vercel Blob upload
+      cron/refresh-fixtures/route.ts   daily fixtures sync (Vercel Cron)
+      cron/settle-results/route.ts     morning-after settle + accuracy
+      games/[id]/predict/route.ts      generate predictions (lineup roster)
+      games/[id]/suggest/route.ts      suggested multi + Claude rationale
+      games/[id]/candidates/route.ts   add-player picker pool
+      games/[id]/lineup/route.ts       upload team-sheet screenshots
+      games/[id]/game-over/route.ts    settle user's bets after a game
+      games/[id]/live/route.ts         live game polling
+      sync/route.ts                    manual fixture sync (signed-in)
+      admin/migrate/route.ts           run migrations (signed-in)
+    page.tsx                           fixtures dashboard
+    games/[id]/page.tsx                game detail (stats, multi, live bets)
+    bets/page.tsx                      bet tracker (slips by round)
+    bets/new/page.tsx                  manual / AI slip entry
+    review/page.tsx                    per-user review + round lineups
+    login/page.tsx                     invite-only sign in
     layout.tsx, providers.tsx, globals.css
-  components/                       UI + Recharts charts
+  components/
+    SuggestedMultis.tsx                build + log multis on game page
+    LiveBetTracker.tsx                 live leg tracking + game over
+    StatBoardView.tsx                  per-stat player boards
+    RoundRosterPanel.tsx               round lineups + game lineup panel
+    PlayerRecordPanel.tsx              per-user player×stat history
+    MultiStatsPanel.tsx                multis by leg count
+    LineupUploadButton.tsx             screenshot lineup ingest
+    SyncButton.tsx                     refresh fixtures
+    DeleteBetButton.tsx, EditLegMarket.tsx, …
   db/
-    schema.ts                       Drizzle schema (source of truth)
-    index.ts                        lazy Drizzle client
-    migrate.ts                      standalone migration runner
+    schema.ts                          Drizzle schema (source of truth)
+    index.ts                           lazy Drizzle client
+    migrate.ts, loadDotenvLocal.ts
   lib/
-    env.ts                          validated, lazy env access
-    auth.ts                         NextAuth options + allowlist
-    time.ts                         AWST formatting helpers
-    cron.ts                         cron auth + season helper
-    settle.ts                       bet leg/slip settlement
-    afl/teams.ts                    team-name canonicalisation across sources
-    afl/venues.ts                   venue canonicalisation across sources
-    data/                           UI read helpers (games, bets, predictions,
-                                      accuracy leaderboard)
-    ingest/                         external data clients
-      cache.ts                      Postgres-backed fetch-through cache
-      squiggle.ts                   Squiggle API (fixtures/results/standings)
-      oddsApi.ts                    The Odds API (fixtures, h2h, player props)
-      props.ts                      store player prop lines for a game
-      aflTables.ts                  AFL Tables scrape (game logs + venue splits)
-      playerStats.ts                settle actual player stats from AFL Tables
-      injuries.ts                   injury/news adapter (STUB)
-      sync.ts                       upsert fixtures into the DB
+    env.ts                             validated, lazy env access
+    auth.ts                            NextAuth + allowlist
+    time.ts                            AWST formatting
+    cron.ts, settle.ts
+    afl/teams.ts, afl/venues.ts, afl/teamColors.ts
+    data/
+      bets.ts                          slips, tracker, player record, enrich
+      games.ts, statboard.ts, accuracy.ts, roundRoster.ts, …
+    ingest/
+      cache.ts, squiggle.ts, oddsApi.ts, props.ts
+      aflTables.ts, playerStats.ts, sync.ts, lineup.ts
+      injuries.ts                      RSS adapter (partial)
     predictions/
-      types.ts                      model inputs/outputs/params
-      engine.ts                     Models A / B / C
-      features.ts                   history -> model inputs (factors, form)
-      generate.ts                   persist predictions for a game's players
-      accuracy.ts                   round scorecard -> model_accuracy
-drizzle/                            generated SQL migrations
+      engine.ts, features.ts, generate.ts, suggest.ts
+      probability.ts, modelLine.ts, accuracy.ts
+    ai/
+      readLineup.ts, readBetSlip.ts, readBetResult.ts, explainMultis.ts
+drizzle/                               generated SQL migrations
+docs/LOCAL-DEV.md                     local setup + git workflow
+scripts/setup-local.mjs, check-env.mjs
 ```
 
 ## Data sources
 
-1. **The Odds API** (paid tier, player props) — `aussierules_afl`. Key in
-   `ODDS_API_KEY` only. Fixtures+h2h is one cheap call; player props are
-   per-event — loop event IDs and **cache aggressively** (`lib/ingest/cache.ts`).
-2. **Squiggle API** (free, no key) — results, fixtures, standings. Requires a
-   descriptive `User-Agent` (set from `SQUIGGLE_CONTACT`).
-3. **AFL Tables** — historical player stats by scraping. Flaky by nature;
-   everything in `aflTables.ts` returns empty/logs rather than throwing.
-4. **Injury/news** — STUB. `injuries.ts` defines the interface + an empty
-   adapter. UI shows "—" until wired.
+1. **Lineup screenshots** (primary squad seed) — Claude vision reads AFL app /
+   afl.com.au team sheets (`readLineup.ts` → `lineup_players`). Requires
+   `ANTHROPIC_API_KEY`. Predictions run for named players only.
+2. **AFL Tables** — player history, form, settlement actuals. Scraping — degrades
+   gracefully on failure.
+3. **Squiggle API** (free) — fixtures, results, standings. Real `User-Agent` via
+   `SQUIGGLE_CONTACT`.
+4. **The Odds API** (optional, paid) — bookmaker props when `ODDS_API_KEY` set.
+   Without it, model lines + estimated odds still power suggestions.
+5. **Injury/news** — RSS via `AFL_NEWS_FEEDS`; coarse status affects suggestions.
+
+## Typical weekly workflow (maintainer)
+
+1. **Refresh fixtures** (Fixtures page or daily cron).
+2. **Upload lineups** per game (screenshots on each fixture card).
+3. **Generate predictions** on each game page (`POST …/predict`).
+4. Mates build multis on the game page → **Log this multi** (multiple slips per
+   game OK). Stake/odds optional.
+5. During the game: **Your bets in this game** live tracker (+/− counts).
+6. After the game: **Game over — settle my bets** or morning-after cron + result
+   screenshot upload on Bets page.
 
 ## Commands
 
@@ -107,18 +156,30 @@ npm run lint         # next lint (must pass before PR)
 npm run db:generate  # generate a new SQL migration from schema.ts
 npm run db:migrate   # apply migrations to DATABASE_URL
 npm run db:studio    # drizzle studio
+npm run setup:local  # copy .env.example, generate NEXTAUTH_SECRET
+npm run check:env    # sanity-check required env vars
 ```
 
-Before opening a PR, `npm run typecheck && npm run lint && npm run build` must
-all pass.
+Before opening a PR: `npm run typecheck && npm run lint && npm run build`.
 
 ## Gotchas
 
-- **Env is validated lazily.** `lib/env.ts` only validates on first property
-  access so `next build` works without secrets. The DB client (`db/index.ts`)
-  and the NextAuth `secret` deliberately avoid eager env reads for the same
-  reason. Keep new module-level code from reading required env at import time.
-- **Times are stored as UTC, displayed as AWST.** Use `lib/time.ts`. Squiggle
-  returns local wall-clock + tz offset; `sync.ts` converts to UTC.
-- **Team names differ per source.** Always run external names through
-  `canonicalTeam()` (`lib/afl/teams.ts`) before joining/deduping.
+- **Env is validated lazily.** `lib/env.ts` validates on first access so
+  `next build` works without secrets. Avoid eager env reads at module import.
+- **Times:** stored UTC, displayed AWST (`lib/time.ts`).
+- **Team names differ per source** — always `canonicalTeam()` before joins.
+- **Suggested multis** rank legs by model confidence (+ fantasy on "Any" tab);
+  personal betting history nudges confidence lightly (`withHistory` in
+  `suggest.ts`). Review "hit badges" on round lineups are display-only unless
+  wired further.
+- **Settlement:** legs need `gameId` + matched `playerId` for auto-settle from
+  AFL Tables; live counts + result screenshots are fallbacks.
+- **No "Settle now" global button** — use per-game game-over or cron.
+
+## For AI sessions (Cursor)
+
+- Read **`HANDOFF.md`** for current status and backlog.
+- Prefer **small, focused diffs**; match existing code style.
+- Run **typecheck/lint** when changing non-trivial TypeScript.
+- **Do not commit or push** unless the user explicitly asks.
+- Agent chat history is ephemeral — put durable decisions in `HANDOFF.md`.
