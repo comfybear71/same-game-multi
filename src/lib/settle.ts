@@ -3,22 +3,54 @@ import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { betLegs, bets, games, playerGameStats, type LegResult } from "@/db/schema";
 import { currentSeason } from "@/lib/cron";
+import { gamePlayerNameSet, legBelongsToGame } from "@/lib/data/bets";
 import { settleGamePlayerStats } from "@/lib/ingest/playerStats";
-import { syncFixtures } from "@/lib/ingest/sync";
+import { refreshGameFromSquiggle, syncFixtures } from "@/lib/ingest/sync";
 import { computeRoundAccuracy } from "@/lib/predictions/accuracy";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Settlement: once a game is complete and player stats are recorded, mark each
 // bet leg hit/miss, then roll up each slip to won/lost.
 //
-// A leg only auto-settles once it has both a linked game and a matched
-// player (set when the bet was saved). Legs missing either stay "pending"
-// forever — see settleLegManually() for the fallback override.
+// Legs linked to a game (or matched by round + player name on the live panel)
+// settle from tap counts on "Game over", or from AFL Tables when published.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface SettleResult {
   legsSettled: number;
   slipsSettled: number;
+}
+
+type BetLegRow = typeof betLegs.$inferSelect;
+
+/** Pending legs for a game — same scope as the live "your bets" panel. */
+async function pendingLegsForGame(gameId: number): Promise<BetLegRow[]> {
+  const game = (
+    await db
+      .select({ round: games.round })
+      .from(games)
+      .where(eq(games.id, gameId))
+      .limit(1)
+  )[0];
+  if (!game) return [];
+
+  const gameNames = await gamePlayerNameSet(gameId);
+  const rows = await db
+    .select({ leg: betLegs, betRound: bets.round })
+    .from(betLegs)
+    .innerJoin(bets, eq(betLegs.betId, bets.id))
+    .where(eq(betLegs.result, "pending"));
+
+  return rows
+    .filter(({ leg, betRound }) =>
+      legBelongsToGame(
+        { gameId: leg.gameId, playerName: leg.playerName, betRound },
+        gameId,
+        game.round,
+        gameNames,
+      ),
+    )
+    .map(({ leg }) => leg);
 }
 
 /** Settle all pending legs whose game is complete and has player stats. */
@@ -228,10 +260,7 @@ export async function backfillSettledActuals(): Promise<number> {
 
 /** Settle all pending legs for one game that have AFL Tables actuals. */
 export async function settlePendingBetsForGame(gameId: number): Promise<SettleResult> {
-  const pendingLegs = await db
-    .select()
-    .from(betLegs)
-    .where(and(eq(betLegs.result, "pending"), eq(betLegs.gameId, gameId)));
+  const pendingLegs = await pendingLegsForGame(gameId);
 
   let legsSettled = 0;
   const touchedBetIds = new Set<number>();
@@ -240,7 +269,7 @@ export async function settlePendingBetsForGame(gameId: number): Promise<SettleRe
     if (!leg.playerId) continue;
 
     const game = (
-      await db.select().from(games).where(eq(games.id, leg.gameId!)).limit(1)
+      await db.select().from(games).where(eq(games.id, gameId)).limit(1)
     )[0];
     if (!game || game.status !== "complete") continue;
 
@@ -250,7 +279,7 @@ export async function settlePendingBetsForGame(gameId: number): Promise<SettleRe
         .from(playerGameStats)
         .where(
           and(
-            eq(playerGameStats.gameId, leg.gameId!),
+            eq(playerGameStats.gameId, gameId),
             eq(playerGameStats.playerId, leg.playerId),
             eq(playerGameStats.settled, true),
           ),
@@ -267,7 +296,11 @@ export async function settlePendingBetsForGame(gameId: number): Promise<SettleRe
     const result = actualValue > leg.line ? "hit" : "miss";
     await db
       .update(betLegs)
-      .set({ result, actualValue })
+      .set({
+        result,
+        actualValue,
+        ...(leg.gameId == null ? { gameId } : {}),
+      })
       .where(eq(betLegs.id, leg.id));
     legsSettled++;
     touchedBetIds.add(leg.betId);
@@ -279,10 +312,7 @@ export async function settlePendingBetsForGame(gameId: number): Promise<SettleRe
 
 /** Finalise pending legs from in-game tap counts (actualValue already stored). */
 export async function settleLegsFromLiveCounts(gameId: number): Promise<SettleResult> {
-  const pendingLegs = await db
-    .select()
-    .from(betLegs)
-    .where(and(eq(betLegs.result, "pending"), eq(betLegs.gameId, gameId)));
+  const pendingLegs = await pendingLegsForGame(gameId);
 
   let legsSettled = 0;
   const touchedBetIds = new Set<number>();
@@ -290,7 +320,13 @@ export async function settleLegsFromLiveCounts(gameId: number): Promise<SettleRe
   for (const leg of pendingLegs) {
     if (leg.actualValue == null) continue;
     const result = leg.actualValue > leg.line ? "hit" : "miss";
-    await db.update(betLegs).set({ result }).where(eq(betLegs.id, leg.id));
+    await db
+      .update(betLegs)
+      .set({
+        result,
+        ...(leg.gameId == null ? { gameId } : {}),
+      })
+      .where(eq(betLegs.id, leg.id));
     legsSettled++;
     touchedBetIds.add(leg.betId);
   }
@@ -306,19 +342,23 @@ export interface GameOverSettlement {
   fromLive: SettleResult;
 }
 
-/** Post-game: refresh Squiggle, scrape AFL Tables for this game, settle legs. */
+/** Post-game: finalise tap counts first, then try AFL Tables for any left. */
 export async function runGameOverSettlement(gameId: number): Promise<GameOverSettlement> {
   const game = (
     await db.select().from(games).where(eq(games.id, gameId)).limit(1)
   )[0];
   if (!game) throw new Error("game not found");
 
-  const season = game.season ?? currentSeason();
-  await syncFixtures(season);
+  // Live counts first — fast and matches how you watch the game.
+  const fromLive = await settleLegsFromLiveCounts(gameId);
+
+  // Just this fixture from Squiggle (not the whole season — avoids timeouts).
+  await refreshGameFromSquiggle(gameId).catch((err) => {
+    console.warn(`[game-over] Squiggle refresh for game ${gameId}:`, err);
+  });
 
   const statsResult = await settleGamePlayerStats(gameId);
   const fromStats = await settlePendingBetsForGame(gameId);
-  const fromLive = await settleLegsFromLiveCounts(gameId);
 
   const updated = (
     await db.select({ status: games.status }).from(games).where(eq(games.id, gameId)).limit(1)

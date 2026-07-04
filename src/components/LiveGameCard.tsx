@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import { formatScoreLine, hasRealScores } from "@/lib/scoreDisplay";
 interface LiveState {
   status: "scheduled" | "live" | "final";
   timestr: string | null;
@@ -17,14 +18,33 @@ export function LiveGameCard({
   away,
   round,
   venue,
+  homeScore,
+  awayScore,
+  gameStatus,
+  kickedOff,
 }: {
   gameId: number;
   home: string;
   away: string;
   round: number | null;
   venue: string | null;
+  homeScore?: number | null;
+  awayScore?: number | null;
+  gameStatus?: string;
+  /** On the fixtures page — game has started but may still be loading live data. */
+  kickedOff?: boolean;
 }) {
-  const [state, setState] = useState<LiveState | null>(null);
+  const [state, setState] = useState<LiveState | null>(() =>
+    gameStatus === "in_progress" && hasRealScores(homeScore, awayScore)
+      ? {
+          status: "live",
+          timestr: null,
+          homeScore: homeScore ?? null,
+          awayScore: awayScore ?? null,
+          complete: 50,
+        }
+      : null,
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -35,8 +55,20 @@ export function LiveGameCard({
         const json = await res.json();
         if (cancelled) return;
         const s: LiveState | null = json.state ?? null;
-        setState(s);
-        if (s?.status === "live") timer = setTimeout(tick, 45000);
+        setState((prev) => {
+          if (!s) return prev;
+          if (
+            prev &&
+            !hasRealScores(s.homeScore, s.awayScore, s.complete) &&
+            hasRealScores(prev.homeScore, prev.awayScore, prev.complete)
+          ) {
+            return prev;
+          }
+          return s;
+        });
+        const active = s ?? undefined;
+        if (active?.status === "live") timer = setTimeout(tick, 20_000);
+        else if (active?.status !== "final") timer = setTimeout(tick, 20_000);
       } catch {
         /* ignore */
       }
@@ -48,8 +80,11 @@ export function LiveGameCard({
     };
   }, [gameId]);
 
-  const live = state?.status === "live";
+  const live = state?.status === "live" || (kickedOff && state?.status !== "final");
   const final = state?.status === "final";
+  const scoreLine = state
+    ? formatScoreLine(state.homeScore, state.awayScore, state.complete)
+    : "–";
 
   return (
     <Link href={`/games/${gameId}`} className="card block transition hover:border-accent">
@@ -72,9 +107,7 @@ export function LiveGameCard({
       </div>
       <div className="mt-2 flex items-center justify-between gap-2">
         <span className="flex-1 font-semibold text-white">{home}</span>
-        <span className="px-2 text-xl font-bold text-white">
-          {state ? `${state.homeScore ?? 0} – ${state.awayScore ?? 0}` : "–"}
-        </span>
+        <span className="px-2 text-xl font-bold text-white">{scoreLine}</span>
         <span className="flex-1 text-right font-semibold text-white">{away}</span>
       </div>
       {state?.timestr ? (

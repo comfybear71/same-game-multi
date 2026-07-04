@@ -4,7 +4,7 @@ import { db } from "@/db";
 import { games } from "@/db/schema";
 import { canonicalTeam } from "@/lib/afl/teams";
 import { getFixturesWithH2H } from "./oddsApi";
-import { getSquiggleGames, type SquiggleGame } from "./squiggle";
+import { fetchSquiggleRound, getSquiggleGames, matchSquiggleFixture, type SquiggleGame } from "./squiggle";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Fixture sync: pull from Squiggle (authoritative for schedule + results) and
@@ -93,6 +93,35 @@ export async function syncFixtures(season: number): Promise<SyncResult> {
   });
 
   return { season, upserted, skipped, oddsMatched };
+}
+
+/** Refresh one game's result/score from Squiggle — fast, used by Game over. */
+export async function refreshGameFromSquiggle(gameId: number): Promise<boolean> {
+  const game = (
+    await db.select().from(games).where(eq(games.id, gameId)).limit(1)
+  )[0];
+  if (!game || game.season == null || game.round == null) return false;
+
+  const roundGames = await fetchSquiggleRound(game.season, game.round);
+  const match = matchSquiggleFixture(roundGames, game.squiggleId, game.home, game.away);
+  if (!match?.game.hteam || !match.game.ateam) return false;
+
+  const g = match.game;
+  const homeScore = match.flip ? g.ascore : g.hscore;
+  const awayScore = match.flip ? g.hscore : g.ascore;
+
+  await db
+    .update(games)
+    .set({
+      squiggleId: g.id,
+      status: statusFromComplete(g.complete),
+      homeScore,
+      awayScore,
+      updatedAt: new Date(),
+    })
+    .where(eq(games.id, gameId));
+
+  return true;
 }
 
 /**

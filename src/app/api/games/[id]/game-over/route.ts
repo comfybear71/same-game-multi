@@ -40,6 +40,9 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
     const hit = legs.filter((l) => l.result === "hit").length;
     const miss = legs.filter((l) => l.result === "miss").length;
     const pending = legs.filter((l) => l.result === "pending").length;
+    const pendingMissingCounts = legs.filter(
+      (l) => l.result === "pending" && l.actualValue == null,
+    ).length;
 
     const betIds = [...new Set(legs.map((l) => l.betId))];
     const slipRows =
@@ -70,7 +73,7 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
     return NextResponse.json({
       ok: true,
       settlement,
-      legs: { hit, miss, pending, total: legs.length },
+      legs: { hit, miss, pending, pendingMissingCounts, total: legs.length },
       slips,
     });
   } catch (err) {
