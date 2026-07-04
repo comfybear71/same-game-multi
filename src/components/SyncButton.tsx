@@ -11,15 +11,29 @@ export function SyncButton() {
   async function sync() {
     setLoading(true);
     setMsg(null);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 55_000);
     try {
-      const res = await fetch("/api/sync", { method: "POST" });
-      const json = await res.json();
+      const res = await fetch("/api/sync", { method: "POST", signal: ctrl.signal });
+      const text = await res.text();
+      let json: { ok?: boolean; error?: string; upserted?: number };
+      try {
+        json = JSON.parse(text) as typeof json;
+      } catch {
+        throw new Error(text.slice(0, 100) || "Sync failed — check the terminal");
+      }
       if (!res.ok || !json.ok) throw new Error(json.error || "Sync failed");
-      setMsg(`Synced ${json.upserted} games`);
+      setMsg(`Synced ${json.upserted ?? 0} games`);
       router.refresh();
     } catch (err) {
-      setMsg((err as Error).message);
+      const e = err as Error;
+      setMsg(
+        e.name === "AbortError"
+          ? "Sync timed out — Neon may be slow. Try again in a moment."
+          : e.message,
+      );
     } finally {
+      clearTimeout(timer);
       setLoading(false);
     }
   }

@@ -169,17 +169,22 @@ function LegProgressBar({
   statType,
   cleared,
   failed,
+  voided,
 }: {
   current: number;
   target: number;
   statType: string;
   cleared: boolean;
   failed: boolean;
+  voided?: boolean;
 }) {
-  const state = barStateFromCounts(current, target, statType, cleared, failed);
+  const state = voided
+    ? "empty"
+    : barStateFromCounts(current, target, statType, cleared, failed);
   const pct = cleared ? 100 : target > 0 ? Math.min(100, (current / target) * 100) : 0;
-  const barColor =
-    state === "red"
+  const barColor = voided
+    ? "bg-slate-500"
+    : state === "red"
       ? "bg-accent-loss"
       : state === "green"
         ? "bg-accent-win"
@@ -188,8 +193,9 @@ function LegProgressBar({
           : state === "blue"
             ? "bg-accent"
             : "bg-surface";
-  const markerColor =
-    state === "red"
+  const markerColor = voided
+    ? "bg-slate-400"
+    : state === "red"
       ? "bg-accent-loss"
       : state === "green"
         ? "bg-accent-win"
@@ -218,11 +224,13 @@ function LegRow({
   onUpdate,
   onMarketChange,
   onRemove,
+  onVoid,
 }: {
   leg: LegState;
   onUpdate: (legId: number, actualValue: number) => Promise<void>;
   onMarketChange: (legId: number, patch: LegMarketPatch) => void;
   onRemove: (legId: number) => void;
+  onVoid: (legId: number, actualValue: number) => void;
 }) {
   const [count, setCount] = useState(initial.actualValue ?? 0);
   const [saving, setSaving] = useState(false);
@@ -231,15 +239,18 @@ function LegRow({
   const [draft, setDraft] = useState("");
   const [fixMarket, setFixMarket] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const [voiding, setVoiding] = useState(false);
 
   useEffect(() => {
     setCount(initial.actualValue ?? 0);
   }, [initial.actualValue, initial.statType, initial.line]);
 
   const target = lineTarget(initial.line);
-  const cleared = legCleared({ ...initial, actualValue: count });
+  const isVoid = initial.result === "void";
+  const cleared = !isVoid && legCleared({ ...initial, actualValue: count });
   const failed = legFailed(initial);
-  const settled = initial.result === "hit" || initial.result === "miss";
+  const resultFinal =
+    initial.result === "hit" || initial.result === "miss" || initial.result === "void";
 
   const persist = useCallback(
     async (next: number) => {
@@ -260,7 +271,7 @@ function LegRow({
   );
 
   function bump(delta: number) {
-    if (settled) return;
+    if (initial.result === "hit" || initial.result === "miss") return;
     void persist(count + delta);
   }
 
@@ -293,6 +304,33 @@ function LegRow({
     }
   }
 
+  async function voidThisLeg() {
+    const name = initial.playerName ?? "this player";
+    if (
+      !window.confirm(
+        `Void ${name}? Injury/sub — leg drops from the multi but stats stay on your record.`,
+      )
+    ) {
+      return;
+    }
+    setVoiding(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/bets/legs/${initial.legId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ result: "void", actualValue: count }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) throw new Error(json.error || "void failed");
+      onVoid(initial.legId, count);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setVoiding(false);
+    }
+  }
+
   const c = teamColors(initial.team ?? "");
   const margin = count > 0 || initial.actualValue != null ? marginVsTarget(count, initial.line) : null;
 
@@ -301,15 +339,17 @@ function LegRow({
       <span className="text-accent-win">✓</span>
     ) : initial.result === "miss" ? (
       <span className="text-accent-loss">✗</span>
-    ) : initial.result === "void" ? (
-      <span className="text-slate-500">—</span>
+    ) : isVoid ? (
+      <span className="rounded bg-slate-600/60 px-1 text-[9px] font-semibold uppercase tracking-wide text-slate-300">
+        Void
+      </span>
     ) : null;
 
   return (
     <li
       className={`flex flex-col rounded-md border border-surface-border/50 bg-surface/30${
-        error ? " ring-1 ring-accent-loss" : ""
-      }`}
+        isVoid ? " opacity-90" : ""
+      }${error ? " ring-1 ring-accent-loss" : ""}`}
       title={error ?? undefined}
     >
       <div className="flex items-center gap-2 px-2 py-1.5">
@@ -325,7 +365,7 @@ function LegRow({
             <span className="truncate text-xs font-medium text-white">
               {initial.playerName ?? "Player"}
             </span>
-            {!settled && !fixMarket ? (
+            {!resultFinal && !fixMarket ? (
               <button
                 type="button"
                 onClick={() => setFixMarket(true)}
@@ -340,28 +380,43 @@ function LegRow({
               </span>
             )}
             {statusIcon}
-            {margin != null && settled ? (
+            {margin != null && (initial.result === "hit" || initial.result === "miss") ? (
               <span
                 className={`shrink-0 text-[10px] ${margin >= 0 ? "text-accent-win" : "text-accent-loss"}`}
               >
                 ({signed(margin)})
               </span>
             ) : null}
-            {!settled && !fixMarket ? (
-              <button
-                type="button"
-                onClick={removeThisLeg}
-                disabled={removing}
-                className="shrink-0 text-[10px] text-slate-600 hover:text-accent-loss disabled:opacity-40"
-                title="Remove this leg"
-              >
-                ×
-              </button>
+            {initial.result === "pending" && !fixMarket ? (
+              <>
+                <button
+                  type="button"
+                  onClick={voidThisLeg}
+                  disabled={voiding || saving}
+                  className="shrink-0 text-[10px] text-slate-500 hover:text-slate-300 disabled:opacity-40"
+                  title="Void leg (injury/sub)"
+                >
+                  Void
+                </button>
+                <button
+                  type="button"
+                  onClick={removeThisLeg}
+                  disabled={removing}
+                  className="shrink-0 text-[10px] text-slate-600 hover:text-accent-loss disabled:opacity-40"
+                  title="Remove this leg"
+                >
+                  ×
+                </button>
+              </>
             ) : null}
           </div>
         </div>
 
-        {!settled ? (
+        {initial.result === "hit" || initial.result === "miss" ? (
+          <span className="w-7 shrink-0 text-center text-sm font-bold tabular-nums text-white">
+            {count}
+          </span>
+        ) : (
           <div className="flex shrink-0 items-center gap-0.5">
             {editing ? (
               <input
@@ -410,10 +465,6 @@ function LegRow({
               </>
             )}
           </div>
-        ) : (
-          <span className="w-7 shrink-0 text-center text-sm font-bold tabular-nums text-white">
-            {count}
-          </span>
         )}
       </div>
 
@@ -424,13 +475,14 @@ function LegRow({
           statType={initial.statType}
           cleared={cleared}
           failed={failed}
+          voided={isVoid}
         />
         <span className="shrink-0 text-[10px] tabular-nums text-slate-500">
           {count}/{target}+
         </span>
       </div>
 
-      {fixMarket && !settled ? (
+      {fixMarket && initial.result === "pending" ? (
         <LegMarketEditor
           legId={initial.legId}
           statType={initial.statType}
@@ -465,11 +517,13 @@ function GameOverSection({
   pending,
   live,
   onRefresh,
+  trackerLegs,
 }: {
   gameId: number;
   pending: number;
   live: boolean;
   onRefresh: () => void;
+  trackerLegs: BetTrackerLeg[];
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -477,18 +531,50 @@ function GameOverSection({
   const [slips, setSlips] = useState<SlipOutcome[] | null>(null);
 
   async function gameOver() {
+    const pendingLegs = trackerLegs.filter((l) => l.result === "pending");
+    const missingCounts = pendingLegs.filter((l) => l.actualValue == null);
+    if (missingCounts.length > 0) {
+      setMsg(
+        `Enter final stats for ${missingCounts.length} leg${missingCounts.length === 1 ? "" : "s"} using + above, then tap Game over again.`,
+      );
+      return;
+    }
+
     setBusy(true);
     setMsg(null);
     setSlips(null);
     try {
       const res = await fetch(`/api/games/${gameId}/game-over`, { method: "POST" });
-      const json = await res.json();
+      const text = await res.text();
+      let json: {
+        ok?: boolean;
+        error?: string;
+        settlement?: {
+          fromStats?: { legsSettled?: number };
+          fromLive?: { legsSettled?: number };
+        };
+        legs?: {
+          hit: number;
+          miss: number;
+          pending: number;
+          pendingMissingCounts?: number;
+          total: number;
+        };
+        slips?: SlipOutcome[];
+      };
+      try {
+        json = JSON.parse(text) as typeof json;
+      } catch {
+        throw new Error(
+          res.ok
+            ? "Server returned an invalid response"
+            : text.slice(0, 120) || "settle failed — try again",
+        );
+      }
       if (!res.ok || !json.ok) throw new Error(json.error || "settle failed");
 
-      const { legs, slips: slipOutcomes } = json as {
-        legs: { hit: number; miss: number; pending: number; total: number };
-        slips: SlipOutcome[];
-      };
+      const { legs, slips: slipOutcomes } = json;
+      if (!legs || !slipOutcomes) throw new Error("settle failed");
       setSlips(slipOutcomes);
 
       const totalSettled =
@@ -512,9 +598,15 @@ function GameOverSection({
           setMsg(`All ${legs.total} legs settled.`);
         }
       } else if (totalSettled === 0) {
-        setMsg(
-          "Nothing new to settle yet — AFL Tables may not have published stats. Keep tapping + or try again later.",
-        );
+        if ((legs.pendingMissingCounts ?? 0) > 0) {
+          setMsg(
+            `Enter final stats for ${legs.pendingMissingCounts} pending leg(s) using + above, then try again.`,
+          );
+        } else {
+          setMsg(
+            "Nothing new to settle yet — AFL Tables may not have published stats. Keep tapping + or try again later.",
+          );
+        }
       } else {
         setMsg(
           `Settled ${totalSettled} leg${totalSettled === 1 ? "" : "s"}. ${legs.pending} still pending — adjust counts above or use the Bets tab.`,
@@ -543,12 +635,12 @@ function GameOverSection({
         </button>
         {live ? (
           <p className="mt-1.5 text-[11px] text-accent-pending">
-            Game still live — tap when you&apos;re done watching to lock in results.
+            Game still live — tap + for each leg, then Game over when full time.
           </p>
         ) : (
           <p className="mt-1.5 text-[11px] text-slate-500">
-            Pulls official stats from AFL Tables and finalises any counts you
-            tracked live. Works whether you won or not.
+            Tap + to enter each player&apos;s final stat, then Game over locks
+            every leg and updates the Bets page — no manual entry needed.
           </p>
         )}
       </div>
@@ -615,7 +707,7 @@ export function LiveBetTracker({
         const json = await res.json();
         if (cancelled) return;
         setLive(json.state?.status === "live");
-        if (json.state?.status === "live") timer = setTimeout(tick, 45000);
+        if (json.state?.status === "live") timer = setTimeout(tick, 20_000);
       } catch {
         /* best-effort */
       }
@@ -654,7 +746,21 @@ export function LiveBetTracker({
     [router],
   );
 
-  const cleared = legs.filter(legCleared).length;
+  const voidLeg = useCallback(
+    (legId: number, actualValue: number) => {
+      setLegs((prev) =>
+        prev.map((l) =>
+          l.legId === legId ? { ...l, result: "void" as const, actualValue } : l,
+        ),
+      );
+      router.refresh();
+    },
+    [router],
+  );
+
+  const voids = legs.filter((l) => l.result === "void").length;
+  const activeLegs = legs.filter((l) => l.result !== "void");
+  const cleared = activeLegs.filter(legCleared).length;
   const pending = legs.filter((l) => l.result === "pending").length;
   const hits = legs.filter((l) => l.result === "hit").length;
   const misses = legs.filter((l) => l.result === "miss").length;
@@ -690,9 +796,12 @@ export function LiveBetTracker({
           <div className="text-lg font-bold text-white">
             {cleared}
             <span className="text-slate-500"> / </span>
-            {legs.length}
+            {activeLegs.length}
           </div>
-          <div className="text-[11px] text-slate-400">legs cleared</div>
+          <div className="text-[11px] text-slate-400">
+            {voids > 0 ? `${voids} void · ` : ""}
+            legs cleared
+          </div>
         </div>
       </div>
 
@@ -730,6 +839,7 @@ export function LiveBetTracker({
             onUpdate={updateCount}
             onMarketChange={updateMarket}
             onRemove={removeLeg}
+            onVoid={voidLeg}
           />
         ))}
       </ul>
@@ -748,8 +858,10 @@ export function LiveBetTracker({
             }`}
           >
             {misses === 0
-              ? `All ${legs.length} legs hit — multi cleared.`
-              : `${hits}/${legs.length} legs hit — multi lost (${misses} missed).`}
+              ? voids > 0
+                ? `All ${activeLegs.length} active legs hit — multi cleared (${voids} void).`
+                : `All ${legs.length} legs hit — multi cleared.`
+              : `${hits}/${activeLegs.length} active legs hit — multi lost (${misses} missed).`}
           </p>
           <p className="mt-1 text-xs text-slate-500">
             Full details on the Bets page.
@@ -761,6 +873,7 @@ export function LiveBetTracker({
           pending={pending}
           live={live}
           onRefresh={() => router.refresh()}
+          trackerLegs={legs}
         />
       ) : null}
     </section>

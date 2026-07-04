@@ -31,7 +31,12 @@ export function LegResultControls({
     setSaving(true);
     setError(null);
     try {
-      const actualValueOut = next === "void" || actual === "" ? null : Number(actual);
+      const actualValueOut =
+        actual !== ""
+          ? Number(actual)
+          : next === "void"
+            ? actualValue
+            : null;
       const res = await fetch(`/api/bets/legs/${legId}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
@@ -50,12 +55,23 @@ export function LegResultControls({
 
   if (!open) {
     return (
-      <button
-        className="text-[11px] text-slate-500 underline hover:text-slate-300"
-        onClick={() => setOpen(true)}
-      >
-        {result === "pending" ? "set manually" : "correct"}
-      </button>
+      <div className="flex flex-wrap items-center gap-2">
+        {result === "pending" ? (
+          <button
+            className="text-[11px] font-medium text-slate-400 hover:text-slate-200"
+            disabled={saving}
+            onClick={() => setResult("void")}
+          >
+            Void (injured)
+          </button>
+        ) : null}
+        <button
+          className="text-[11px] text-slate-500 underline hover:text-slate-300"
+          onClick={() => setOpen(true)}
+        >
+          {result === "pending" ? "set manually" : "correct"}
+        </button>
+      </div>
     );
   }
 

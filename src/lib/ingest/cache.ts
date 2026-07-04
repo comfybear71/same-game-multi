@@ -69,3 +69,48 @@ export async function cached<T>(
     throw err;
   }
 }
+
+/**
+ * Live data — short TTL. Cache read/write is best-effort (never blocks Squiggle).
+ * Falls back to cache only if fetched within `maxStaleSeconds` (avoids Q1 scores in Q4).
+ */
+export async function cachedLive<T>(
+  key: string,
+  ttlSeconds: number,
+  fetcher: () => Promise<T>,
+  maxStaleSeconds = 180,
+): Promise<T> {
+  try {
+    const fresh = await getCached<T>(key);
+    if (fresh !== null) return fresh;
+  } catch (err) {
+    console.warn(`[cache] live read failed for ${key}:`, err);
+  }
+
+  try {
+    const value = await fetcher();
+    void setCached(key, value, ttlSeconds).catch((err) => {
+      console.warn(`[cache] live write failed for ${key}:`, err);
+    });
+    return value;
+  } catch (err) {
+    try {
+      const rows = await db
+        .select()
+        .from(apiCache)
+        .where(eq(apiCache.key, key))
+        .limit(1);
+      const row = rows[0];
+      if (row) {
+        const ageSec = (Date.now() - row.fetchedAt.getTime()) / 1000;
+        if (ageSec <= maxStaleSeconds) {
+          console.warn(`[cache] live using ${Math.round(ageSec)}s-old payload for ${key}:`, err);
+          return row.payload as T;
+        }
+      }
+    } catch (readErr) {
+      console.warn(`[cache] live stale read failed for ${key}:`, readErr);
+    }
+    throw err;
+  }
+}

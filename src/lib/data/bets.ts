@@ -167,6 +167,30 @@ function normaliseName(name: string): string {
   return normalisePlayerName(name);
 }
 
+/** Model C predicted player names for a game — used to match unlinked bet legs. */
+export async function gamePlayerNameSet(gameId: number): Promise<Set<string>> {
+  const rows = await db
+    .select({ name: players.name })
+    .from(predictions)
+    .innerJoin(players, eq(predictions.playerId, players.id))
+    .where(and(eq(predictions.gameId, gameId), eq(predictions.model, "C")));
+  return new Set(rows.map((r) => normalisePlayerName(r.name)));
+}
+
+/** Whether a bet leg belongs on this game's tracker / settlement scope. */
+export function legBelongsToGame(
+  leg: { gameId: number | null; playerName: string | null; betRound: number | null },
+  gameId: number,
+  gameRound: number | null,
+  gameNames: Set<string>,
+): boolean {
+  if (leg.gameId === gameId) return true;
+  if (leg.gameId != null) return false;
+  const n = leg.playerName ? normalisePlayerName(leg.playerName) : "";
+  const sameRound = gameRound != null && leg.betRound === gameRound;
+  return sameRound && gameNames.has(n);
+}
+
 /**
  * The user's legs that belong to a game — matched by leg.gameId OR (for legs
  * that weren't linked to a game) by player name against the game's predicted
@@ -223,10 +247,7 @@ export async function getUserBetTracker(
   const out: BetTrackerLeg[] = [];
   for (const leg of legs) {
     const n = leg.playerName ? normaliseName(leg.playerName) : "";
-    const sameRound = round != null && leg.betRound === round;
-    const belongs =
-      leg.gameId === gameId || (leg.gameId == null && sameRound && gameNames.has(n));
-    if (!belongs) continue;
+    if (!legBelongsToGame(leg, gameId, round, gameNames)) continue;
     const m = meta.get(n);
     out.push({
       legId: leg.legId,

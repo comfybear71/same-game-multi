@@ -100,6 +100,10 @@ export default async function HomePage() {
                 away={g.away}
                 round={g.round}
                 venue={g.venue}
+                homeScore={g.homeScore}
+                awayScore={g.awayScore}
+                gameStatus={g.status}
+                kickedOff
               />
             ))}
           </div>

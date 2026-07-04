@@ -31,6 +31,7 @@ import {
   type TeamRanking,
 } from "@/lib/predictions/teamMatchup";
 import { formatAwst } from "@/lib/time";
+import { resolveLiveGameState, type LiveGameState } from "@/lib/ingest/squiggle";
 
 export const dynamic = "force-dynamic";
 
@@ -108,6 +109,31 @@ export default async function GamePage({ params }: { params: { id: string } }) {
 
   const hasData = board ? STAT_TYPES.some((s) => board!.byStat[s].length > 0) : false;
   const upcoming = game.commenceTime.getTime() > Date.now();
+  const kickedOff = !upcoming && game.status !== "complete";
+
+  let initialLive: LiveGameState | null = null;
+  if (kickedOff && game.season != null && game.round != null) {
+    try {
+      const resolved = await resolveLiveGameState(
+        game.season,
+        game.round,
+        game.squiggleId,
+        game.home,
+        game.away,
+      );
+      if (resolved && resolved.status !== "scheduled") {
+        initialLive = {
+          status: resolved.status,
+          timestr: resolved.timestr,
+          homeScore: resolved.homeScore,
+          awayScore: resolved.awayScore,
+          complete: resolved.complete,
+        };
+      }
+    } catch {
+      /* client poll will retry */
+    }
+  }
 
   return (
     <div className="space-y-5">
@@ -153,7 +179,16 @@ export default async function GamePage({ params }: { params: { id: string } }) {
         </section>
       ) : null}
 
-      <LiveScoreboard gameId={game.id} home={game.home} away={game.away} />
+      <LiveScoreboard
+        gameId={game.id}
+        home={game.home}
+        away={game.away}
+        homeScore={game.homeScore}
+        awayScore={game.awayScore}
+        gameStatus={game.status}
+        initialLive={initialLive}
+        kickedOff={kickedOff}
+      />
 
       <GameLineupPanel
         gameId={game.id}
