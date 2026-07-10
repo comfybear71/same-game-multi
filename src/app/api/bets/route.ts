@@ -2,9 +2,19 @@ import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 import { db } from "@/db";
-import { betLegs, bets, players, predictions, type StatType } from "@/db/schema";
+import {
+  betLegs,
+  bets,
+  games,
+  lineupPlayers,
+  players,
+  predictions,
+  type StatType,
+} from "@/db/schema";
 import { auth } from "@/lib/auth";
 import { userIdForEmail } from "@/lib/data/bets";
+import { canonicalTeam } from "@/lib/afl/teams";
+import { normalisePlayerName } from "@/lib/playerName";
 
 export const dynamic = "force-dynamic";
 
@@ -31,24 +41,54 @@ interface IncomingBet {
 }
 
 function normalise(name: string): string {
-  return name.toLowerCase().replace(/[^a-z\s]/g, "").replace(/\s+/g, " ").trim();
+  return normalisePlayerName(name);
 }
 
-/** Build name -> playerId lookups for players involved in a game. */
+/** Build name -> playerId lookups for everyone in this fixture's squad. */
 async function gamePlayerIndex(gameId: number) {
-  const rows = await db
+  const byFull = new Map<string, number>();
+  const byLast = new Map<string, number>();
+
+  function add(id: number, name: string) {
+    const n = normalise(name);
+    byFull.set(n, id);
+    const last = n.split(" ").slice(-1)[0];
+    if (last) byLast.set(last, id);
+  }
+
+  const predRows = await db
     .selectDistinct({ id: players.id, name: players.name })
     .from(predictions)
     .innerJoin(players, eq(predictions.playerId, players.id))
     .where(eq(predictions.gameId, gameId));
-  const byFull = new Map<string, number>();
-  const byLast = new Map<string, number>();
-  for (const r of rows) {
-    const n = normalise(r.name);
-    byFull.set(n, r.id);
-    const last = n.split(" ").slice(-1)[0];
-    if (last) byLast.set(last, r.id);
+  for (const r of predRows) add(r.id, r.name);
+
+  const lineupRows = await db
+    .select({ id: lineupPlayers.playerId, name: lineupPlayers.playerName })
+    .from(lineupPlayers)
+    .where(eq(lineupPlayers.gameId, gameId));
+  for (const r of lineupRows) {
+    if (r.id != null) add(r.id, r.name);
   }
+
+  const game = (
+    await db
+      .select({ home: games.home, away: games.away })
+      .from(games)
+      .where(eq(games.id, gameId))
+      .limit(1)
+  )[0];
+  if (game) {
+    const homeC = canonicalTeam(game.home) ?? game.home;
+    const awayC = canonicalTeam(game.away) ?? game.away;
+    const squadRows = await db
+      .select({ id: players.id, name: players.name, team: players.team })
+      .from(players);
+    for (const r of squadRows) {
+      if (r.team === homeC || r.team === awayC) add(r.id, r.name);
+    }
+  }
+
   return { byFull, byLast };
 }
 

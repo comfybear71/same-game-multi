@@ -107,8 +107,9 @@ export default async function ReviewPage() {
       <section className="card">
         <h2 className="mb-1 text-lg font-semibold text-white">Your player record</h2>
         <p className="mb-3 text-sm text-slate-400">
-          Split by stat — tap a summary card or filter pill. Sort to find your
-          best picks or who&apos;s been burning you.
+          Split by stat — tap a summary card to filter. Most backed players and
+          your strongest markets show up first. Sort the list to find who&apos;s
+          been burning you.
         </p>
         <PlayerRecordPanel records={playerRecord} />
       </section>

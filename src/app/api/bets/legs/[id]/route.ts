@@ -98,7 +98,7 @@ export async function PATCH(
     return NextResponse.json({ ok: true, statType, line });
   }
 
-  // Live in-game count — actual only, result stays pending.
+  // Live in-game count — actual only, result stays as-is (pending or void).
   if (body.result === undefined && "actualValue" in body) {
     const v = body.actualValue;
     if (v != null && (!Number.isFinite(v) || v < 0 || !Number.isInteger(v))) {

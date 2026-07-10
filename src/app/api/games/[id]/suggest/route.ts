@@ -42,7 +42,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     const suggestion = refresh
       ? await build()
       : await cached(
-          `suggest:v6:${gameId}:${focus}:${legCount}:${userId ?? "anon"}`,
+          `suggest:v7:${gameId}:${focus}:${legCount}:${userId ?? "anon"}`,
           20 * 60,
           build,
         );

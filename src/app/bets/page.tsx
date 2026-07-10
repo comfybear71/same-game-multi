@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { BetSlipScrollRow } from "@/components/BetSlipScrollRow";
 import { DeleteBetButton } from "@/components/DeleteBetButton";
 import { EditLegMarket } from "@/components/EditLegMarket";
 import { LegResultControls } from "@/components/LegResultControls";
@@ -13,6 +14,8 @@ import {
   userIdForEmail,
   type EnrichedBetSlip,
 } from "@/lib/data/bets";
+import { deriveSlipStatus } from "@/lib/betTypes";
+import { rollUpSlips } from "@/lib/settle";
 import { marginVsTarget, signed, targetLabel } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -29,6 +32,22 @@ export default async function BetsPage() {
       if (userId) slips = await getEnrichedBetsForUser(userId);
     } catch (err) {
       dbError = (err as Error).message;
+    }
+  }
+
+  // Fix slips still marked lost/won when leg results say void (stake returned).
+  const staleIds = slips
+    .filter((s) => deriveSlipStatus(s.legs) !== s.status)
+    .map((s) => s.id);
+  if (staleIds.length > 0) {
+    try {
+      await rollUpSlips(staleIds);
+      if (email) {
+        const userId = await userIdForEmail(email);
+        if (userId) slips = await getEnrichedBetsForUser(userId);
+      }
+    } catch {
+      /* display still uses deriveSlipStatus */
     }
   }
 
@@ -135,18 +154,17 @@ function RoundSection({
           {s.pending > 0 ? ` · ${s.pending} pending` : ""}
         </span>
       </summary>
-      {/* Slips scroll horizontally within the round so the page stays short as
-          weeks pile up — one card per swipe on mobile, a row on desktop. */}
-      <div className="-mx-1 flex snap-x snap-mandatory gap-3 overflow-x-auto px-1 pb-2">
-        {group.slips.map((slip) => (
-          <div
-            key={slip.id}
-            className="w-[85vw] max-w-sm shrink-0 snap-start sm:w-80"
-          >
-            <BetSlip slip={slip} />
-          </div>
-        ))}
-      </div>
+      {/* Slips scroll horizontally within the round — scrollbar sits under the heading. */}
+      <BetSlipScrollRow>
+          {group.slips.map((slip) => (
+            <div
+              key={slip.id}
+              className="w-[85vw] max-w-sm shrink-0 snap-start sm:w-80"
+            >
+              <BetSlip slip={slip} />
+            </div>
+          ))}
+      </BetSlipScrollRow>
     </details>
   );
 }
@@ -167,11 +185,14 @@ function BetSlip({ slip }: { slip: EnrichedBetSlip }) {
     lost: "bg-accent-loss/15 text-accent-loss",
     void: "bg-slate-600/30 text-slate-300",
   };
-  const settledLegs = slip.legs.filter(
+  const voids = slip.legs.filter((l) => l.result === "void").length;
+  const activeLegs = slip.legs.filter((l) => l.result !== "void");
+  const settledLegs = activeLegs.filter(
     (l) => l.result === "hit" || l.result === "miss",
   );
   const hits = settledLegs.filter((l) => l.result === "hit").length;
   const misses = settledLegs.length - hits;
+  const displayStatus = deriveSlipStatus(slip.legs);
 
   return (
     <div className="card">
@@ -189,36 +210,53 @@ function BetSlip({ slip }: { slip: EnrichedBetSlip }) {
         <span className="text-sm text-slate-400">
           {slip.round ? `Round ${slip.round}` : "Multi"} · {slip.legs.length} legs
         </span>
-        <span className={`pill ${statusColor[slip.status]}`}>{slip.status}</span>
+        <span className={`pill ${statusColor[displayStatus]}`}>{displayStatus}</span>
       </div>
       <div className="mt-2 flex gap-4 text-sm text-slate-300">
         <span>Stake ${slip.totalStake?.toFixed(2) ?? "—"}</span>
         <span>Odds {slip.totalOdds?.toFixed(2) ?? "—"}</span>
       </div>
-      {settledLegs.length > 0 ? (
+      {displayStatus === "void" ? (
+        <p className="mt-2 text-sm text-slate-400">
+          Stake returned — {voids} injured leg{voids === 1 ? "" : "s"} voided
+          {hits > 0 ? ` · ${hits}/${activeLegs.length} active legs hit` : ""}
+        </p>
+      ) : settledLegs.length > 0 ? (
         <p className="mt-2 text-sm">
           <span className="font-semibold text-white">
             {hits}/{settledLegs.length}
           </span>{" "}
           <span className="text-slate-400">legs hit</span>
-          {slip.status === "lost" && misses === 1 ? (
+          {voids > 0 ? (
+            <span className="text-slate-500">
+              {" "}
+              · {voids} void
+            </span>
+          ) : null}
+          {displayStatus === "lost" && misses === 1 ? (
             <span className="text-accent-pending">
               {" "}
               — one leg away from a winner
             </span>
           ) : null}
         </p>
+      ) : voids > 0 ? (
+        <p className="mt-2 text-sm text-slate-400">{voids} void leg{voids === 1 ? "" : "s"}</p>
       ) : null}
       <ul className="mt-3 space-y-1">
         {slip.legs.map((leg) => {
+          const isVoid = leg.result === "void";
           const settled = leg.result === "hit" || leg.result === "miss";
           const margin =
-            leg.actualValue != null
+            !isVoid && leg.actualValue != null
               ? marginVsTarget(leg.actualValue, leg.line)
               : null;
           const colors = leg.team ? teamColors(leg.team) : null;
           return (
-            <li key={leg.id} className="space-y-1 text-sm">
+            <li
+              key={leg.id}
+              className={`space-y-1 text-sm${isVoid ? " opacity-90" : ""}`}
+            >
               <div className="flex justify-between gap-2">
                 <div className="flex min-w-0 items-start gap-1.5">
                   {colors ? (
@@ -251,20 +289,32 @@ function BetSlip({ slip }: { slip: EnrichedBetSlip }) {
                           </span>
                         ) : null}
                       </span>
+                    ) : isVoid && leg.actualValue != null ? (
+                      <span className="text-slate-500">
+                        {" "}
+                        · tracked{" "}
+                        <span className="text-slate-300">{leg.actualValue}</span>
+                      </span>
                     ) : null}
                   </span>
                 </div>
-                <span
-                  className={`shrink-0 ${
-                    leg.result === "hit"
-                      ? "text-accent-win"
-                      : leg.result === "miss"
-                        ? "text-accent-loss"
-                        : "text-slate-500"
-                  }`}
-                >
-                  {leg.result}
-                </span>
+                {isVoid ? (
+                  <span className="shrink-0 rounded bg-slate-600/60 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-300">
+                    Void
+                  </span>
+                ) : (
+                  <span
+                    className={`shrink-0 capitalize ${
+                      leg.result === "hit"
+                        ? "text-accent-win"
+                        : leg.result === "miss"
+                          ? "text-accent-loss"
+                          : "text-slate-500"
+                    }`}
+                  >
+                    {leg.result}
+                  </span>
+                )}
               </div>
               <LegResultControls
                 legId={leg.id}
@@ -282,7 +332,7 @@ function BetSlip({ slip }: { slip: EnrichedBetSlip }) {
           );
         })}
       </ul>
-      {slip.status === "pending" ? (
+      {displayStatus === "pending" ? (
         <div className="mt-3 border-t border-surface-border pt-3">
           <DeleteBetButton betId={slip.id} />
         </div>

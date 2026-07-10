@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { GeneratePredictionsButton } from "@/components/GeneratePredictionsButton";
+import { MatchBriefingCard } from "@/components/MatchBriefingCard";
 import { GameLineupPanel } from "@/components/RoundRosterPanel";
 import { LiveBetTracker } from "@/components/LiveBetTracker";
 import { LiveScoreboard } from "@/components/LiveScoreboard";
@@ -21,6 +22,7 @@ import {
 } from "@/lib/data/bets";
 import { canonicalTeam } from "@/lib/afl/teams";
 import { getGameById, getRecentTeamForm, type FormResult } from "@/lib/data/games";
+import { getMatchBriefing } from "@/lib/data/matchBriefing";
 import { getStatBoard, type StatBoard } from "@/lib/data/statboard";
 import { getGameLineupRoster, type RoundLineupPlayer } from "@/lib/data/roundRoster";
 import { getTeamRankings } from "@/lib/data/teamStats";
@@ -107,6 +109,13 @@ export default async function GamePage({ params }: { params: { id: string } }) {
   }
   const hasTeamStats = !!(homeRanking || awayRanking || homeForm || awayForm);
 
+  let matchBriefing = null;
+  try {
+    matchBriefing = await getMatchBriefing(game.home, game.away, game.season);
+  } catch {
+    matchBriefing = null;
+  }
+
   const hasData = board ? STAT_TYPES.some((s) => board!.byStat[s].length > 0) : false;
   const upcoming = game.commenceTime.getTime() > Date.now();
   const kickedOff = !upcoming && game.status !== "complete";
@@ -151,6 +160,16 @@ export default async function GamePage({ params }: { params: { id: string } }) {
         </h1>
         <p className="mt-1 text-sm text-slate-400">{formatAwst(game.commenceTime)}</p>
       </header>
+
+      {matchBriefing ? (
+        <MatchBriefingCard
+          home={game.home}
+          away={game.away}
+          venue={game.venue}
+          commenceTime={game.commenceTime}
+          briefing={matchBriefing}
+        />
+      ) : null}
 
       {hasTeamStats ? (
         <section className="card">

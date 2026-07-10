@@ -4,10 +4,8 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import { teamColors } from "@/lib/afl/teamColors";
-import {
-  normalisePlayerName,
-  type PlayerHistorySummary,
-} from "@/lib/data/bets";
+import type { PlayerHistorySummary } from "@/lib/data/bets";
+import { normalisePlayerName } from "@/lib/playerName";
 import type {
   RoundGameLineup,
   RoundLineupPlayer,

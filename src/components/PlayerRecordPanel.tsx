@@ -34,6 +34,58 @@ function statSummary(records: PlayerBetRecord[], stat: string) {
   return { rows: rows.length, bets, hits, rate: bets > 0 ? hits / bets : null };
 }
 
+type PlayerAggregate = {
+  playerName: string;
+  bets: number;
+  hits: number;
+  topStat: string;
+  topStatBets: number;
+};
+
+function aggregateByPlayer(records: PlayerBetRecord[]): PlayerAggregate[] {
+  const byName = new Map<string, PlayerAggregate & { byStat: Map<string, { bets: number; hits: number }> }>();
+
+  for (const r of records) {
+    let row = byName.get(r.playerName);
+    if (!row) {
+      row = { playerName: r.playerName, bets: 0, hits: 0, topStat: r.statType, topStatBets: 0, byStat: new Map() };
+      byName.set(r.playerName, row);
+    }
+    row.bets += r.bets;
+    row.hits += r.hits;
+    const statRow = row.byStat.get(r.statType) ?? { bets: 0, hits: 0 };
+    statRow.bets += r.bets;
+    statRow.hits += r.hits;
+    row.byStat.set(r.statType, statRow);
+    if (statRow.bets > row.topStatBets) {
+      row.topStatBets = statRow.bets;
+      row.topStat = r.statType;
+    }
+  }
+
+  return [...byName.values()]
+    .sort((a, b) => b.bets - a.bets || a.playerName.localeCompare(b.playerName))
+    .map(({ byStat: _, ...rest }) => rest);
+}
+
+function statInsight(
+  summaries: { stat: string; bets: number; rate: number | null }[],
+): string | null {
+  const withData = summaries.filter((s) => s.bets >= 3);
+  if (withData.length < 2) return null;
+  const ranked = [...withData].sort((a, b) => (b.rate ?? 0) - (a.rate ?? 0));
+  const best = ranked[0]!;
+  const worst = ranked[ranked.length - 1]!;
+  const bestPct = Math.round((best.rate ?? 0) * 100);
+  const worstPct = Math.round((worst.rate ?? 0) * 100);
+  if (best.stat === worst.stat) return null;
+  return `${capitalize(best.stat)} hit ${bestPct}% — your strongest market. ${capitalize(worst.stat)} at ${worstPct}% — trickiest so far.`;
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 export function PlayerRecordPanel({ records }: { records: PlayerBetRecord[] }) {
   const [statFilter, setStatFilter] = useState<StatFilter>("all");
   const [sortMode, setSortMode] = useState<SortMode>("volume");
@@ -46,6 +98,10 @@ export function PlayerRecordPanel({ records }: { records: PlayerBetRecord[] }) {
       })),
     [records],
   );
+
+  const insight = useMemo(() => statInsight(summaries), [summaries]);
+
+  const mostBacked = useMemo(() => aggregateByPlayer(records).slice(0, 8), [records]);
 
   const filtered = useMemo(() => {
     let rows =
@@ -119,6 +175,46 @@ export function PlayerRecordPanel({ records }: { records: PlayerBetRecord[] }) {
           </button>
         ))}
       </div>
+
+      {insight ? (
+        <div className="rounded-lg border border-accent/30 bg-accent/5 px-3 py-2.5 text-sm text-slate-300">
+          <span className="font-semibold text-accent">What we&apos;ve learned: </span>
+          {insight}
+        </div>
+      ) : null}
+
+      {mostBacked.length > 0 ? (
+        <div>
+          <div className="mb-2 text-xs uppercase tracking-wide text-slate-500">
+            Most backed players
+          </div>
+          <div className="scroll-x-top flex gap-2 overflow-x-auto pb-1">
+            {mostBacked.map((p) => {
+              const pct = p.bets > 0 ? Math.round((p.hits / p.bets) * 100) : 0;
+              const cls =
+                pct >= 70 ? "border-accent-win/40 bg-accent-win/5" : pct < 45 ? "border-accent-loss/30" : "border-surface-border";
+              return (
+                <div
+                  key={p.playerName}
+                  className={`flex min-w-[9rem] shrink-0 flex-col rounded-lg border px-2.5 py-2 ${cls}`}
+                >
+                  <div className="truncate text-sm font-semibold text-white">{p.playerName}</div>
+                  <div className="mt-0.5 text-[11px] capitalize text-slate-500">
+                    Mostly {p.topStat} · {p.bets} legs
+                  </div>
+                  <div
+                    className={`mt-1 text-sm font-bold tabular-nums ${
+                      pct >= 70 ? "text-accent-win" : pct < 45 ? "text-accent-loss" : "text-accent-pending"
+                    }`}
+                  >
+                    {p.hits}/{p.bets} ({pct}%)
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
 
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
         <span>

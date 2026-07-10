@@ -90,6 +90,24 @@ function chooseRung(rungs: number[], prediction: number): number | null {
 }
 
 /**
+ * Line for the suggest picker: highest bookie rung the projection still clears,
+ * otherwise our standard model rung. Never lock in a bookie price above the
+ * projection — that was dropping high-fantasy players (e.g. a 116-fantasy mid
+ * with a steep posted line) from the +edge pool entirely.
+ */
+function pickSuggestLine(
+  rungs: number[],
+  prediction: number,
+  statType: StatType,
+): number | null {
+  const bookie = rungs.length > 0 ? chooseRung(rungs, prediction) : null;
+  const model = modelPropLine(statType, prediction);
+  if (bookie != null && prediction > bookie) return bookie;
+  if (model != null && prediction > model) return model;
+  return model ?? bookie;
+}
+
+/**
  * Nudge model confidence toward the punter's own track record on this exact
  * player + stat — "remember" past results so the same call isn't repeated at
  * full confidence if it's missed before. Influence is capped and shrinks in
@@ -181,11 +199,14 @@ async function candidateLegs(
     // fall back to our own projection as the line, same floor convention as
     // the stat board's "AI pick". Odds stay null; the picker shows "—" and
     // the punter sets their own target.
-    const bookieLine = chooseRung([...(rungsByKey.get(key) ?? [])], p.value);
-    const modelLine = modelPropLine(p.statType, p.value);
-    const line = bookieLine ?? modelLine;
+    const rungs = [...(rungsByKey.get(key) ?? [])];
+    const bookieLine = rungs.length > 0 ? chooseRung(rungs, p.value) : null;
+    const line = pickSuggestLine(rungs, p.value, p.statType);
     if (line == null) continue;
-    const odds = bookieLine == null ? null : median(oddsByRung.get(`${key}:${line}`) ?? []);
+    const odds =
+      bookieLine != null && line === bookieLine && p.value > bookieLine
+        ? median(oddsByRung.get(`${key}:${line}`) ?? [])
+        : null;
     const form = formByKey.get(key) ?? [];
     const hitRate = form.length > 0 ? form.filter((v) => v > line).length / form.length : null;
     const edge = p.value - line;
