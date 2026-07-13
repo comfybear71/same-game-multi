@@ -38,48 +38,54 @@ export function SuggestedMultis({
   const [error, setError] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
   const [editableLegs, setEditableLegs] = useState<EditableLeg[]>([]);
-  const lastAppliedRef = useRef(-1);
+  const lastAppliedRefresh = useRef(-1);
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
     setError(null);
     const refresh = refreshToken > 0 ? "&refresh=1" : "";
-    fetch(`/api/games/${gameId}/suggest?focus=${focus}&legs=${legCount}${refresh}`)
+    fetch(`/api/games/${gameId}/suggest?focus=${focus}&legs=${legCount}${refresh}`, {
+      signal: controller.signal,
+    })
       .then((r) => r.json())
       .then((json) => {
         if (cancelled) return;
         if (!json.ok) throw new Error(json.error || "failed");
         setData(json.suggestion);
       })
-      .catch((e) => !cancelled && setError((e as Error).message))
+      .catch((e) => {
+        if (cancelled || (e as Error).name === "AbortError") return;
+        setError((e as Error).message);
+      })
       .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [gameId, focus, legCount, refreshToken]);
 
-  // Only replace the punter's ticket when picks are first loaded or after ↻ New picks.
-  // Switching focus / leg count refetches suggestions for the info panel but keeps edits.
+  // Only replace the ticket on first load or ↻ New picks — not when browsing tabs.
   useEffect(() => {
     if (!data) return;
-    if (lastAppliedRef.current === refreshToken) return;
+    if (lastAppliedRefresh.current === refreshToken) return;
     setEditableLegs(toEditable(data.legs));
-    lastAppliedRef.current = refreshToken;
+    lastAppliedRefresh.current = refreshToken;
   }, [data, refreshToken]);
 
+  const ticketStatCounts = countByStat(editableLegs);
+
   return (
-    <section className="card space-y-3">
+    <section className="card relative z-20 space-y-3">
       <div>
         <h2 className="text-lg font-semibold text-white">Suggested multi</h2>
         <p className="text-sm text-slate-400">
-          AI-picked from AFL Tables form and our model, ranked by confidence and
-          fantasy. Choose how many legs — more legs means a bigger payout but a
-          lower combined chance. Switch tabs (Any → Disposals → Goals, etc.) and use{" "}
-          <span className="text-slate-300">+ Add player</span> to build the full
-          ticket before you tap{" "}
-          <span className="text-slate-300">Log this multi</span>. You can log
-          again for a second slip on the same game.
+          Build your ticket across markets — pick disposals, switch to Goals, add
+          more, nothing drops off. Tabs show AI picks for that stat (tick to add).
+          Tap{" "}
+          <span className="text-slate-300">↻ New picks</span> to reset the whole
+          ticket from scratch.
         </p>
       </div>
 
@@ -88,6 +94,7 @@ export function SuggestedMultis({
         {FOCUSES.map((f) => (
           <button
             key={f.key}
+            type="button"
             onClick={() => setFocus(f.key)}
             className={`whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium ${
               focus === f.key
@@ -105,9 +112,10 @@ export function SuggestedMultis({
         <span className="text-xs uppercase tracking-wide text-slate-400">Legs</span>
         <div className="flex items-center gap-2">
           <button
+            type="button"
             className="flex h-7 w-7 items-center justify-center rounded-full border border-surface-border text-slate-300 disabled:opacity-40"
             onClick={() => setLegCount((n) => Math.max(MIN_LEGS, n - 1))}
-            disabled={legCount <= MIN_LEGS}
+            disabled={legCount <= MIN_LEGS || loading}
           >
             −
           </button>
@@ -115,14 +123,17 @@ export function SuggestedMultis({
             {legCount}
           </span>
           <button
+            type="button"
             className="flex h-7 w-7 items-center justify-center rounded-full border border-surface-border text-slate-300 disabled:opacity-40"
             onClick={() => setLegCount((n) => Math.min(MAX_LEGS, n + 1))}
-            disabled={legCount >= MAX_LEGS}
+            disabled={legCount >= MAX_LEGS || loading}
           >
             +
           </button>
         </div>
-        <span className="text-[11px] text-slate-500">up to {MAX_LEGS} on one ticket</span>
+        <span className="text-[11px] text-slate-500">
+          suggestions shown per tab
+        </span>
         <button
           type="button"
           onClick={() => setRefreshToken((n) => n + 1)}
@@ -154,7 +165,11 @@ export function SuggestedMultis({
           gameId={gameId}
           round={round}
           focus={focus}
-          onLogged={() => setRefreshToken((t) => t + 1)}
+          ticketStatCounts={ticketStatCounts}
+          onLogged={() => {
+            lastAppliedRefresh.current = -1;
+            setRefreshToken((t) => t + 1);
+          }}
         />
       ) : null}
 
@@ -177,6 +192,14 @@ function SuggestionInfoModal({
   onClose: () => void;
 }) {
   const legs = suggestion?.legs ?? [];
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
 
   return (
     <div
@@ -329,6 +352,21 @@ function legKey(playerId: number, statType: string): string {
   return `${playerId}:${statType}`;
 }
 
+function countByStat(legs: EditableLeg[]): Partial<Record<StatType, number>> {
+  const out: Partial<Record<StatType, number>> = {};
+  for (const l of legs) {
+    out[l.statType] = (out[l.statType] ?? 0) + 1;
+  }
+  return out;
+}
+
+function statCountLabel(counts: Partial<Record<StatType, number>>): string {
+  const parts = (["disposals", "goals", "marks", "tackles"] as const)
+    .filter((s) => (counts[s] ?? 0) > 0)
+    .map((s) => `${counts[s]} ${s}`);
+  return parts.length > 0 ? parts.join(" · ") : "";
+}
+
 function SuggestionCard({
   s,
   legs,
@@ -336,6 +374,7 @@ function SuggestionCard({
   gameId,
   round,
   focus,
+  ticketStatCounts,
   onLogged,
 }: {
   s: Suggestion;
@@ -344,6 +383,7 @@ function SuggestionCard({
   gameId: number;
   round: number | null;
   focus: StatType | "any";
+  ticketStatCounts: Partial<Record<StatType, number>>;
   onLogged: () => void;
 }) {
   const router = useRouter();
@@ -435,15 +475,41 @@ function SuggestionCard({
     }
   }
 
+  function toggleSuggestion(leg: SuggestedLeg, selected: boolean) {
+    const key = legKey(leg.playerId, leg.statType);
+    if (selected) {
+      if (legs.length >= MAX_LEGS) return;
+      setLegs((prev) =>
+        prev.some((l) => legKey(l.playerId, l.statType) === key)
+          ? prev
+          : [...prev, ...toEditable([leg])],
+      );
+    } else {
+      setLegs((prev) => prev.filter((l) => legKey(l.playerId, l.statType) !== key));
+    }
+  }
+
+  const focusLabel = FOCUSES.find((f) => f.key === focus)?.label ?? "Any";
+
   return (
     <div className="rounded-xl border border-surface-border p-3 space-y-3">
       {s.rationale ? <p className="text-sm text-slate-200">{s.rationale}</p> : null}
 
+      <div>
+        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            Your ticket · {legs.length} leg{legs.length === 1 ? "" : "s"}
+          </div>
+          {legs.length > 0 ? (
+            <div className="text-[11px] capitalize text-slate-500">
+              {statCountLabel(ticketStatCounts)}
+            </div>
+          ) : null}
+        </div>
+
       {legs.length === 0 ? (
         <p className="text-sm text-slate-400">
-          {s.legs.length === 0
-            ? "Run Generate predictions first (needs an uploaded lineup). Legs are built from AFL Tables form and our model — no bookmaker API required."
-            : "All legs removed — add players below or pick at least one."}
+          Tick players below or tap ↻ New picks to start from AI suggestions.
         </p>
       ) : (
         <ul className="space-y-2">
@@ -514,6 +580,7 @@ function SuggestionCard({
                   </div>
                 </div>
                 <button
+                  type="button"
                   className="text-slate-500 hover:text-accent-loss"
                   onClick={() => remove(l.playerId, l.statType)}
                   aria-label={`Remove ${l.playerName}`}
@@ -525,6 +592,23 @@ function SuggestionCard({
           })}
         </ul>
       )}
+      </div>
+
+      <LogActionBar
+        legCount={legs.length}
+        ticketChance={ticketChance}
+        logging={logging}
+        uploading={uploading}
+        onLog={logMulti}
+      />
+
+      <TabLegPicker
+        label={focusLabel}
+        suggestions={s.legs}
+        legs={legs}
+        onToggle={toggleSuggestion}
+        atMax={legs.length >= MAX_LEGS}
+      />
 
       <AddPlayerPanel
         gameId={gameId}
@@ -585,34 +669,179 @@ function SuggestionCard({
               </div>
             ) : null}
           </div>
-          <button
-            type="button"
-            className="btn"
-            onClick={logMulti}
-            disabled={logging || uploading || legs.length === 0}
-          >
-            {logging ? "Logging…" : `Log this multi (${legs.length} legs)`}
-          </button>
           {logError ? <p className="text-sm text-accent-loss">{logError}</p> : null}
           {logSuccess ? (
             <p className="text-sm text-accent-win">{logSuccess}</p>
           ) : null}
           <p className="max-w-sm text-[11px] text-slate-500">
-            Only log once the ticket matches Sportsbet — you can add legs from
-            each stat tab first. Attach the slip screenshot for your records.
+            Only log once the ticket matches Sportsbet — tick players above, then
+            attach the slip screenshot for your records.
           </p>
         </div>
-        <div className="text-right">
+        <div className="text-right sm:hidden">
           <div className="text-xs text-slate-400">Modelled chance</div>
           <div className="text-lg font-bold text-white">
             {ticketChance != null ? `${Math.round(ticketChance * 100)}%` : "—"}
           </div>
-          <div className="max-w-xs text-[11px] text-slate-500">
-            All legs clear — fewer legs or lower targets raises this; more legs or
-            higher targets lowers it.
-          </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function LogActionBar({
+  legCount,
+  ticketChance,
+  logging,
+  uploading,
+  onLog,
+}: {
+  legCount: number;
+  ticketChance: number | null;
+  logging: boolean;
+  uploading: boolean;
+  onLog: () => void;
+}) {
+  const chancePct = ticketChance != null ? Math.round(ticketChance * 100) : null;
+
+  return (
+    <div className="sticky bottom-20 z-10 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-surface-border bg-surface-card/95 p-3 shadow-lg backdrop-blur sm:bottom-2">
+      <div className="min-w-0">
+        <div className="text-[11px] uppercase tracking-wide text-slate-500">
+          Ready to log
+        </div>
+        <div className="mt-0.5 flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+          <span className="text-sm text-slate-300">
+            Modelled chance{" "}
+            <span className="font-bold tabular-nums text-white">
+              {chancePct != null ? `${chancePct}%` : "—"}
+            </span>
+          </span>
+          <span className="text-sm text-slate-500">
+            {legCount === 0
+              ? "Tick players below to build your ticket"
+              : `${legCount} leg${legCount === 1 ? "" : "s"} selected`}
+          </span>
+        </div>
+      </div>
+      <button
+        type="button"
+        className="btn inline-flex shrink-0 items-center gap-2"
+        onClick={onLog}
+        disabled={logging || uploading || legCount === 0}
+        aria-live="polite"
+        aria-label={
+          legCount === 0
+            ? "Log this multi — add legs first"
+            : `Log this multi with ${legCount} legs`
+        }
+      >
+        {logging ? (
+          "Logging…"
+        ) : (
+          <>
+            Log this multi
+            <span
+              className={`inline-flex min-w-[1.75rem] items-center justify-center rounded-full px-2 py-0.5 text-sm font-bold tabular-nums ${
+                legCount > 0
+                  ? "bg-surface text-accent"
+                  : "bg-surface/80 text-slate-500"
+              }`}
+            >
+              {legCount}
+            </span>
+          </>
+        )}
+      </button>
+    </div>
+  );
+}
+
+function TabLegPicker({
+  label,
+  suggestions,
+  legs,
+  onToggle,
+  atMax,
+}: {
+  label: string;
+  suggestions: SuggestedLeg[];
+  legs: EditableLeg[];
+  onToggle: (leg: SuggestedLeg, selected: boolean) => void;
+  atMax: boolean;
+}) {
+  const selectedKeys = new Set(legs.map((l) => legKey(l.playerId, l.statType)));
+
+  if (suggestions.length === 0) {
+    return (
+      <p className="text-sm text-slate-400">
+        No {label.toLowerCase()} suggestions for this game — try another tab or + Add
+        player.
+      </p>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border border-surface-border/80 bg-surface/30 p-2.5">
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+        <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+          Add from {label}
+        </div>
+        <div className="text-[11px] tabular-nums text-slate-500">
+          {legs.length} on ticket
+        </div>
+      </div>
+      <ul className="max-h-72 space-y-1 overflow-y-auto">
+        {suggestions.map((leg) => {
+          const key = legKey(leg.playerId, leg.statType);
+          const checked = selectedKeys.has(key);
+          const c = teamColors(leg.team);
+          const target = lineTarget(leg.line);
+          const disabled = !checked && atMax;
+          return (
+            <li key={key}>
+              <label
+                className={`flex cursor-pointer items-center gap-2 rounded px-1.5 py-1.5 ${
+                  checked ? "bg-accent/10 ring-1 ring-accent/30" : "hover:bg-surface"
+                } ${disabled ? "cursor-not-allowed opacity-50" : ""}`}
+              >
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 shrink-0 rounded border-surface-border accent-accent"
+                  checked={checked}
+                  disabled={disabled}
+                  onChange={(e) => onToggle(leg, e.target.checked)}
+                />
+                <span
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-[11px] font-bold"
+                  style={{ background: c.bg, color: c.fg }}
+                >
+                  {leg.jumper ?? "–"}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-sm text-white">
+                  {leg.playerName}
+                </span>
+                <span className="text-xs capitalize text-slate-400">
+                  {leg.statType} {target}+
+                </span>
+                <span className="text-[11px] text-slate-500">
+                  {Math.round(leg.confidence * 100)}% model
+                </span>
+                {leg.fantasyAvg != null ? (
+                  <span className="hidden text-[11px] text-slate-500 sm:inline">
+                    fantasy {Math.round(leg.fantasyAvg)}
+                  </span>
+                ) : null}
+              </label>
+            </li>
+          );
+        })}
+      </ul>
+      {atMax ? (
+        <p className="mt-2 text-[11px] text-slate-500">
+          Ticket full ({MAX_LEGS} legs max) — untick someone to add more.
+        </p>
+      ) : null}
     </div>
   );
 }

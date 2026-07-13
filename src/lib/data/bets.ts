@@ -5,12 +5,20 @@ import {
   betLegs,
   bets,
   games,
+  lineupPlayers,
   players,
   predictions,
   users,
   type Bet,
   type BetLeg,
 } from "@/db/schema";
+import type { BetTrackerLeg } from "@/lib/betTypes";
+import { deriveSlipStatus } from "@/lib/betTypes";
+import { canonicalTeam } from "@/lib/afl/teams";
+import { normalisePlayerName } from "@/lib/playerName";
+
+export type { BetTrackerLeg } from "@/lib/betTypes";
+export { normalisePlayerName } from "@/lib/playerName";
 
 export interface BetWithLegs extends Bet {
   legs: BetLeg[];
@@ -145,39 +153,94 @@ export async function getBetsForUser(userId: number): Promise<BetWithLegs[]> {
   return result;
 }
 
-export interface BetTrackerLeg {
-  legId: number;
-  betId: number;
-  playerName: string | null;
-  jumper: number | null;
-  team: string | null;
-  statType: string;
-  line: number;
-  odds: number | null;
-  result: string;
-  actualValue: number | null;
-  prediction: number | null; // our Model C view, as a live proxy
-}
-
-export function normalisePlayerName(name: string): string {
-  return name.toLowerCase().replace(/[^a-z\s]/g, "").replace(/\s+/g, " ").trim();
-}
-
 function normaliseName(name: string): string {
   return normalisePlayerName(name);
 }
 
 /** Model C predicted player names for a game — used to match unlinked bet legs. */
 export async function gamePlayerNameSet(gameId: number): Promise<Set<string>> {
-  const rows = await db
-    .select({ name: players.name })
+  const { names } = await gameRosterContext(gameId);
+  return names;
+}
+
+interface GameRosterContext {
+  names: Set<string>;
+  meta: Map<string, { jumper: number | null; team: string }>;
+  predByKey: Map<string, number>;
+}
+
+/** Predictions + uploaded lineup + both squads — for matching and display. */
+async function gameRosterContext(gameId: number): Promise<GameRosterContext> {
+  const names = new Set<string>();
+  const meta = new Map<string, { jumper: number | null; team: string }>();
+  const predByKey = new Map<string, number>();
+
+  const predRows = await db
+    .select({
+      name: players.name,
+      jumper: players.jumper,
+      team: players.team,
+      statType: predictions.statType,
+      value: predictions.predictedValue,
+    })
     .from(predictions)
     .innerJoin(players, eq(predictions.playerId, players.id))
     .where(and(eq(predictions.gameId, gameId), eq(predictions.model, "C")));
-  return new Set(rows.map((r) => normalisePlayerName(r.name)));
+
+  for (const p of predRows) {
+    const n = normalisePlayerName(p.name);
+    names.add(n);
+    meta.set(n, { jumper: p.jumper, team: p.team });
+    predByKey.set(`${n}:${p.statType}`, p.value);
+  }
+
+  const lineupRows = await db
+    .select({
+      name: lineupPlayers.playerName,
+      jumper: lineupPlayers.jumper,
+      team: lineupPlayers.team,
+    })
+    .from(lineupPlayers)
+    .where(eq(lineupPlayers.gameId, gameId));
+
+  for (const p of lineupRows) {
+    const n = normalisePlayerName(p.name);
+    names.add(n);
+    if (!meta.has(n)) meta.set(n, { jumper: p.jumper, team: p.team });
+  }
+
+  const game = (
+    await db
+      .select({ home: games.home, away: games.away })
+      .from(games)
+      .where(eq(games.id, gameId))
+      .limit(1)
+  )[0];
+  if (game) {
+    const homeC = canonicalTeam(game.home) ?? game.home;
+    const awayC = canonicalTeam(game.away) ?? game.away;
+    const squadRows = await db
+      .select({ name: players.name, jumper: players.jumper, team: players.team })
+      .from(players);
+    for (const p of squadRows) {
+      if (p.team !== homeC && p.team !== awayC) continue;
+      const n = normalisePlayerName(p.name);
+      names.add(n);
+      if (!meta.has(n)) meta.set(n, { jumper: p.jumper, team: p.team });
+    }
+  }
+
+  return { names, meta, predByKey };
 }
 
-/** Whether a bet leg belongs on this game's tracker / settlement scope. */
+export interface LegGameScope {
+  gameId: number | null;
+  playerName: string | null;
+  betRound: number | null;
+  betId: number;
+}
+
+/** Whether a leg directly matches this game (not same-slip siblings). */
 export function legBelongsToGame(
   leg: { gameId: number | null; playerName: string | null; betRound: number | null },
   gameId: number,
@@ -189,6 +252,31 @@ export function legBelongsToGame(
   const n = leg.playerName ? normalisePlayerName(leg.playerName) : "";
   const sameRound = gameRound != null && leg.betRound === gameRound;
   return sameRound && gameNames.has(n);
+}
+
+/** Same-game multis: if any leg on the slip belongs, every leg on that slip does. */
+export function slipBetIdsForGame(
+  legs: LegGameScope[],
+  gameId: number,
+  gameRound: number | null,
+  gameNames: Set<string>,
+): Set<number> {
+  const ids = new Set<number>();
+  for (const leg of legs) {
+    if (legBelongsToGame(leg, gameId, gameRound, gameNames)) ids.add(leg.betId);
+  }
+  return ids;
+}
+
+export function legInGameScope(
+  leg: LegGameScope,
+  gameId: number,
+  gameRound: number | null,
+  gameNames: Set<string>,
+  slipBetIds: Set<number>,
+): boolean {
+  if (legBelongsToGame(leg, gameId, gameRound, gameNames)) return true;
+  return slipBetIds.has(leg.betId);
 }
 
 /**
@@ -205,27 +293,7 @@ export async function getUserBetTracker(
   gameId: number,
   round: number | null = null,
 ): Promise<BetTrackerLeg[]> {
-  const gamePlayers = await db
-    .select({
-      name: players.name,
-      jumper: players.jumper,
-      team: players.team,
-      statType: predictions.statType,
-      value: predictions.predictedValue,
-    })
-    .from(predictions)
-    .innerJoin(players, eq(predictions.playerId, players.id))
-    .where(and(eq(predictions.gameId, gameId), eq(predictions.model, "C")));
-
-  const meta = new Map<string, { jumper: number | null; team: string }>();
-  const predByKey = new Map<string, number>();
-  const gameNames = new Set<string>();
-  for (const p of gamePlayers) {
-    const n = normaliseName(p.name);
-    gameNames.add(n);
-    meta.set(n, { jumper: p.jumper, team: p.team });
-    predByKey.set(`${n}:${p.statType}`, p.value);
-  }
+  const { names: gameNames, meta, predByKey } = await gameRosterContext(gameId);
 
   const legs = await db
     .select({
@@ -244,10 +312,24 @@ export async function getUserBetTracker(
     .innerJoin(bets, eq(betLegs.betId, bets.id))
     .where(eq(bets.userId, userId));
 
+  const scopeLegs: LegGameScope[] = legs.map((leg) => ({
+    betId: leg.betId,
+    gameId: leg.gameId,
+    playerName: leg.playerName,
+    betRound: leg.betRound,
+  }));
+  const slipBetIds = slipBetIdsForGame(scopeLegs, gameId, round, gameNames);
+
   const out: BetTrackerLeg[] = [];
   for (const leg of legs) {
+    const scope: LegGameScope = {
+      betId: leg.betId,
+      gameId: leg.gameId,
+      playerName: leg.playerName,
+      betRound: leg.betRound,
+    };
+    if (!legInGameScope(scope, gameId, round, gameNames, slipBetIds)) continue;
     const n = leg.playerName ? normaliseName(leg.playerName) : "";
-    if (!legBelongsToGame(leg, gameId, round, gameNames)) continue;
     const m = meta.get(n);
     out.push({
       legId: leg.legId,
@@ -446,14 +528,18 @@ export function summarise(slips: BetWithLegs[]): BetSummary {
   for (const s of slips) {
     const stake = s.totalStake ?? 0;
     staked += stake;
-    if (s.status === "won") {
+    const status = deriveSlipStatus(s.legs);
+    if (status === "won") {
       counts.won++;
       settledStake += stake;
       returned += stake * (s.totalOdds ?? 0);
-    } else if (s.status === "lost") {
+    } else if (status === "lost") {
       counts.lost++;
       settledStake += stake;
-    } else if (s.status === "pending") {
+    } else if (status === "void") {
+      settledStake += stake;
+      returned += stake;
+    } else if (status === "pending") {
       counts.pending++;
     }
   }

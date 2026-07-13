@@ -36,4 +36,23 @@ body {
   .nav-link {
     @apply rounded-lg px-3 py-2 text-sm font-medium text-slate-300 hover:bg-surface-card hover:text-white;
   }
+
+  /* Horizontal scroll with the scrollbar along the top edge. */
+  .scroll-x-top {
+    overflow-x: auto;
+    transform: scaleY(-1);
+    scrollbar-color: #1f2a3a #0b0f17;
+    scrollbar-width: thin;
+  }
+
+  .scroll-x-top > * {
+    transform: scaleY(-1);
+  }
+
+  /* Recharts must never steal clicks from buttons above/below player cards. */
+  .recharts-responsive-container,
+  .recharts-wrapper,
+  .recharts-surface {
+    pointer-events: none !important;
+  }
 }

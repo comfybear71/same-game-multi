@@ -123,6 +123,9 @@ export const games = pgTable(
     // Final scores, populated on settle.
     homeScore: integer("home_score"),
     awayScore: integer("away_score"),
+    // Optional per-game preview / narrative (Sportsbet, AFL.com, etc.) —
+    // pasted by the group so each fixture has its own story on the briefing.
+    matchNotes: text("match_notes"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

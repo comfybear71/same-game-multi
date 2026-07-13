@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { LegMarketEditor, type LegMarketPatch } from "@/components/EditLegMarket";
 import { teamColors } from "@/lib/afl/teamColors";
-import type { BetTrackerLeg } from "@/lib/data/bets";
+import type { BetTrackerLeg } from "@/lib/betTypes";
 import { lineTarget, marginVsTarget, signed, targetLabel } from "@/lib/format";
 
 type LegState = BetTrackerLeg & { saving?: boolean; error?: string };
@@ -225,12 +225,14 @@ function LegRow({
   onMarketChange,
   onRemove,
   onVoid,
+  onUnvoid,
 }: {
   leg: LegState;
   onUpdate: (legId: number, actualValue: number) => Promise<void>;
   onMarketChange: (legId: number, patch: LegMarketPatch) => void;
   onRemove: (legId: number) => void;
   onVoid: (legId: number, actualValue: number) => void;
+  onUnvoid: (legId: number, actualValue: number) => void;
 }) {
   const [count, setCount] = useState(initial.actualValue ?? 0);
   const [saving, setSaving] = useState(false);
@@ -240,6 +242,7 @@ function LegRow({
   const [fixMarket, setFixMarket] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [voiding, setVoiding] = useState(false);
+  const [unvoiding, setUnvoiding] = useState(false);
 
   useEffect(() => {
     setCount(initial.actualValue ?? 0);
@@ -308,7 +311,7 @@ function LegRow({
     const name = initial.playerName ?? "this player";
     if (
       !window.confirm(
-        `Void ${name}? Injury/sub — leg drops from the multi but stats stay on your record.`,
+        `Void ${name}? Injury/sub — leg drops from the multi but you can still tap +/− to record stats before injury.`,
       )
     ) {
       return;
@@ -328,6 +331,33 @@ function LegRow({
       setError((err as Error).message);
     } finally {
       setVoiding(false);
+    }
+  }
+
+  async function unvoidThisLeg() {
+    const name = initial.playerName ?? "this player";
+    if (
+      !window.confirm(
+        `Undo void on ${name}? The leg will count toward the multi again (keeps the ${count} you've tracked).`,
+      )
+    ) {
+      return;
+    }
+    setUnvoiding(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/bets/legs/${initial.legId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ result: "pending", actualValue: count }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) throw new Error(json.error || "undo void failed");
+      onUnvoid(initial.legId, count);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setUnvoiding(false);
     }
   }
 
@@ -386,6 +416,10 @@ function LegRow({
               >
                 ({signed(margin)})
               </span>
+            ) : isVoid && count > 0 ? (
+              <span className="shrink-0 text-[10px] text-slate-500">
+                · {count} before injury
+              </span>
             ) : null}
             {initial.result === "pending" && !fixMarket ? (
               <>
@@ -408,6 +442,17 @@ function LegRow({
                   ×
                 </button>
               </>
+            ) : null}
+            {isVoid ? (
+              <button
+                type="button"
+                onClick={unvoidThisLeg}
+                disabled={unvoiding || saving}
+                className="shrink-0 text-[10px] text-slate-500 underline decoration-dotted underline-offset-2 hover:text-slate-300 disabled:opacity-40"
+                title="Mistapped void — restore leg to the multi"
+              >
+                Undo void
+              </button>
             ) : null}
           </div>
         </div>
@@ -478,7 +523,7 @@ function LegRow({
           voided={isVoid}
         />
         <span className="shrink-0 text-[10px] tabular-nums text-slate-500">
-          {count}/{target}+
+          {isVoid ? `${count} tracked` : `${count}/${target}+`}
         </span>
       </div>
 
@@ -582,9 +627,12 @@ function GameOverSection({
         (json.settlement?.fromLive?.legsSettled ?? 0);
 
       if (legs.pending === 0) {
+        const voided = slipOutcomes.some((s) => s.status === "void");
         const won = slipOutcomes.some((s) => s.status === "won");
         const lost = slipOutcomes.some((s) => s.status === "lost");
-        if (won) {
+        if (voided) {
+          setMsg("Void leg(s) — stake returned. Check the Bets tab.");
+        } else if (won) {
           setMsg("Multi won — every leg cleared.");
         } else if (lost) {
           const missSlips = slipOutcomes.filter((s) => s.status === "lost");
@@ -753,12 +801,22 @@ export function LiveBetTracker({
           l.legId === legId ? { ...l, result: "void" as const, actualValue } : l,
         ),
       );
-      router.refresh();
     },
-    [router],
+    [],
   );
 
+  const unvoidLeg = useCallback((legId: number, actualValue: number) => {
+    setLegs((prev) =>
+      prev.map((l) =>
+        l.legId === legId ? { ...l, result: "pending" as const, actualValue } : l,
+      ),
+    );
+  }, []);
+
   const voids = legs.filter((l) => l.result === "void").length;
+  const voidsMissingStats = legs.filter(
+    (l) => l.result === "void" && l.actualValue == null,
+  ).length;
   const activeLegs = legs.filter((l) => l.result !== "void");
   const cleared = activeLegs.filter(legCleared).length;
   const pending = legs.filter((l) => l.result === "pending").length;
@@ -789,7 +847,11 @@ export function LiveBetTracker({
           {live ? (
             <p className="mt-0.5 text-xs font-medium text-accent-loss">● Live</p>
           ) : (
-            <p className="mt-0.5 text-xs text-slate-500">Tap + to track as you watch</p>
+            <p className="mt-0.5 text-xs text-slate-500">
+              {voids > 0
+                ? "Void legs still accept +/− — record stats before injury."
+                : "Tap + to track as you watch"}
+            </p>
           )}
         </div>
         <div className="text-right">
@@ -840,9 +902,17 @@ export function LiveBetTracker({
             onMarketChange={updateMarket}
             onRemove={removeLeg}
             onVoid={voidLeg}
+            onUnvoid={unvoidLeg}
           />
         ))}
       </ul>
+
+      {voidsMissingStats > 0 ? (
+        <p className="mt-2 text-xs text-slate-500">
+          {voidsMissingStats} void leg{voidsMissingStats === 1 ? "" : "s"} — tap +/− to
+          record pre-injury stats.
+        </p>
+      ) : null}
 
       {pending > 0 && live ? (
         <p className="mt-3 text-xs text-slate-500">
@@ -854,14 +924,18 @@ export function LiveBetTracker({
         <div className="mt-4 border-t border-surface-border pt-3">
           <p
             className={`text-sm font-medium ${
-              misses === 0 ? "text-accent-win" : "text-accent-loss"
+              voids > 0
+                ? "text-slate-300"
+                : misses === 0
+                  ? "text-accent-win"
+                  : "text-accent-loss"
             }`}
           >
-            {misses === 0
-              ? voids > 0
-                ? `All ${activeLegs.length} active legs hit — multi cleared (${voids} void).`
-                : `All ${legs.length} legs hit — multi cleared.`
-              : `${hits}/${activeLegs.length} active legs hit — multi lost (${misses} missed).`}
+            {voids > 0
+              ? `${voids} injured leg${voids === 1 ? "" : "s"} voided — stake returned on Bets.`
+              : misses === 0
+                ? `All ${legs.length} legs hit — multi cleared.`
+                : `${hits}/${activeLegs.length} active legs hit — multi lost (${misses} missed).`}
           </p>
           <p className="mt-1 text-xs text-slate-500">
             Full details on the Bets page.

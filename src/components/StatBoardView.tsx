@@ -1,15 +1,23 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useState } from "react";
 
-import { FormChart } from "@/components/charts/FormChart";
 import type { StatType } from "@/db/schema";
 import { teamColors } from "@/lib/afl/teamColors";
 import type { PlayerBetRecord } from "@/lib/data/bets";
 import type { PlayerStatRow, StatBoard } from "@/lib/data/statboard";
 import { floorStat } from "@/lib/format";
 import type { InjuryStatus } from "@/lib/ingest/injuries";
-import { clearProbability } from "@/lib/predictions/probability";
+import { LineLadder } from "@/components/LineLadder";
+
+const FormChart = dynamic(
+  () => import("@/components/charts/FormChart").then((m) => m.FormChart),
+  {
+    ssr: false,
+    loading: () => <div className="h-[90px] w-full animate-pulse rounded bg-surface/40" />,
+  },
+);
 
 // Mirror of playerRecordKey's normalisation (kept identical to lib/data/bets).
 function recordKey(name: string, stat: string): string {
@@ -131,62 +139,6 @@ const NEWS_CHIP: Record<InjuryStatus, { label: string; cls: string } | null> = {
   unknown: null,
 };
 
-// Pure analysis, no recommendation: for each candidate whole-number target
-// around our projection, the modelled chance the player clears it (P(count ≥ T),
-// shrunk for small samples). Lets you read off your own "softer safer number" —
-// e.g. projected 32, but 27+ lands ~84% — rather than the app picking one.
-function ClearChanceLadder({
-  prediction,
-  form,
-  statLabel,
-}: {
-  prediction: number;
-  form: number[];
-  statLabel: string;
-}) {
-  const proj = Math.floor(prediction);
-  // One rung above the projection (the "stretch") down to a good way below it,
-  // so a softer number like projected 32 → 27+ is on the ladder to read off.
-  const lo = Math.max(1, proj - 6);
-  const rungs: { target: number; pct: number; isProj: boolean }[] = [];
-  for (let t = proj + 1; t >= lo; t--) {
-    // line = t - 0.5 makes the winning count exactly t (an "t+" market).
-    rungs.push({
-      target: t,
-      pct: Math.round(clearProbability({ prediction, line: t - 0.5, form }) * 100),
-      isProj: t === proj,
-    });
-  }
-  return (
-    <div className="mt-3">
-      <div className="mb-1 text-[11px] uppercase tracking-wide text-slate-500">
-        Chance to clear · {statLabel}
-      </div>
-      <div className="flex gap-1 overflow-x-auto pb-1">
-        {rungs.map((r) => {
-          const cls =
-            r.pct >= 80
-              ? "text-accent-win"
-              : r.pct >= 60
-                ? "text-accent-pending"
-                : "text-accent-loss";
-          return (
-            <div
-              key={r.target}
-              className={`flex min-w-[3rem] flex-col items-center rounded px-2 py-1 ${
-                r.isProj ? "bg-accent/15 ring-1 ring-accent/40" : "bg-surface"
-              }`}
-            >
-              <span className="text-xs font-semibold text-slate-200">{r.target}+</span>
-              <span className={`text-xs font-bold ${cls}`}>{r.pct}%</span>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 export function StatBoardView({
   board,
   record = {},
@@ -202,12 +154,13 @@ export function StatBoardView({
   const rows = sortRows(all, sort);
 
   return (
-    <div className="space-y-3">
+    <div className="relative isolate space-y-3">
       {/* Stat tabs */}
-      <div className="flex gap-2 overflow-x-auto pb-1">
+      <div className="relative z-10 flex gap-2 overflow-x-auto pb-1">
         {STAT_TABS.map((t) => (
           <button
             key={t.key}
+            type="button"
             onClick={() => setStat(t.key)}
             className={`whitespace-nowrap rounded-full px-4 py-1.5 text-sm font-semibold ${
               stat === t.key
@@ -221,10 +174,11 @@ export function StatBoardView({
       </div>
 
       {/* Team filter */}
-      <div className="flex gap-2 overflow-x-auto pb-1">
+      <div className="relative z-10 flex gap-2 overflow-x-auto pb-1">
         {["all", board.home, board.away].map((t) => (
           <button
             key={t}
+            type="button"
             onClick={() => setTeam(t)}
             className={`whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium ${
               team === t
@@ -238,13 +192,14 @@ export function StatBoardView({
       </div>
 
       {/* Sort */}
-      <div className="flex items-center gap-2 overflow-x-auto pb-1">
+      <div className="relative z-10 flex items-center gap-2 overflow-x-auto pb-1">
         <span className="shrink-0 text-[11px] uppercase tracking-wide text-slate-500">
           Sort
         </span>
         {SORT_OPTIONS.map((o) => (
           <button
             key={o.key}
+            type="button"
             onClick={() => setSort(o.key)}
             className={`whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium ${
               sort === o.key
@@ -266,6 +221,7 @@ export function StatBoardView({
               key={r.playerId}
               row={r}
               record={record[recordKey(r.name, stat)]}
+              stat={stat}
               statLabel={STAT_TABS.find((t) => t.key === stat)?.label.toLowerCase() ?? stat}
               opponent={board.home === r.team ? board.away : board.home}
             />
@@ -279,11 +235,13 @@ export function StatBoardView({
 function PlayerStatCard({
   row,
   record,
+  stat,
   statLabel,
   opponent,
 }: {
   row: PlayerStatRow;
   record?: PlayerBetRecord;
+  stat: StatType;
   statLabel: string;
   opponent: string;
 }) {
@@ -366,13 +324,12 @@ function PlayerStatCard({
         </div>
       </div>
 
-      {/* Clear-chance ladder: the modelled odds of each target landing, so you
-          can choose your own safer number off the analysis (app never picks). */}
-      {row.prediction != null && row.recentForm.length >= 2 ? (
-        <ClearChanceLadder
+      {row.prediction != null ? (
+        <LineLadder
           prediction={row.prediction}
           form={row.recentForm}
           statLabel={statLabel}
+          statType={stat}
         />
       ) : null}
 
@@ -404,7 +361,9 @@ function PlayerStatCard({
             </div>
           ) : null}
           {bioLine ? <div className="text-slate-400">{bioLine}</div> : null}
-          <div className="text-[11px] text-slate-600">Weather &amp; position coming soon.</div>
+          <div className="text-[11px] text-slate-600">
+            See match briefing above for venue and weather tips.
+          </div>
         </div>
       ) : null}
 
@@ -454,9 +413,16 @@ function PlayerStatCard({
         </div>
       )}
 
+      {/* Recent-form chart — above the number chips so it stays visible */}
+      {row.recentForm.length > 1 ? (
+        <div className="mt-3">
+          <FormChart form={row.recentForm} line={row.line} color={c.fg} />
+        </div>
+      ) : null}
+
       {/* Last 5 form chips */}
       {last5.length > 0 ? (
-        <div className="mt-3 flex items-center gap-1">
+        <div className="mt-2 flex items-center gap-1">
           <span className="mr-1 text-[11px] uppercase tracking-wide text-slate-500">
             Last 5
           </span>
@@ -483,13 +449,6 @@ function PlayerStatCard({
               </span>
             </span>
           ) : null}
-        </div>
-      ) : null}
-
-      {/* Recent-form chart */}
-      {row.recentForm.length > 1 ? (
-        <div className="mt-2">
-          <FormChart form={row.recentForm} line={row.line} />
         </div>
       ) : null}
 

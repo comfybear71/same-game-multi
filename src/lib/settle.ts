@@ -3,7 +3,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { betLegs, bets, games, playerGameStats, type LegResult } from "@/db/schema";
 import { currentSeason } from "@/lib/cron";
-import { gamePlayerNameSet, legBelongsToGame } from "@/lib/data/bets";
+import { gamePlayerNameSet, legInGameScope, slipBetIdsForGame, type LegGameScope } from "@/lib/data/bets";
 import { settleGamePlayerStats } from "@/lib/ingest/playerStats";
 import { refreshGameFromSquiggle, syncFixtures } from "@/lib/ingest/sync";
 import { computeRoundAccuracy } from "@/lib/predictions/accuracy";
@@ -36,18 +36,27 @@ async function pendingLegsForGame(gameId: number): Promise<BetLegRow[]> {
 
   const gameNames = await gamePlayerNameSet(gameId);
   const rows = await db
-    .select({ leg: betLegs, betRound: bets.round })
+    .select({ leg: betLegs, betRound: bets.round, betId: bets.id })
     .from(betLegs)
     .innerJoin(bets, eq(betLegs.betId, bets.id))
     .where(eq(betLegs.result, "pending"));
 
+  const scopeLegs: LegGameScope[] = rows.map(({ leg, betRound, betId }) => ({
+    betId,
+    gameId: leg.gameId,
+    playerName: leg.playerName,
+    betRound,
+  }));
+  const slipBetIds = slipBetIdsForGame(scopeLegs, gameId, game.round, gameNames);
+
   return rows
-    .filter(({ leg, betRound }) =>
-      legBelongsToGame(
-        { gameId: leg.gameId, playerName: leg.playerName, betRound },
+    .filter(({ leg, betRound, betId }) =>
+      legInGameScope(
+        { betId, gameId: leg.gameId, playerName: leg.playerName, betRound },
         gameId,
         game.round,
         gameNames,
+        slipBetIds,
       ),
     )
     .map(({ leg }) => leg);
@@ -93,10 +102,12 @@ export async function settlePendingBets(): Promise<SettleResult> {
 
     // Legs are stored as "over the line" bets.
     const result = actualValue > leg.line ? "hit" : "miss";
-    await db
+    const updated = await db
       .update(betLegs)
       .set({ result, actualValue })
-      .where(eq(betLegs.id, leg.id));
+      .where(and(eq(betLegs.id, leg.id), eq(betLegs.result, "pending")))
+      .returning({ id: betLegs.id });
+    if (updated.length === 0) continue;
     legsSettled++;
     touchedBetIds.add(leg.betId);
   }
@@ -105,7 +116,7 @@ export async function settlePendingBets(): Promise<SettleResult> {
   return { legsSettled, slipsSettled };
 }
 
-/** Mark a slip won only if every leg hit; lost if any leg missed. */
+import { deriveSlipStatus } from "@/lib/betTypes";
 export async function rollUpSlips(betIds: number[]): Promise<number> {
   if (betIds.length === 0) return 0;
 
@@ -123,10 +134,8 @@ export async function rollUpSlips(betIds: number[]): Promise<number> {
 
   let settled = 0;
   for (const [betId, legList] of byBet) {
-    const anyPending = legList.some((l) => l.result === "pending");
-    if (anyPending) continue;
-    const anyMiss = legList.some((l) => l.result === "miss");
-    const status = anyMiss ? "lost" : "won";
+    const status = deriveSlipStatus(legList);
+    if (status === "pending") continue;
     await db
       .update(bets)
       .set({ status, settledAt: new Date() })
@@ -294,14 +303,16 @@ export async function settlePendingBetsForGame(gameId: number): Promise<SettleRe
     if (actualValue == null) continue;
 
     const result = actualValue > leg.line ? "hit" : "miss";
-    await db
+    const updated = await db
       .update(betLegs)
       .set({
         result,
         actualValue,
         ...(leg.gameId == null ? { gameId } : {}),
       })
-      .where(eq(betLegs.id, leg.id));
+      .where(and(eq(betLegs.id, leg.id), eq(betLegs.result, "pending")))
+      .returning({ id: betLegs.id });
+    if (updated.length === 0) continue;
     legsSettled++;
     touchedBetIds.add(leg.betId);
   }
@@ -320,13 +331,15 @@ export async function settleLegsFromLiveCounts(gameId: number): Promise<SettleRe
   for (const leg of pendingLegs) {
     if (leg.actualValue == null) continue;
     const result = leg.actualValue > leg.line ? "hit" : "miss";
-    await db
+    const updated = await db
       .update(betLegs)
       .set({
         result,
         ...(leg.gameId == null ? { gameId } : {}),
       })
-      .where(eq(betLegs.id, leg.id));
+      .where(and(eq(betLegs.id, leg.id), eq(betLegs.result, "pending")))
+      .returning({ id: betLegs.id });
+    if (updated.length === 0) continue;
     legsSettled++;
     touchedBetIds.add(leg.betId);
   }
