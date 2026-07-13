@@ -113,7 +113,16 @@ export default async function GamePage({ params }: { params: { id: string } }) {
   try {
     matchBriefing = await getMatchBriefing(game.home, game.away, game.season);
   } catch {
-    matchBriefing = null;
+    matchBriefing = {
+      homeLadder: null,
+      awayLadder: null,
+      homeForm: [],
+      awayForm: [],
+      h2h: [],
+      h2hSummary: null,
+      weatherHint:
+        "Rain or wind at kickoff often pushes disposal totals down — check the forecast before you finalise lines.",
+    };
   }
 
   const hasData = board ? STAT_TYPES.some((s) => board!.byStat[s].length > 0) : false;
@@ -163,11 +172,13 @@ export default async function GamePage({ params }: { params: { id: string } }) {
 
       {matchBriefing ? (
         <MatchBriefingCard
+          gameId={game.id}
           home={game.home}
           away={game.away}
           venue={game.venue}
           commenceTime={game.commenceTime}
           briefing={matchBriefing}
+          matchNotes={game.matchNotes}
         />
       ) : null}
 

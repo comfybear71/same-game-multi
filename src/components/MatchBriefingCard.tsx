@@ -1,4 +1,5 @@
 import { FormGuide } from "@/components/TeamFormAndRanks";
+import { MatchNotesEditor } from "@/components/MatchNotesEditor";
 import type { FormResult } from "@/lib/data/games";
 import type { HeadToHeadGame, LadderSnapshot, MatchBriefing } from "@/lib/data/matchBriefing";
 import { formatAwst, formatAwstDate } from "@/lib/time";
@@ -56,17 +57,21 @@ function h2hHeadline(
 }
 
 export function MatchBriefingCard({
+  gameId,
   home,
   away,
   venue,
   commenceTime,
   briefing,
+  matchNotes = null,
 }: {
+  gameId: number;
   home: string;
   away: string;
   venue: string | null;
   commenceTime: Date;
   briefing: MatchBriefing;
+  matchNotes?: string | null;
 }) {
   const hasLadder = briefing.homeLadder || briefing.awayLadder;
   const hasForm = briefing.homeForm.length > 0 || briefing.awayForm.length > 0;
@@ -78,9 +83,13 @@ export function MatchBriefingCard({
       <div>
         <h2 className="text-sm font-semibold text-white">Match briefing</h2>
         <p className="mt-0.5 text-xs text-slate-400">
-          Context before you pick lines — ladder, recent form and head-to-head.
+          Context before you pick lines — preview notes, ladder, form and head-to-head.
         </p>
       </div>
+
+      <BriefRow label="Match notes">
+        <MatchNotesEditor gameId={gameId} initialNotes={matchNotes} />
+      </BriefRow>
 
       {hasLadder ? (
         <div className="grid gap-3 sm:grid-cols-2">
