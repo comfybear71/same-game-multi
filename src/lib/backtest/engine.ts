@@ -66,6 +66,40 @@ export function normaliseRound(round: string | number | null | undefined): strin
 }
 
 /**
+ * Index of the walk-forward game in a player's log.
+ *
+ * Squiggle uses round 0 for Opening Round; AFL Tables numbers that same
+ * game as round 1 and shifts the rest by +1. When `seasonHasOpeningRound`
+ * is true we accept that offset. Falls back to a unique season+opponent hit.
+ */
+export function findGameLogIndex(
+  log: PlayerGameLogEntry[],
+  season: number,
+  round: number | null,
+  opponent: string,
+  seasonHasOpeningRound = false,
+): number {
+  const vsOpp = log
+    .map((g, idx) => ({ g, idx }))
+    .filter(({ g }) => g.season === season && g.opponent === opponent);
+  if (vsOpp.length === 0) return -1;
+
+  const want = normaliseRound(round);
+  const exact = vsOpp.find(({ g }) => normaliseRound(g.round) === want);
+  if (exact) return exact.idx;
+
+  if (seasonHasOpeningRound && round != null && Number.isFinite(Number(round))) {
+    const offsetWant = String(Number(round) + 1);
+    const offset = vsOpp.find(({ g }) => normaliseRound(g.round) === offsetWant);
+    if (offset) return offset.idx;
+  }
+
+  // Unique matchup that season (bye weeks / missed games).
+  if (vsOpp.length === 1) return vsOpp[0]!.idx;
+  return -1;
+}
+
+/**
  * Split a player's log at a completed game: prior games (for features) +
  * the actuals for that game. Returns null if they didn't play.
  */
@@ -74,13 +108,14 @@ export function splitLogAtGame(
   season: number,
   round: number | null,
   opponent: string,
+  seasonHasOpeningRound = false,
 ): { prior: PlayerGameLogEntry[]; actual: PlayerGameLogEntry } | null {
-  const wantRound = normaliseRound(round);
-  const idx = log.findIndex(
-    (g) =>
-      g.season === season &&
-      normaliseRound(g.round) === wantRound &&
-      g.opponent === opponent,
+  const idx = findGameLogIndex(
+    log,
+    season,
+    round,
+    opponent,
+    seasonHasOpeningRound,
   );
   if (idx < 0) return null;
   return { prior: log.slice(0, idx), actual: log[idx]! };
@@ -166,8 +201,15 @@ export function projectPlayerForBacktest(
   round: number | null,
   opponent: string,
   venue: string | null,
+  seasonHasOpeningRound = false,
 ): ProjectedPlayer | null {
-  const split = splitLogAtGame(history.gameLog, season, round, opponent);
+  const split = splitLogAtGame(
+    history.gameLog,
+    season,
+    round,
+    opponent,
+    seasonHasOpeningRound,
+  );
   if (!split || split.prior.length < 3) return null;
 
   const priorHistory: PlayerHistory = {

@@ -57,16 +57,20 @@ function strategyLabel(key: string): string {
   return BACKTEST_STRATEGIES.find((s) => s.key === key)?.label ?? key;
 }
 
-/** Latest completed (or latest any) backtest run + aggregates for charts. */
+/** Prefer the weekly Strategy lab run; else latest completed (or latest any). */
 export async function getBacktestLabData(): Promise<BacktestLabData> {
   const runs = await db
     .select()
     .from(backtestRuns)
     .orderBy(desc(backtestRuns.startedAt))
-    .limit(5);
+    .limit(20);
 
+  const weekly = runs.find((r) => r.label.startsWith("strategy-lab-"));
   const run =
-    runs.find((r) => r.status === "complete") ?? runs[0] ?? null;
+    weekly ??
+    runs.find((r) => r.status === "complete") ??
+    runs[0] ??
+    null;
 
   if (!run) {
     return { run: null, strategies: [], bySeason: [], calibration: [] };

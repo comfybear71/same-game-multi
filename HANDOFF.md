@@ -32,15 +32,17 @@ npm run typecheck && npm run lint && npm run build
 
 - Next.js 14 App Router, Tailwind dark UI, Drizzle + Neon, NextAuth allowlist.
 - Fixtures dashboard (next / upcoming / in-play / results), AWST times.
-- Daily cron: fixture refresh + morning-after settle/accuracy.
+- Crons: daily fixture refresh + morning-after settle/accuracy; **Monday**
+  Strategy lab incremental (`/api/cron/backtest-strategy`, label
+  `strategy-lab-{year}`) once AFL Tables has the prior round.
 
 ### Lineups & predictions
 
 - **Team sheet upload** via screenshot + Claude vision (`LineupUploadButton`,
   `POST /api/games/[id]/lineup`) — free alternative to Odds API player lists.
 - **Generate predictions** seeds players from lineup, pulls AFL Tables history,
-  persists Models A/B/C; Model C drives UI and suggestions.
-- Optional **Odds API** props when `ODDS_API_KEY` is set.
+  persists Models A/B/C; Model C drives UI and suggestions (model lines; no
+  paid odds API).
 
 ### Same-game multis (game page)
 
@@ -127,7 +129,7 @@ Flow:
   yet limited to admin.
 - **Live tracker** merges all legs from all slips on one game into one list (same
   player may appear multiple times if on several multis).
-- **Vercel Hobby** crons are daily only.
+- Weekly Strategy lab cron assumes Pro (Monday schedule in `vercel.json`).
 - **Public repo:** treat `.env.example` as documentation only; rotate keys if
   ever accidentally committed.
 

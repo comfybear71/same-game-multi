@@ -42,7 +42,7 @@ secrets** — see Security below.
 - **PRs:** describe what changed, why, how verified (`typecheck` / `lint` /
   `build`), and any new env vars.
 - **Secrets in code:** never hardcode. Every secret comes from an env var listed
-  in `.env.example`. `ODDS_API_KEY` must only ever be read from the environment.
+  in `.env.example`.
 
 ## Multi-user behaviour
 
@@ -70,6 +70,7 @@ src/
       bets/upload/route.ts             Vercel Blob upload
       cron/refresh-fixtures/route.ts   daily fixtures sync (Vercel Cron)
       cron/settle-results/route.ts     morning-after settle + accuracy
+      cron/backtest-strategy/route.ts  Monday Strategy lab (current season)
       games/[id]/predict/route.ts      generate predictions (lineup roster)
       games/[id]/suggest/route.ts      suggested multi + Claude rationale
       games/[id]/candidates/route.ts   add-player picker pool
@@ -109,7 +110,7 @@ src/
       bets.ts                          slips, tracker, player record, enrich
       games.ts, statboard.ts, accuracy.ts, roundRoster.ts, …
     ingest/
-      cache.ts, squiggle.ts, oddsApi.ts, props.ts
+      cache.ts, squiggle.ts, props.ts
       aflTables.ts, playerStats.ts, sync.ts, lineup.ts
       injuries.ts                      RSS adapter (partial)
     predictions/
@@ -131,9 +132,8 @@ scripts/setup-local.mjs, check-env.mjs
    gracefully on failure.
 3. **Squiggle API** (free) — fixtures, results, standings. Real `User-Agent` via
    `SQUIGGLE_CONTACT`.
-4. **The Odds API** (optional, paid) — bookmaker props when `ODDS_API_KEY` set.
-   Without it, model lines + estimated odds still power suggestions.
-5. **Injury/news** — RSS via `AFL_NEWS_FEEDS`; coarse status affects suggestions.
+4. **Injury/news** — RSS via `AFL_NEWS_FEEDS`; coarse status affects suggestions.
+   Model lines + estimated odds power suggestions (no paid odds feed).
 
 ## Typical weekly workflow (maintainer)
 

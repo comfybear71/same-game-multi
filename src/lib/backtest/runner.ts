@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 
 import { db } from "@/db";
 import {
@@ -6,6 +6,7 @@ import {
   backtestRuns,
   backtestSlips,
   games,
+  players,
   type Game,
 } from "@/db/schema";
 import { canonicalTeam } from "@/lib/afl/teams";
@@ -14,9 +15,18 @@ import {
   buildStrategySlips,
   projectPlayerForBacktest,
 } from "@/lib/backtest/engine";
-import { listSeasonPlayerNames } from "@/lib/backtest/seasonPlayers";
+import {
+  listSeasonPlayers,
+  type SeasonPlayerRef,
+} from "@/lib/backtest/seasonPlayers";
+import { currentSeason } from "@/lib/cron";
 import { getPlayerHistory } from "@/lib/ingest/aflTables";
 import { syncFixtures } from "@/lib/ingest/sync";
+
+/** Stable label for the Monday weekly Strategy lab cron (current season). */
+export function weeklyLabLabel(season = currentSeason()): string {
+  return `strategy-lab-${season}`;
+}
 
 export interface BacktestRunnerOptions {
   seasons: number[];
@@ -25,7 +35,6 @@ export interface BacktestRunnerOptions {
   resumeRunId?: number;
   /** Cap games processed this invocation (smoke tests). */
   maxGames?: number;
-  /** Only process this many seasons' fixtures sync (all seasons still listed). */
   onProgress?: (msg: string) => void;
 }
 
@@ -70,6 +79,17 @@ export async function runBacktest(opts: BacktestRunnerOptions): Promise<{
   const seasons = [...opts.seasons].sort((a, b) => a - b);
 
   let runId = opts.resumeRunId;
+  // Same label → resume the latest run (keeps weekly `strategy-lab-*` unique).
+  if (runId == null && opts.label) {
+    const existing = await db
+      .select({ id: backtestRuns.id })
+      .from(backtestRuns)
+      .where(eq(backtestRuns.label, opts.label))
+      .orderBy(desc(backtestRuns.startedAt))
+      .limit(1);
+    if (existing[0]) runId = existing[0].id;
+  }
+
   if (runId == null) {
     const [row] = await db
       .insert(backtestRuns)
@@ -96,20 +116,46 @@ export async function runBacktest(opts: BacktestRunnerOptions): Promise<{
       log(`  ${season}: upserted ${sync.upserted}, skipped ${sync.skipped}`);
     }
 
-    const nameSet = new Set<string>();
+    /** Prefer AFL Tables slug when we have one (handles OBrien / Hamill1). */
+    const byKey = new Map<string, SeasonPlayerRef>();
     for (const season of seasons) {
       log(`Loading AFL Tables player list for ${season}…`);
-      const names = await listSeasonPlayerNames(season);
-      log(`  ${season}: ${names.length} players`);
-      for (const n of names) nameSet.add(n);
+      try {
+        const refs = await listSeasonPlayers(season);
+        log(`  ${season}: ${refs.length} players`);
+        for (const ref of refs) {
+          const key = ref.slug.toLowerCase();
+          if (!byKey.has(key)) byKey.set(key, ref);
+        }
+      } catch (err) {
+        log(`  ${season}: failed (${(err as Error).message})`);
+      }
     }
-    const allNames = [...nameSet];
-    log(`Fetching histories for ${allNames.length} players (cached)…`);
+    // Only if AFL Tables returned nothing: fall back to DB lineup-seeded names.
+    if (byKey.size === 0) {
+      const dbPlayers = await db
+        .select({ name: players.name, slug: players.aflTablesSlug })
+        .from(players);
+      for (const p of dbPlayers) {
+        const key = (p.slug ?? p.name).toLowerCase();
+        byKey.set(key, { name: p.name, slug: p.slug ?? "" });
+      }
+      log(`AFL Tables empty — using ${dbPlayers.length} players from DB`);
+    }
+    const pool = [...byKey.values()];
+    log(`Player pool: ${pool.length}`);
+
+    if (pool.length === 0) {
+      throw new Error(
+        "No player names found from AFL Tables or DB — cannot backtest.",
+      );
+    }
+    log(`Fetching histories for ${pool.length} players (cached)…`);
 
     const histories = new Map<string, Awaited<ReturnType<typeof getPlayerHistory>>>();
-    await mapLimit(allNames, 6, async (name) => {
-      const h = await getPlayerHistory(name);
-      if (h.gameLog.length > 0) histories.set(name, h);
+    await mapLimit(pool, 6, async (ref) => {
+      const h = await getPlayerHistory(ref.name, ref.slug || null);
+      if (h.gameLog.length > 0) histories.set(ref.name, h);
       return null;
     });
     log(`  histories ready: ${histories.size}`);
@@ -136,11 +182,20 @@ export async function runBacktest(opts: BacktestRunnerOptions): Promise<{
     const limit = opts.maxGames != null ? pending.slice(0, opts.maxGames) : pending;
     log(`Games to process: ${limit.length} (${doneIds.size} already done)`);
 
+    /** Squiggle R0 = Opening Round; AFL Tables numbers those seasons +1. */
+    const openingBySeason = new Map<number, boolean>();
+    for (const g of completed) {
+      if (g.season == null) continue;
+      if (g.round === 0) openingBySeason.set(g.season, true);
+      else if (!openingBySeason.has(g.season)) openingBySeason.set(g.season, false);
+    }
+
     for (const game of limit) {
       const season = game.season!;
       const homeC = canonicalTeam(game.home) ?? game.home;
       const awayC = canonicalTeam(game.away) ?? game.away;
       const venue = canonicalVenue(game.venue);
+      const hasOpening = openingBySeason.get(season) ?? false;
       const allCandidates = [];
 
       for (const [name, history] of histories) {
@@ -153,6 +208,7 @@ export async function runBacktest(opts: BacktestRunnerOptions): Promise<{
           game.round,
           homeC,
           venue,
+          hasOpening,
         );
         const vsAway = projectPlayerForBacktest(
           name,
@@ -162,6 +218,7 @@ export async function runBacktest(opts: BacktestRunnerOptions): Promise<{
           game.round,
           awayC,
           venue,
+          hasOpening,
         );
         // If they faced home, they were on the away team (opponent = home).
         const projected = vsHome ?? vsAway;
@@ -252,4 +309,47 @@ export async function runBacktest(opts: BacktestRunnerOptions): Promise<{
       .where(eq(backtestRuns.id, runId));
     throw err;
   }
+}
+
+/**
+ * Monday weekly Strategy lab: resume (or create) `strategy-lab-{season}` and
+ * process any newly completed games. Squiggle marks fixtures complete; AFL
+ * Tables supplies player lines (usually caught up by Monday AWST).
+ */
+export async function runWeeklyStrategyLab(opts?: {
+  season?: number;
+  onProgress?: (msg: string) => void;
+}): Promise<{
+  runId: number;
+  gamesProcessed: number;
+  slipsWritten: number;
+  created: boolean;
+}> {
+  const season = opts?.season ?? currentSeason();
+  const label = weeklyLabLabel(season);
+  const log = opts?.onProgress ?? console.log;
+
+  const existing = await db
+    .select({ id: backtestRuns.id })
+    .from(backtestRuns)
+    .where(eq(backtestRuns.label, label))
+    .orderBy(desc(backtestRuns.startedAt))
+    .limit(1);
+
+  const resumeRunId = existing[0]?.id;
+  const created = resumeRunId == null;
+  if (created) {
+    log(`No weekly lab run for ${label} — creating.`);
+  } else {
+    log(`Resuming weekly lab run #${resumeRunId} (${label}).`);
+  }
+
+  const result = await runBacktest({
+    seasons: [season],
+    label,
+    resumeRunId,
+    onProgress: log,
+  });
+
+  return { ...result, created };
 }

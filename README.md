@@ -107,8 +107,10 @@ One step at a time.
    generated `BLOB_READ_WRITE_TOKEN` into the project env vars (used for bet
    screenshot uploads).
 8. **Cron jobs** are defined in `vercel.json` and are picked up automatically:
-   - `refresh-fixtures` — daily fixtures + odds sync.
+   - `refresh-fixtures` — daily Squiggle fixture sync.
    - `settle-results` — morning-after results + bet settlement.
+   - `backtest-strategy` — Monday 11:00 AWST; incremental Strategy lab for the
+     current season (`strategy-lab-{year}`), after AFL Tables has weekend lines.
    Optionally set `CRON_SECRET` (env var) to lock the cron endpoints.
 9. Redeploy if you added env vars after the first deploy.
 
@@ -127,7 +129,6 @@ All listed in `.env.example`. Never commit real values.
 | `NEXTAUTH_SECRET` | yes | NextAuth JWT signing secret (`openssl rand -base64 32`). |
 | `NEXTAUTH_URL` | local+prod | `http://localhost:3000` locally; production URL on Vercel. |
 | `ALLOWED_EMAILS` | yes | Comma-separated allowlist of sign-in emails. |
-| `ODDS_API_KEY` | for odds | The Odds API paid key (player props). Never hardcode. |
 | `BLOB_READ_WRITE_TOKEN` | for uploads | Vercel Blob token for screenshots. |
 | `CRON_SECRET` | optional | Locks the cron endpoints. |
 | `SQUIGGLE_CONTACT` | optional | User-Agent contact string for Squiggle. |

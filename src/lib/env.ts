@@ -10,7 +10,6 @@ import { z } from "zod";
 
 const schema = z.object({
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
-  ODDS_API_KEY: z.string().optional().default(""),
   NEXTAUTH_SECRET: z.string().min(1, "NEXTAUTH_SECRET is required"),
   NEXTAUTH_URL: z.string().url().optional(),
   ALLOWED_EMAILS: z.string().optional().default(""),

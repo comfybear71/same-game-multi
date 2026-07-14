@@ -487,7 +487,7 @@ export const backtestLegs = pgTable(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API response cache (keeps The Odds API / Squiggle usage cheap)
+// API response cache (Squiggle, AFL Tables, etc.)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const apiCache = pgTable("api_cache", {

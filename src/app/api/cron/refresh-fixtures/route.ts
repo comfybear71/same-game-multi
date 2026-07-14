@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { authorizeCron, currentSeason } from "@/lib/cron";
 import { syncFixtures } from "@/lib/ingest/sync";
 
-// Runs daily (see vercel.json). Refreshes fixtures + odds event IDs.
+// Runs daily (see vercel.json). Refreshes fixtures from Squiggle.
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
