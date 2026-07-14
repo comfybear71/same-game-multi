@@ -1,8 +1,10 @@
 import { MultiStatsPanel } from "@/components/MultiStatsPanel";
 import { PlayerRecordPanel } from "@/components/PlayerRecordPanel";
 import { RoundRosterPanel } from "@/components/RoundRosterPanel";
+import { StrategyLabPanel } from "@/components/StrategyLabPanel";
 import { auth } from "@/lib/auth";
 import { getLeaderboard, type Leaderboard } from "@/lib/data/accuracy";
+import { getBacktestLabData, type BacktestLabData } from "@/lib/data/backtest";
 import {
   analyseMultis,
   getBetsForUser,
@@ -43,12 +45,23 @@ export default async function ReviewPage() {
   };
   let dbError: string | null = null;
   let roundRoster: RoundRoster | null = null;
+  let labData: BacktestLabData = {
+    run: null,
+    strategies: [],
+    bySeason: [],
+    calibration: [],
+  };
 
   try {
     board = await getLeaderboard(season);
     const currentRound = await inferCurrentRound(season);
     if (currentRound != null) {
       roundRoster = await getRoundRoster(season, currentRound);
+    }
+    try {
+      labData = await getBacktestLabData();
+    } catch {
+      labData = { run: null, strategies: [], bySeason: [], calibration: [] };
     }
     const email = session?.user?.email;
     if (email) {
@@ -89,6 +102,13 @@ export default async function ReviewPage() {
           Couldn&apos;t load review data: {dbError}
         </div>
       ) : null}
+
+      <CollapsibleSection
+        title="Strategy lab"
+        description="Walk-forward backtest of suggested multis (disposals/goals/marks/tackles/any × 3/6/10). Emotion out — slip hit rate and flat ROI."
+      >
+        <StrategyLabPanel data={labData} />
+      </CollapsibleSection>
 
       <CollapsibleSection
         title="Your multis"
