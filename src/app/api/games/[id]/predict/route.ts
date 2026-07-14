@@ -2,11 +2,9 @@ import { NextResponse } from "next/server";
 
 import { auth } from "@/lib/auth";
 import { getLineupNames } from "@/lib/ingest/lineup";
-import { syncPlayerProps } from "@/lib/ingest/props";
 import { generatePredictions } from "@/lib/predictions/generate";
 
-// Generate Models A/B/C from the uploaded lineup (AFL Tables stats). Optionally
-// refreshes bookmaker prop lines first when ODDS_API_KEY is configured.
+// Generate Models A/B/C from the uploaded lineup (AFL Tables stats).
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
@@ -20,7 +18,6 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
     return NextResponse.json({ error: "bad game id" }, { status: 400 });
   }
   try {
-    const props = await syncPlayerProps(gameId);
     const gen = await generatePredictions(gameId);
     if (gen.playersProcessed === 0) {
       const lineup = await getLineupNames(gameId);
@@ -30,7 +27,7 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
           : "Couldn't resolve players from AFL Tables — check names in the lineup.";
       return NextResponse.json({ ok: false, error: hint }, { status: 400 });
     }
-    return NextResponse.json({ ok: true, props, gen });
+    return NextResponse.json({ ok: true, gen });
   } catch (err) {
     return NextResponse.json(
       { ok: false, error: (err as Error).message },

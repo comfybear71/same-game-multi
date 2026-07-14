@@ -407,7 +407,87 @@ export const modelAccuracy = pgTable(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// API response cache (keeps The Odds API / Squiggle usage cheap)
+// Strategy lab / SGM backtest (walk-forward replay of suggested multis)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const backtestRunStatusEnum = pgEnum("backtest_run_status", [
+  "running",
+  "complete",
+  "failed",
+]);
+
+export const backtestRuns = pgTable("backtest_runs", {
+  id: serial("id").primaryKey(),
+  label: text("label").notNull(),
+  /** Seasons included, e.g. [2024, 2025, 2026]. */
+  seasons: jsonb("seasons").$type<number[]>().notNull(),
+  status: backtestRunStatusEnum("status").notNull().default("running"),
+  gamesProcessed: integer("games_processed").notNull().default(0),
+  slipsWritten: integer("slips_written").notNull().default(0),
+  lastGameId: integer("last_game_id"),
+  error: text("error"),
+  startedAt: timestamp("started_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+});
+
+export const backtestSlips = pgTable(
+  "backtest_slips",
+  {
+    id: serial("id").primaryKey(),
+    runId: integer("run_id")
+      .notNull()
+      .references(() => backtestRuns.id, { onDelete: "cascade" }),
+    gameId: integer("game_id")
+      .notNull()
+      .references(() => games.id, { onDelete: "cascade" }),
+    season: integer("season").notNull(),
+    round: integer("round"),
+    /** e.g. disposals_10, goals_6, any_3 */
+    strategyKey: text("strategy_key").notNull(),
+    focus: text("focus").notNull(),
+    legCount: integer("leg_count").notNull(),
+    modelledChance: doublePrecision("modelled_chance"),
+    estOdds: doublePrecision("est_odds"),
+    legsHit: integer("legs_hit").notNull().default(0),
+    legsTotal: integer("legs_total").notNull().default(0),
+    slipHit: boolean("slip_hit").notNull().default(false),
+    /** Flat $1 stake return: estOdds if slip hit, else 0. */
+    flatReturn: doublePrecision("flat_return").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    runStrategyIdx: index("backtest_slips_run_strategy_idx").on(t.runId, t.strategyKey),
+    runGameIdx: index("backtest_slips_run_game_idx").on(t.runId, t.gameId),
+  }),
+);
+
+export const backtestLegs = pgTable(
+  "backtest_legs",
+  {
+    id: serial("id").primaryKey(),
+    slipId: integer("slip_id")
+      .notNull()
+      .references(() => backtestSlips.id, { onDelete: "cascade" }),
+    playerName: text("player_name").notNull(),
+    team: text("team"),
+    statType: statTypeEnum("stat_type").notNull(),
+    line: doublePrecision("line").notNull(),
+    prediction: doublePrecision("prediction").notNull(),
+    confidence: doublePrecision("confidence").notNull(),
+    actualValue: integer("actual_value"),
+    hit: boolean("hit").notNull().default(false),
+  },
+  (t) => ({
+    slipIdx: index("backtest_legs_slip_idx").on(t.slipId),
+  }),
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// API response cache (Squiggle, AFL Tables, etc.)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const apiCache = pgTable("api_cache", {
@@ -489,6 +569,9 @@ export type LineupStatus = (typeof lineupStatusEnum.enumValues)[number];
 export type Bet = typeof bets.$inferSelect;
 export type BetLeg = typeof betLegs.$inferSelect;
 export type ModelAccuracy = typeof modelAccuracy.$inferSelect;
+export type BacktestRun = typeof backtestRuns.$inferSelect;
+export type BacktestSlip = typeof backtestSlips.$inferSelect;
+export type BacktestLeg = typeof backtestLegs.$inferSelect;
 export type StatType = (typeof statTypeEnum.enumValues)[number];
 export type ModelKey = (typeof modelEnum.enumValues)[number];
 export type LegResult = (typeof legResultEnum.enumValues)[number];

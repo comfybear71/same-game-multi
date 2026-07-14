@@ -8,6 +8,10 @@
     {
       "path": "/api/cron/settle-results",
       "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/cron/backtest-strategy",
+      "schedule": "0 3 * * 1"
     }
   ]
 }

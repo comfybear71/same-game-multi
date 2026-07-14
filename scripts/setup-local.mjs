@@ -109,7 +109,6 @@ const required = [
 ];
 
 const optional = [
-  { key: "ODDS_API_KEY", hint: "The Odds API key (fixtures + player props)" },
   { key: "BLOB_READ_WRITE_TOKEN", hint: "Vercel Blob (bet screenshot uploads)" },
   { key: "ANTHROPIC_API_KEY", hint: "Claude vision for slip/lineup reads" },
 ];

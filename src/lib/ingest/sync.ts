@@ -1,14 +1,12 @@
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 import { db } from "@/db";
 import { games } from "@/db/schema";
 import { canonicalTeam } from "@/lib/afl/teams";
-import { getFixturesWithH2H } from "./oddsApi";
 import { fetchSquiggleRound, getSquiggleGames, matchSquiggleFixture, type SquiggleGame } from "./squiggle";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Fixture sync: pull from Squiggle (authoritative for schedule + results) and
-// enrich with The Odds API event IDs (needed to fetch player props later).
+// Fixture sync: Squiggle is authoritative for schedule + results.
 // Idempotent — safe to run on every cron tick.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -34,7 +32,6 @@ export interface SyncResult {
   season: number;
   upserted: number;
   skipped: number;
-  oddsMatched: number;
 }
 
 /** Sync the full season's fixtures + results from Squiggle into `games`. */
@@ -86,13 +83,7 @@ export async function syncFixtures(season: number): Promise<SyncResult> {
     upserted++;
   }
 
-  const oddsMatched = await enrichWithOddsApiIds().catch((err) => {
-    // The Odds API is paid/optional at this stage — never block the sync.
-    console.warn("[sync] odds enrichment skipped:", err);
-    return 0;
-  });
-
-  return { season, upserted, skipped, oddsMatched };
+  return { season, upserted, skipped };
 }
 
 /** Refresh one game's result/score from Squiggle — fast, used by Game over. */
@@ -122,39 +113,4 @@ export async function refreshGameFromSquiggle(gameId: number): Promise<boolean> 
     .where(eq(games.id, gameId));
 
   return true;
-}
-
-/**
- * Attach The Odds API event IDs to upcoming games by matching team names +
- * commence time. Stored on `games.oddsApiId` so we can later fetch props.
- */
-async function enrichWithOddsApiIds(): Promise<number> {
-  const events = await getFixturesWithH2H();
-  let matched = 0;
-
-  for (const ev of events) {
-    const home = canonicalTeam(ev.home_team);
-    const away = canonicalTeam(ev.away_team);
-    if (!home || !away) continue;
-
-    const commence = new Date(ev.commence_time);
-    // Match on teams; commence times across sources can differ by minutes.
-    const rows = await db
-      .select({ id: games.id })
-      .from(games)
-      .where(and(eq(games.home, home), eq(games.away, away)))
-      .limit(5);
-
-    // Prefer the game whose commence time is closest to the odds event.
-    if (rows.length === 0) continue;
-    const target = rows[0];
-    await db
-      .update(games)
-      .set({ oddsApiId: ev.id, updatedAt: new Date() })
-      .where(eq(games.id, target.id));
-    matched++;
-    void commence;
-  }
-
-  return matched;
 }
