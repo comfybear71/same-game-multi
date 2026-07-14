@@ -22,6 +22,7 @@ import {
 import { currentSeason } from "@/lib/cron";
 import { getPlayerHistory } from "@/lib/ingest/aflTables";
 import { syncFixtures } from "@/lib/ingest/sync";
+import { refreshPolicy } from "@/lib/system/policy";
 
 /** Stable label for the Monday weekly Strategy lab cron (current season). */
 export function weeklyLabLabel(season = currentSeason()): string {
@@ -297,6 +298,24 @@ export async function runBacktest(opts: BacktestRunnerOptions): Promise<{
       .where(eq(backtestRuns.id, runId));
 
     log(`Done run #${runId}: ${gamesProcessed} games, ${slipsWritten} slips`);
+
+    // Refresh AI helm from the best lab run (prefers multi-season full-*).
+    // Skip smoke labels so tiny runs don't overwrite a solid policy.
+    const label = opts.label ?? "";
+    if (
+      slipsWritten > 0 &&
+      (label.startsWith("full-") || label.startsWith("strategy-lab-"))
+    ) {
+      try {
+        const policy = await refreshPolicy();
+        log(
+          `AI policy refreshed → ${policy.defaults.focus} × ${policy.defaults.legCount} (from #${policy.sourceRunId})`,
+        );
+      } catch (err) {
+        log(`AI policy refresh skipped: ${(err as Error).message}`);
+      }
+    }
+
     return { runId, gamesProcessed, slipsWritten };
   } catch (err) {
     await db

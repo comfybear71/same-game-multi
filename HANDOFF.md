@@ -35,6 +35,17 @@ npm run typecheck && npm run lint && npm run build
 - Crons: daily fixture refresh + morning-after settle/accuracy; **Monday**
   Strategy lab incremental (`/api/cron/backtest-strategy`, label
   `strategy-lab-{year}`) once AFL Tables has the prior round.
+- **AI helm / System book (phase 1):** policy derived from Strategy lab
+  (slip hit + flat ROI → strategy tiers). Review “AI helm”; game page
+  “System book” portfolio (separate from personal bets); Suggested multi
+  seeds focus/legs from policy. Grade on game-over / settle cron.
+  Migration `0009_nifty_midnight`.
+- **Bankroll sim (phase 2):** walk-forward $10/game unit on graded lab slips,
+  policy recomputed each round, 10% grow / +$10 top-up, season checkpoints.
+  Review “Bankroll sim”; `npm run bankroll`. Migration `0010_brave_wallop`.
+- **Live System bank:** after placing helm tickets, enter **stake + bookie odds**
+  on each System book slip; Review “Live System bank” tallies season P&L
+  (`cashReturn = stake × placedOdds` on hit). Migration `0011_sturdy_quentin_quire`.
 
 ### Lineups & predictions
 

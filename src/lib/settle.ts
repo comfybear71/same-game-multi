@@ -7,6 +7,7 @@ import { gamePlayerNameSet, legInGameScope, slipBetIdsForGame, type LegGameScope
 import { settleGamePlayerStats } from "@/lib/ingest/playerStats";
 import { refreshGameFromSquiggle, syncFixtures } from "@/lib/ingest/sync";
 import { computeRoundAccuracy } from "@/lib/predictions/accuracy";
+import { gradeSystemBookForGame } from "@/lib/system/grade";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Settlement: once a game is complete and player stats are recorded, mark each
@@ -353,6 +354,7 @@ export interface GameOverSettlement {
   statsRecorded: number;
   fromStats: SettleResult;
   fromLive: SettleResult;
+  systemBook: { ticketsGraded: number; legsUpdated: number };
 }
 
 /** Post-game: finalise tap counts first, then try AFL Tables for any left. */
@@ -372,6 +374,10 @@ export async function runGameOverSettlement(gameId: number): Promise<GameOverSet
 
   const statsResult = await settleGamePlayerStats(gameId);
   const fromStats = await settlePendingBetsForGame(gameId);
+  const systemBook = await gradeSystemBookForGame(gameId).catch((err) => {
+    console.warn(`[game-over] system book grade for game ${gameId}:`, err);
+    return { ticketsGraded: 0, legsUpdated: 0 };
+  });
 
   const updated = (
     await db.select({ status: games.status }).from(games).where(eq(games.id, gameId)).limit(1)
@@ -382,6 +388,7 @@ export async function runGameOverSettlement(gameId: number): Promise<GameOverSet
     statsRecorded: statsResult.recorded,
     fromStats,
     fromLive,
+    systemBook,
   };
 }
 
@@ -391,6 +398,7 @@ export interface SettlementPipelineResult {
   settle: SettleResult;
   actualsBackfilled: number;
   accuracyRows: number;
+  systemTicketsGraded: number;
 }
 
 /**
@@ -419,11 +427,17 @@ export async function runSettlementPipeline(
       : completedAll.filter((g) => opts.gameIds!.includes(g.id));
 
   let statsRecorded = 0;
+  let systemTicketsGraded = 0;
   const rounds = new Set<number>();
   for (const g of completed) {
     const res = await settleGamePlayerStats(g.id);
     statsRecorded += res.recorded;
     if (g.round != null && res.recorded > 0) rounds.add(g.round);
+    const graded = await gradeSystemBookForGame(g.id).catch(() => ({
+      ticketsGraded: 0,
+      legsUpdated: 0,
+    }));
+    systemTicketsGraded += graded.ticketsGraded;
   }
 
   const settle = await settlePendingBets();
@@ -435,5 +449,12 @@ export async function runSettlementPipeline(
     accuracyRows += acc.rowsWritten;
   }
 
-  return { sync, statsRecorded, settle, actualsBackfilled, accuracyRows };
+  return {
+    sync,
+    statsRecorded,
+    settle,
+    actualsBackfilled,
+    accuracyRows,
+    systemTicketsGraded,
+  };
 }

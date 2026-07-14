@@ -6,6 +6,7 @@ import { cached } from "@/lib/ingest/cache";
 import { explainMultis } from "@/lib/ai/explainMultis";
 import { buildSuggestions, type StatFocus } from "@/lib/predictions/suggest";
 import { DEFAULT_LEGS, MAX_LEGS, MIN_LEGS } from "@/lib/predictions/suggestLimits";
+import { getActivePolicy } from "@/lib/system/policy";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -23,14 +24,24 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     return NextResponse.json({ error: "bad game id" }, { status: 400 });
   }
   const url = new URL(req.url);
-  const focusParam = url.searchParams.get("focus") ?? "any";
+  const policy = await getActivePolicy().catch(() => null);
+  const policyFocus = policy?.defaults.focus;
+  const policyLegs = policy?.defaults.legCount;
+
+  const focusParam =
+    url.searchParams.get("focus") ??
+    (policyFocus && FOCUSES.includes(policyFocus as StatFocus)
+      ? policyFocus
+      : "any");
   const focus: StatFocus = FOCUSES.includes(focusParam as StatFocus)
     ? (focusParam as StatFocus)
     : "any";
   const legsParam = Number(url.searchParams.get("legs"));
   const legCount = Number.isFinite(legsParam)
     ? Math.min(MAX_LEGS, Math.max(MIN_LEGS, Math.round(legsParam)))
-    : DEFAULT_LEGS;
+    : policyLegs != null && Number.isFinite(policyLegs)
+      ? Math.min(MAX_LEGS, Math.max(MIN_LEGS, Math.round(policyLegs)))
+      : DEFAULT_LEGS;
 
   const userId = await userIdForEmail(email);
   const refresh = url.searchParams.get("refresh") === "1";
@@ -42,11 +53,23 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     const suggestion = refresh
       ? await build()
       : await cached(
-          `suggest:v7:${gameId}:${focus}:${legCount}:${userId ?? "anon"}`,
+          `suggest:v8:${gameId}:${focus}:${legCount}:${userId ?? "anon"}`,
           20 * 60,
           build,
         );
-    return NextResponse.json({ ok: true, focus, legCount, suggestion });
+    return NextResponse.json({
+      ok: true,
+      focus,
+      legCount,
+      suggestion,
+      policyDefaults: policy
+        ? {
+            focus: policy.defaults.focus,
+            legCount: policy.defaults.legCount,
+            rationale: policy.rationale,
+          }
+        : null,
+    });
   } catch (err) {
     return NextResponse.json(
       { ok: false, error: (err as Error).message },

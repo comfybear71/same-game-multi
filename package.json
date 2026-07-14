@@ -16,7 +16,8 @@
     "setup:local": "node scripts/setup-local.mjs",
     "check:env": "node scripts/check-env.mjs",
     "dev:safe": "node scripts/check-env.mjs && next dev",
-    "backtest": "tsx scripts/backtest-sgm.ts"
+    "backtest": "tsx scripts/backtest-sgm.ts",
+    "bankroll": "tsx scripts/bankroll-sim.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^0.9.5",
