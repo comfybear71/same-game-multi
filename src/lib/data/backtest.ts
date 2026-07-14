@@ -37,6 +37,16 @@ export interface CalibrationBin {
   actualHitRate: number | null;
 }
 
+export interface BacktestRunOption {
+  id: number;
+  label: string;
+  seasons: number[];
+  status: string;
+  gamesProcessed: number;
+  slipsWritten: number;
+  startedAt: Date;
+}
+
 export interface BacktestLabData {
   run: {
     id: number;
@@ -48,6 +58,8 @@ export interface BacktestLabData {
     startedAt: Date;
     finishedAt: Date | null;
   } | null;
+  /** Other runs available in the Strategy lab picker. */
+  runs: BacktestRunOption[];
   strategies: StrategySummary[];
   bySeason: SeasonBreakdown[];
   calibration: CalibrationBin[];
@@ -57,25 +69,51 @@ function strategyLabel(key: string): string {
   return BACKTEST_STRATEGIES.find((s) => s.key === key)?.label ?? key;
 }
 
-/** Prefer the weekly Strategy lab run; else latest completed (or latest any). */
-export async function getBacktestLabData(): Promise<BacktestLabData> {
-  const runs = await db
+function toRunOption(r: typeof backtestRuns.$inferSelect): BacktestRunOption {
+  return {
+    id: r.id,
+    label: r.label,
+    seasons: r.seasons ?? [],
+    status: r.status,
+    gamesProcessed: r.gamesProcessed,
+    slipsWritten: r.slipsWritten,
+    startedAt: r.startedAt,
+  };
+}
+
+/** List recent runs that have slips (for the Review picker). */
+export async function listBacktestRuns(limit = 20): Promise<BacktestRunOption[]> {
+  const rows = await db
     .select()
     .from(backtestRuns)
     .orderBy(desc(backtestRuns.startedAt))
-    .limit(20);
+    .limit(limit);
 
+  return rows
+    .filter((r) => r.slipsWritten > 0)
+    .map(toRunOption)
+    .sort((a, b) => {
+      // Weekly lab first, then fuller runs (more slips), then newer.
+      const aWeekly = a.label.startsWith("strategy-lab-") ? 0 : 1;
+      const bWeekly = b.label.startsWith("strategy-lab-") ? 0 : 1;
+      if (aWeekly !== bWeekly) return aWeekly - bWeekly;
+      if (b.slipsWritten !== a.slipsWritten) return b.slipsWritten - a.slipsWritten;
+      return b.id - a.id;
+    });
+}
+
+function pickDefaultRunId(runs: BacktestRunOption[]): number | null {
+  if (runs.length === 0) return null;
   const weekly = runs.find((r) => r.label.startsWith("strategy-lab-"));
-  const run =
-    weekly ??
-    runs.find((r) => r.status === "complete") ??
-    runs[0] ??
-    null;
+  if (weekly) return weekly.id;
+  return runs[0]!.id;
+}
 
-  if (!run) {
-    return { run: null, strategies: [], bySeason: [], calibration: [] };
-  }
-
+async function aggregateRun(runId: number): Promise<{
+  strategies: StrategySummary[];
+  bySeason: SeasonBreakdown[];
+  calibration: CalibrationBin[];
+}> {
   const slipRows = await db
     .select({
       strategyKey: backtestSlips.strategyKey,
@@ -90,7 +128,7 @@ export async function getBacktestLabData(): Promise<BacktestLabData> {
       flatReturned: sql<number>`sum(${backtestSlips.flatReturn})`,
     })
     .from(backtestSlips)
-    .where(eq(backtestSlips.runId, run.id))
+    .where(eq(backtestSlips.runId, runId))
     .groupBy(
       backtestSlips.strategyKey,
       backtestSlips.focus,
@@ -148,18 +186,16 @@ export async function getBacktestLabData(): Promise<BacktestLabData> {
         prev.flatStaked > 0
           ? (prev.flatReturned - prev.flatStaked) / prev.flatStaked
           : null;
-      // Weighted avg chance approx: leave as latest-ish; recompute from all slips below if needed
     }
   }
 
-  // Recalculate avg modelled chance properly per strategy
   const chanceRows = await db
     .select({
       strategyKey: backtestSlips.strategyKey,
       avgChance: sql<number>`avg(${backtestSlips.modelledChance})`,
     })
     .from(backtestSlips)
-    .where(eq(backtestSlips.runId, run.id))
+    .where(eq(backtestSlips.runId, runId))
     .groupBy(backtestSlips.strategyKey);
   for (const c of chanceRows) {
     const s = byKey.get(c.strategyKey);
@@ -170,7 +206,6 @@ export async function getBacktestLabData(): Promise<BacktestLabData> {
     (a, b) => (b.slipHitRate ?? -1) - (a.slipHitRate ?? -1) || b.slips - a.slips,
   );
 
-  // Calibration: bin slips by modelled chance
   const calRaw = await db
     .select({
       bin: sql<number>`floor(coalesce(${backtestSlips.modelledChance}, 0) * 10)`,
@@ -179,7 +214,7 @@ export async function getBacktestLabData(): Promise<BacktestLabData> {
     })
     .from(backtestSlips)
     .where(
-      and(eq(backtestSlips.runId, run.id), sql`${backtestSlips.modelledChance} is not null`),
+      and(eq(backtestSlips.runId, runId), sql`${backtestSlips.modelledChance} is not null`),
     )
     .groupBy(sql`floor(coalesce(${backtestSlips.modelledChance}, 0) * 10)`);
 
@@ -196,6 +231,40 @@ export async function getBacktestLabData(): Promise<BacktestLabData> {
     })
     .sort((a, b) => a.modelled - b.modelled);
 
+  return { strategies, bySeason, calibration };
+}
+
+/**
+ * Strategy lab aggregates for Review.
+ * @param runId optional — when omitted, prefer weekly `strategy-lab-*`, else fullest run.
+ */
+export async function getBacktestLabData(runId?: number): Promise<BacktestLabData> {
+  const runs = await listBacktestRuns();
+  const empty: BacktestLabData = {
+    run: null,
+    runs,
+    strategies: [],
+    bySeason: [],
+    calibration: [],
+  };
+
+  const selectedId =
+    runId != null && runs.some((r) => r.id === runId)
+      ? runId
+      : pickDefaultRunId(runs);
+
+  if (selectedId == null) return empty;
+
+  const [run] = await db
+    .select()
+    .from(backtestRuns)
+    .where(eq(backtestRuns.id, selectedId))
+    .limit(1);
+
+  if (!run) return empty;
+
+  const { strategies, bySeason, calibration } = await aggregateRun(run.id);
+
   return {
     run: {
       id: run.id,
@@ -207,6 +276,7 @@ export async function getBacktestLabData(): Promise<BacktestLabData> {
       startedAt: run.startedAt,
       finishedAt: run.finishedAt,
     },
+    runs,
     strategies,
     bySeason,
     calibration,

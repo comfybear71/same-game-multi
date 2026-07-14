@@ -71,6 +71,8 @@ src/
       cron/refresh-fixtures/route.ts   daily fixtures sync (Vercel Cron)
       cron/settle-results/route.ts     morning-after settle + accuracy
       cron/backtest-strategy/route.ts  Monday Strategy lab (current season)
+      system/policy/route.ts           AI helm policy read/refresh
+      games/[id]/system-book/route.ts  System book portfolio
       games/[id]/predict/route.ts      generate predictions (lineup roster)
       games/[id]/suggest/route.ts      suggested multi + Claude rationale
       games/[id]/candidates/route.ts   add-player picker pool

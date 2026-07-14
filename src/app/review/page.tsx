@@ -2,9 +2,21 @@ import { MultiStatsPanel } from "@/components/MultiStatsPanel";
 import { PlayerRecordPanel } from "@/components/PlayerRecordPanel";
 import { RoundRosterPanel } from "@/components/RoundRosterPanel";
 import { StrategyLabPanel } from "@/components/StrategyLabPanel";
+import { BankrollSimPanel } from "@/components/BankrollSimPanel";
+import { LiveSystemBankrollPanel } from "@/components/LiveSystemBankrollPanel";
+import { SystemHelmPanel } from "@/components/SystemHelmPanel";
 import { auth } from "@/lib/auth";
 import { getLeaderboard, type Leaderboard } from "@/lib/data/accuracy";
 import { getBacktestLabData, type BacktestLabData } from "@/lib/data/backtest";
+import {
+  getLatestBankrollSim,
+  type BankrollSimView,
+} from "@/lib/system/bankroll";
+import {
+  getLiveSystemBankroll,
+  type LiveSystemBankroll,
+} from "@/lib/system/liveBankroll";
+import { getActivePolicy, type ActivePolicyView } from "@/lib/system/policy";
 import {
   analyseMultis,
   getBetsForUser,
@@ -47,9 +59,25 @@ export default async function ReviewPage() {
   let roundRoster: RoundRoster | null = null;
   let labData: BacktestLabData = {
     run: null,
+    runs: [],
     strategies: [],
     bySeason: [],
     calibration: [],
+  };
+  let systemPolicy: ActivePolicyView | null = null;
+  let bankroll: BankrollSimView = { run: null, checkpoints: [], rounds: [] };
+  let liveBankroll: LiveSystemBankroll = {
+    season,
+    ticketsTracked: 0,
+    ticketsGraded: 0,
+    ticketsHit: 0,
+    ticketsPending: 0,
+    totalStaked: 0,
+    openStake: 0,
+    settledStake: 0,
+    totalReturned: 0,
+    netProfit: 0,
+    tickets: [],
   };
 
   try {
@@ -61,7 +89,28 @@ export default async function ReviewPage() {
     try {
       labData = await getBacktestLabData();
     } catch {
-      labData = { run: null, strategies: [], bySeason: [], calibration: [] };
+      labData = {
+        run: null,
+        runs: [],
+        strategies: [],
+        bySeason: [],
+        calibration: [],
+      };
+    }
+    try {
+      systemPolicy = await getActivePolicy();
+    } catch {
+      systemPolicy = null;
+    }
+    try {
+      bankroll = await getLatestBankrollSim();
+    } catch {
+      bankroll = { run: null, checkpoints: [], rounds: [] };
+    }
+    try {
+      liveBankroll = await getLiveSystemBankroll(season);
+    } catch {
+      /* keep empty */
     }
     const email = session?.user?.email;
     if (email) {
@@ -104,6 +153,29 @@ export default async function ReviewPage() {
       ) : null}
 
       <CollapsibleSection
+        title="AI helm"
+        description="Policy learned from Strategy lab — ranks which multi styles to favour. Steers Suggested multi defaults and the System book portfolio."
+        defaultOpen
+      >
+        <SystemHelmPanel initial={systemPolicy} />
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title="Live System bank"
+        description="Season tally from real stakes and bookie odds you enter on each System book ticket — separate from personal Multis and from the historical sim."
+        defaultOpen
+      >
+        <LiveSystemBankrollPanel initial={liveBankroll} />
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title="Bankroll sim"
+        description="Dollar walk-forward: $10/game across the System book, learn after each round, grow unit on profit / top up when cold. Season checkpoints for 2024–2026."
+      >
+        <BankrollSimPanel initial={bankroll} />
+      </CollapsibleSection>
+
+      <CollapsibleSection
         title="Strategy lab"
         description="Walk-forward backtest of suggested multis (disposals/goals/marks/tackles/any × 3/6/10). Emotion out — slip hit rate and flat ROI."
       >
@@ -141,13 +213,15 @@ function CollapsibleSection({
   title,
   description,
   children,
+  defaultOpen = false,
 }: {
   title: string;
   description: string;
   children: React.ReactNode;
+  defaultOpen?: boolean;
 }) {
   return (
-    <details className="card group">
+    <details className="card group" open={defaultOpen || undefined}>
       <summary className="flex cursor-pointer list-none items-start gap-2">
         <span className="mt-1 shrink-0 text-slate-600 transition-transform group-open:rotate-90">
           ▸

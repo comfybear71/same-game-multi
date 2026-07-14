@@ -8,6 +8,7 @@ import { LiveBetTracker } from "@/components/LiveBetTracker";
 import { LiveScoreboard } from "@/components/LiveScoreboard";
 import { StatBoardView } from "@/components/StatBoardView";
 import { SuggestedMultis } from "@/components/SuggestedMultis";
+import { SystemBookPanel } from "@/components/SystemBookPanel";
 import { TeamFormAndRanks, teamNameClass } from "@/components/TeamFormAndRanks";
 import type { StatType } from "@/db/schema";
 import { auth } from "@/lib/auth";
@@ -244,6 +245,7 @@ export default async function GamePage({ params }: { params: { id: string } }) {
       {hasData && board ? (
         <>
           <SuggestedMultis gameId={game.id} round={game.round} />
+          <SystemBookPanel gameId={game.id} />
           <StatBoardView board={board} record={playerRecord} />
         </>
       ) : (

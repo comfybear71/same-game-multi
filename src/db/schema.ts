@@ -487,6 +487,208 @@ export const backtestLegs = pgTable(
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
+// System book — policy from Strategy lab + live portfolio (not personal bets)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type SystemStrategyWeight = {
+  strategyKey: string;
+  focus: string;
+  legCount: number;
+  label: string;
+  score: number;
+  rank: number;
+  tier: "banker" | "balanced" | "low";
+  slipHitRate: number | null;
+  flatRoi: number | null;
+  slips: number;
+};
+
+export type SystemPolicyDefaults = {
+  focus: string;
+  legCount: number;
+};
+
+export type SystemPolicyWeights = {
+  strategies: SystemStrategyWeight[];
+};
+
+export const systemPolicy = pgTable("system_policy", {
+  id: serial("id").primaryKey(),
+  /** Only one row should be active at a time. */
+  active: boolean("active").notNull().default(true),
+  sourceRunId: integer("source_run_id").references(() => backtestRuns.id, {
+    onDelete: "set null",
+  }),
+  weights: jsonb("weights").$type<SystemPolicyWeights>().notNull(),
+  defaults: jsonb("defaults").$type<SystemPolicyDefaults>().notNull(),
+  rationale: text("rationale"),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export const systemTickets = pgTable(
+  "system_tickets",
+  {
+    id: serial("id").primaryKey(),
+    gameId: integer("game_id")
+      .notNull()
+      .references(() => games.id, { onDelete: "cascade" }),
+    strategyKey: text("strategy_key").notNull(),
+    focus: text("focus").notNull(),
+    legCount: integer("leg_count").notNull(),
+    tier: text("tier").notNull().default("balanced"),
+    modelledChance: doublePrecision("modelled_chance"),
+    estOdds: doublePrecision("est_odds"),
+    /** Actual bookie odds entered after placing the ticket. */
+    placedOdds: doublePrecision("placed_odds"),
+    /** Dollars staked on this system ticket (manual entry). */
+    stake: doublePrecision("stake"),
+    legsHit: integer("legs_hit").notNull().default(0),
+    legsTotal: integer("legs_total").notNull().default(0),
+    slipHit: boolean("slip_hit"),
+    /** Model flat $1 return: estOdds if hit else 0. */
+    flatReturn: doublePrecision("flat_return").notNull().default(0),
+    /** Real cash return: stake × placedOdds if hit else 0 (when both set). */
+    cashReturn: doublePrecision("cash_return").notNull().default(0),
+    gradedAt: timestamp("graded_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    gameIdx: index("system_tickets_game_idx").on(t.gameId),
+    gameStrategyUq: unique("system_tickets_game_strategy_uq").on(
+      t.gameId,
+      t.strategyKey,
+    ),
+  }),
+);
+
+export const systemTicketLegs = pgTable(
+  "system_ticket_legs",
+  {
+    id: serial("id").primaryKey(),
+    ticketId: integer("ticket_id")
+      .notNull()
+      .references(() => systemTickets.id, { onDelete: "cascade" }),
+    playerId: integer("player_id").references(() => players.id, {
+      onDelete: "set null",
+    }),
+    playerName: text("player_name").notNull(),
+    team: text("team"),
+    statType: statTypeEnum("stat_type").notNull(),
+    line: doublePrecision("line").notNull(),
+    prediction: doublePrecision("prediction").notNull(),
+    confidence: doublePrecision("confidence").notNull(),
+    actualValue: integer("actual_value"),
+    hit: boolean("hit"),
+  },
+  (t) => ({
+    ticketIdx: index("system_ticket_legs_ticket_idx").on(t.ticketId),
+  }),
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dollar bankroll walk-forward sim (on top of graded backtest slips)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type BankrollParams = {
+  startUnit: number;
+  portfolioK: number;
+  growPct: number;
+  topUp: number;
+  unitCap: number;
+};
+
+export const bankrollRunStatusEnum = pgEnum("bankroll_run_status", [
+  "running",
+  "complete",
+  "failed",
+]);
+
+export const bankrollRuns = pgTable("bankroll_runs", {
+  id: serial("id").primaryKey(),
+  label: text("label").notNull(),
+  sourceRunId: integer("source_run_id")
+    .notNull()
+    .references(() => backtestRuns.id, { onDelete: "cascade" }),
+  params: jsonb("params").$type<BankrollParams>().notNull(),
+  status: bankrollRunStatusEnum("status").notNull().default("running"),
+  /** Final learned strategy weights after the last round. */
+  learnedPolicy: jsonb("learned_policy").$type<SystemPolicyWeights>(),
+  rationale: text("rationale"),
+  finalUnit: doublePrecision("final_unit"),
+  finalBank: doublePrecision("final_bank"),
+  capitalInjected: doublePrecision("capital_injected").notNull().default(0),
+  netProfit: doublePrecision("net_profit"),
+  gamesPlayed: integer("games_played").notNull().default(0),
+  ticketsPlaced: integer("tickets_placed").notNull().default(0),
+  ticketsHit: integer("tickets_hit").notNull().default(0),
+  error: text("error"),
+  startedAt: timestamp("started_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+});
+
+export const bankrollCheckpoints = pgTable(
+  "bankroll_checkpoints",
+  {
+    id: serial("id").primaryKey(),
+    runId: integer("run_id")
+      .notNull()
+      .references(() => bankrollRuns.id, { onDelete: "cascade" }),
+    season: integer("season").notNull(),
+    afterRound: integer("after_round"),
+    unit: doublePrecision("unit").notNull(),
+    bank: doublePrecision("bank").notNull(),
+    capitalInjected: doublePrecision("capital_injected").notNull(),
+    netProfit: doublePrecision("net_profit").notNull(),
+    gamesPlayed: integer("games_played").notNull(),
+    ticketsPlaced: integer("tickets_placed").notNull(),
+    ticketsHit: integer("tickets_hit").notNull(),
+  },
+  (t) => ({
+    runSeasonIdx: index("bankroll_checkpoints_run_season_idx").on(t.runId, t.season),
+  }),
+);
+
+export const bankrollRoundLog = pgTable(
+  "bankroll_round_log",
+  {
+    id: serial("id").primaryKey(),
+    runId: integer("run_id")
+      .notNull()
+      .references(() => bankrollRuns.id, { onDelete: "cascade" }),
+    season: integer("season").notNull(),
+    round: integer("round").notNull(),
+    unitBefore: doublePrecision("unit_before").notNull(),
+    unitAfter: doublePrecision("unit_after").notNull(),
+    stake: doublePrecision("stake").notNull(),
+    returns: doublePrecision("returns").notNull(),
+    pnl: doublePrecision("pnl").notNull(),
+    bankAfter: doublePrecision("bank_after").notNull(),
+    capitalInjected: doublePrecision("capital_injected").notNull(),
+    games: integer("games").notNull(),
+    ticketsPlaced: integer("tickets_placed").notNull(),
+    ticketsHit: integer("tickets_hit").notNull(),
+    policyTop: jsonb("policy_top").$type<string[]>(),
+    notes: text("notes"),
+  },
+  (t) => ({
+    runRoundIdx: index("bankroll_round_log_run_round_idx").on(
+      t.runId,
+      t.season,
+      t.round,
+    ),
+  }),
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
 // API response cache (Squiggle, AFL Tables, etc.)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -572,6 +774,12 @@ export type ModelAccuracy = typeof modelAccuracy.$inferSelect;
 export type BacktestRun = typeof backtestRuns.$inferSelect;
 export type BacktestSlip = typeof backtestSlips.$inferSelect;
 export type BacktestLeg = typeof backtestLegs.$inferSelect;
+export type SystemPolicy = typeof systemPolicy.$inferSelect;
+export type SystemTicket = typeof systemTickets.$inferSelect;
+export type SystemTicketLeg = typeof systemTicketLegs.$inferSelect;
+export type BankrollRun = typeof bankrollRuns.$inferSelect;
+export type BankrollCheckpoint = typeof bankrollCheckpoints.$inferSelect;
+export type BankrollRoundLog = typeof bankrollRoundLog.$inferSelect;
 export type StatType = (typeof statTypeEnum.enumValues)[number];
 export type ModelKey = (typeof modelEnum.enumValues)[number];
 export type LegResult = (typeof legResultEnum.enumValues)[number];

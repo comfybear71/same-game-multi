@@ -32,6 +32,8 @@ export function SuggestedMultis({
 }) {
   const [focus, setFocus] = useState<StatType | "any">("any");
   const [legCount, setLegCount] = useState(DEFAULT_LEGS);
+  const [policyBadge, setPolicyBadge] = useState<string | null>(null);
+  const [ready, setReady] = useState(false);
   const [data, setData] = useState<Suggestion | null>(null);
   const [info, setInfo] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -40,15 +42,50 @@ export function SuggestedMultis({
   const [editableLegs, setEditableLegs] = useState<EditableLeg[]>([]);
   const lastAppliedRefresh = useRef(-1);
 
+  // Seed focus / legs from AI policy once, then load suggestions.
   useEffect(() => {
+    let cancelled = false;
+    fetch("/api/system/policy")
+      .then((r) => r.json())
+      .then((json) => {
+        if (cancelled) return;
+        const d = json.policy?.defaults as
+          | { focus?: string; legCount?: number }
+          | undefined;
+        if (d?.focus && FOCUSES.some((f) => f.key === d.focus)) {
+          setFocus(d.focus as StatType | "any");
+        }
+        if (d?.legCount != null && Number.isFinite(Number(d.legCount))) {
+          setLegCount(
+            Math.min(MAX_LEGS, Math.max(MIN_LEGS, Math.round(Number(d.legCount)))),
+          );
+        }
+        if (d?.focus != null && d?.legCount != null) {
+          setPolicyBadge(`Policy default: ${d.focus} · ${d.legCount}`);
+        }
+      })
+      .catch(() => {
+        /* no policy yet — use built-in defaults */
+      })
+      .finally(() => {
+        if (!cancelled) setReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [gameId]);
+
+  useEffect(() => {
+    if (!ready) return;
     let cancelled = false;
     const controller = new AbortController();
     setLoading(true);
     setError(null);
     const refresh = refreshToken > 0 ? "&refresh=1" : "";
-    fetch(`/api/games/${gameId}/suggest?focus=${focus}&legs=${legCount}${refresh}`, {
-      signal: controller.signal,
-    })
+    fetch(
+      `/api/games/${gameId}/suggest?focus=${focus}&legs=${legCount}${refresh}`,
+      { signal: controller.signal },
+    )
       .then((r) => r.json())
       .then((json) => {
         if (cancelled) return;
@@ -64,7 +101,7 @@ export function SuggestedMultis({
       cancelled = true;
       controller.abort();
     };
-  }, [gameId, focus, legCount, refreshToken]);
+  }, [gameId, focus, legCount, refreshToken, ready]);
 
   // Only replace the ticket on first load or ↻ New picks — not when browsing tabs.
   useEffect(() => {
@@ -87,6 +124,9 @@ export function SuggestedMultis({
           <span className="text-slate-300">↻ New picks</span> to reset the whole
           ticket from scratch.
         </p>
+        {policyBadge ? (
+          <p className="mt-1 text-[11px] text-sky-400/90">{policyBadge}</p>
+        ) : null}
       </div>
 
       {/* Focus */}
