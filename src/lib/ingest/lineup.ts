@@ -1,9 +1,16 @@
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 
 import { db } from "@/db";
-import { games, lineupPlayers, players } from "@/db/schema";
+import {
+  games,
+  lineupPlayers,
+  players,
+  predictions,
+  type LineupStatus,
+} from "@/db/schema";
 import { canonicalTeam } from "@/lib/afl/teams";
 import type { ExtractedLineup } from "@/lib/ai/readLineup";
+import { normalisePlayerName } from "@/lib/playerName";
 
 // Persist a screenshot-read team sheet as a game's lineup. The stored names are
 // the squad seed that prediction generation runs off (see generate.ts), so we
@@ -101,23 +108,188 @@ export async function saveLineup(
   };
 }
 
-/** Distinct named players for a game's lineup — the squad seed for predictions. */
+/**
+ * Distinct players for a game's lineup — the squad seed for predictions.
+ * Emergencies are excluded: they are not in the 22/23 and usually won't play.
+ * Named + interchange are kept (interchange is part of the selected side).
+ */
 export async function getLineupNames(
   gameId: number,
 ): Promise<{ name: string; team: string }[]> {
   const rows = await db
-    .select({ name: lineupPlayers.playerName, team: lineupPlayers.team })
+    .select({
+      name: lineupPlayers.playerName,
+      team: lineupPlayers.team,
+      status: lineupPlayers.status,
+    })
     .from(lineupPlayers)
     .where(eq(lineupPlayers.gameId, gameId));
   const seen = new Set<string>();
   const out: { name: string; team: string }[] = [];
   for (const r of rows) {
+    if (r.status === "emergency") continue;
     const key = `${r.name}|${r.team}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push({ name: r.name, team: r.team });
   }
   return out;
+}
+
+export type EmergencyMatcher = {
+  /** True if this predicted/suggested player is an emergency for the game. */
+  matches: (p: {
+    name: string;
+    team: string | null;
+    jumper?: number | null;
+  }) => boolean;
+};
+
+/**
+ * Match emergencies by full name, team+surname, or team+jumper — Claude and
+ * AFL Tables often disagree on first names (Nick vs Nicholas).
+ */
+export async function getEmergencyMatcher(
+  gameId: number,
+): Promise<EmergencyMatcher> {
+  const rows = await db
+    .select({
+      name: lineupPlayers.playerName,
+      team: lineupPlayers.team,
+      jumper: lineupPlayers.jumper,
+    })
+    .from(lineupPlayers)
+    .where(
+      and(
+        eq(lineupPlayers.gameId, gameId),
+        eq(lineupPlayers.status, "emergency"),
+      ),
+    );
+
+  const names = new Set(rows.map((r) => normalisePlayerName(r.name)));
+  const teamSurname = new Set(
+    rows.map((r) => `${canonicalTeam(r.team) ?? r.team}|${surname(r.name)}`),
+  );
+  const teamJumper = new Set(
+    rows
+      .filter((r) => r.jumper != null)
+      .map((r) => `${canonicalTeam(r.team) ?? r.team}|${r.jumper}`),
+  );
+
+  return {
+    matches(p) {
+      if (names.has(normalisePlayerName(p.name))) return true;
+      const team = p.team ? canonicalTeam(p.team) ?? p.team : null;
+      if (team && teamSurname.has(`${team}|${surname(p.name)}`)) return true;
+      if (
+        team &&
+        p.jumper != null &&
+        teamJumper.has(`${team}|${p.jumper}`)
+      ) {
+        return true;
+      }
+      return false;
+    },
+  };
+}
+
+/** @deprecated prefer getEmergencyMatcher — kept for simple name-set callers. */
+export async function getEmergencyNames(gameId: number): Promise<Set<string>> {
+  const rows = await db
+    .select({ name: lineupPlayers.playerName })
+    .from(lineupPlayers)
+    .where(
+      and(
+        eq(lineupPlayers.gameId, gameId),
+        eq(lineupPlayers.status, "emergency"),
+      ),
+    );
+  return new Set(rows.map((r) => normalisePlayerName(r.name)));
+}
+
+async function deletePredictionsForLineupPlayers(
+  gameId: number,
+  lineupRows: { name: string; team: string; jumper: number | null }[],
+): Promise<number> {
+  if (lineupRows.length === 0) return 0;
+  const allPlayers = await db
+    .select({
+      id: players.id,
+      name: players.name,
+      team: players.team,
+      jumper: players.jumper,
+    })
+    .from(players);
+
+  const ids = new Set<number>();
+  for (const lp of lineupRows) {
+    const team = canonicalTeam(lp.team) ?? lp.team;
+    const sn = surname(lp.name);
+    const nn = normalisePlayerName(lp.name);
+    for (const p of allPlayers) {
+      const pTeam = p.team ? canonicalTeam(p.team) ?? p.team : null;
+      if (pTeam !== team) continue;
+      if (normalisePlayerName(p.name) === nn || surname(p.name) === sn) {
+        ids.add(p.id);
+        continue;
+      }
+      if (lp.jumper != null && p.jumper === lp.jumper) ids.add(p.id);
+    }
+  }
+  if (ids.size === 0) return 0;
+  await db
+    .delete(predictions)
+    .where(
+      and(eq(predictions.gameId, gameId), inArray(predictions.playerId, [...ids])),
+    );
+  return ids.size;
+}
+
+/** Manually correct a mis-read lineup status (e.g. emergency tagged as named). */
+export async function setLineupPlayerStatus(
+  gameId: number,
+  playerName: string,
+  status: LineupStatus,
+  team?: string | null,
+): Promise<{ updated: number; predictionsCleared: number }> {
+  const rows = await db
+    .select({
+      id: lineupPlayers.id,
+      name: lineupPlayers.playerName,
+      team: lineupPlayers.team,
+      jumper: lineupPlayers.jumper,
+    })
+    .from(lineupPlayers)
+    .where(eq(lineupPlayers.gameId, gameId));
+  const target = normalisePlayerName(playerName);
+  const targetSurname = surname(playerName);
+  const teamC = team ? canonicalTeam(team) ?? team : null;
+  const matched = rows.filter((r) => {
+    if (teamC && (canonicalTeam(r.team) ?? r.team) !== teamC) return false;
+    return (
+      normalisePlayerName(r.name) === target || surname(r.name) === targetSurname
+    );
+  });
+  if (matched.length === 0) return { updated: 0, predictionsCleared: 0 };
+
+  await db
+    .update(lineupPlayers)
+    .set({ status })
+    .where(
+      inArray(
+        lineupPlayers.id,
+        matched.map((r) => r.id),
+      ),
+    );
+
+  let predictionsCleared = 0;
+  if (status === "emergency") {
+    predictionsCleared = await deletePredictionsForLineupPlayers(
+      gameId,
+      matched.map((r) => ({ name: r.name, team: r.team, jumper: r.jumper })),
+    );
+  }
+  return { updated: matched.length, predictionsCleared };
 }
 
 /**

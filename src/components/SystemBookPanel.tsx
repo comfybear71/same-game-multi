@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { lineTarget } from "@/lib/format";
+import { minLineTarget } from "@/lib/predictions/modelLine";
 import type { SystemTicketView } from "@/lib/system/portfolio";
 
 function pct(n: number | null | undefined): string {
@@ -19,15 +20,60 @@ const TIER_BADGE: Record<string, string> = {
   banker: "border-emerald-500/40 text-emerald-400",
   balanced: "border-sky-500/40 text-sky-400",
   low: "border-surface-border text-slate-500",
+  fun: "border-fuchsia-500/50 bg-fuchsia-500/10 text-fuchsia-300",
 };
 
-export function SystemBookPanel({ gameId }: { gameId: number }) {
+const BAND_STAMP: Record<string, string> = {
+  elite: "border-sky-500/50 bg-sky-500/25 text-sky-200",
+  above: "border-emerald-500/40 bg-emerald-500/15 text-emerald-200",
+  average: "border-amber-500/35 bg-amber-500/10 text-amber-100",
+  below: "border-rose-500/35 bg-rose-500/10 text-rose-200",
+};
+
+const BAND_LABEL: Record<string, string> = {
+  elite: "Elite",
+  above: "Above avg",
+  average: "Average",
+  below: "Below avg",
+};
+
+const TEAM_SHORT: Record<string, string> = {
+  Adelaide: "Adel",
+  "Brisbane Lions": "Bris",
+  Carlton: "Carl",
+  Collingwood: "Coll",
+  Essendon: "Ess",
+  Fremantle: "Freo",
+  Geelong: "Geel",
+  "Gold Coast": "GC",
+  "Greater Western Sydney": "GWS",
+  Hawthorn: "Haw",
+  Melbourne: "Melb",
+  "North Melbourne": "North",
+  "Port Adelaide": "Port",
+  Richmond: "Rich",
+  "St Kilda": "StK",
+  Sydney: "Syd",
+  "West Coast": "WCE",
+  "Western Bulldogs": "Dogs",
+};
+
+export function SystemBookPanel({
+  gameId,
+  embedded = false,
+}: {
+  gameId: number;
+  /** When wrapped in CollapsibleSection — drop outer card + title block. */
+  embedded?: boolean;
+}) {
   const [tickets, setTickets] = useState<SystemTicketView[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [openId, setOpenId] = useState<number | null>(null);
   const [savingId, setSavingId] = useState<number | null>(null);
+  const [nudgingLegId, setNudgingLegId] = useState<number | null>(null);
+  const [excludingName, setExcludingName] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -71,6 +117,67 @@ export function SystemBookPanel({ gameId }: { gameId: number }) {
     }
   }
 
+  async function excludePlayer(playerName: string, team: string | null) {
+    if (
+      !confirm(
+        `Mark ${playerName} as emergency and rebuild the System book? They’ll be removed from all tickets.`,
+      )
+    ) {
+      return;
+    }
+    setExcludingName(playerName);
+    setError(null);
+    try {
+      const res = await fetch(`/api/games/${gameId}/system-book`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          excludePlayer: { playerName, team },
+        }),
+      });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        tickets?: SystemTicketView[];
+        error?: string;
+      };
+      if (!res.ok || !json.ok) {
+        throw new Error(json.error ?? `Failed (${res.status})`);
+      }
+      setTickets(json.tickets ?? []);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setExcludingName(null);
+    }
+  }
+
+  async function nudgeLeg(legId: number, target: number) {
+    setNudgingLegId(legId);
+    setError(null);
+    try {
+      const res = await fetch(`/api/games/${gameId}/system-book`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ legId, target }),
+      });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        ticket?: SystemTicketView;
+        error?: string;
+      };
+      if (!res.ok || !json.ok || !json.ticket) {
+        throw new Error(json.error ?? `Failed (${res.status})`);
+      }
+      setTickets((prev) =>
+        prev.map((t) => (t.id === json.ticket!.id ? json.ticket! : t)),
+      );
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setNudgingLegId(null);
+    }
+  }
+
   async function savePlacement(
     ticketId: number,
     stakeStr: string,
@@ -111,15 +218,21 @@ export function SystemBookPanel({ gameId }: { gameId: number }) {
   const gameStake = tickets.reduce((s, t) => s + (t.stake ?? 0), 0);
 
   return (
-    <section className="card space-y-3">
+    <section className={embedded ? "space-y-3" : "card space-y-3"}>
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold text-white">System book</h2>
+        {embedded ? (
           <p className="text-sm text-slate-400">
-            Follow the helm 100%: generate after predictions, place every ticket,
-            then enter bookie odds + stake so Review can tally the season bank.
+            Nudge lines to Sportsbet, place, then save stake + odds.
           </p>
-        </div>
+        ) : (
+          <div>
+            <h2 className="text-lg font-semibold text-white">System book</h2>
+            <p className="text-sm text-slate-400">
+              Follow the helm 100%: generate after predictions, nudge each leg to
+              the Sportsbet line if needed, place, then enter bookie odds + stake.
+            </p>
+          </div>
+        )}
         <button
           type="button"
           onClick={() => void generate()}
@@ -199,27 +312,127 @@ export function SystemBookPanel({ gameId }: { gameId: number }) {
                     saving={savingId === t.id}
                     onSave={(stake, odds) => void savePlacement(t.id, stake, odds)}
                   />
-                  <ul className="space-y-1">
-                    {t.legs.map((l) => (
-                      <li
-                        key={l.id}
-                        className="flex flex-wrap items-baseline justify-between gap-2 text-xs"
-                      >
-                        <span className="text-slate-200">
-                          {l.playerName}{" "}
-                          <span className="text-slate-500">
-                            {lineTarget(l.line)} {l.statType}
-                          </span>
-                        </span>
-                        <span className="tabular-nums text-slate-400">
-                          {Math.round(l.confidence * 100)}%
-                          {l.actualValue != null
-                            ? ` · got ${l.actualValue}${l.hit ? " ✓" : " ✗"}`
-                            : ""}
-                        </span>
-                      </li>
-                    ))}
+                  <ul className="space-y-2">
+                    {t.legs.map((l) => {
+                      const target = lineTarget(l.line);
+                      const floor = minLineTarget(l.statType);
+                      const locked = t.slipHit != null || t.gradedAt != null;
+                      const club =
+                        l.team != null
+                          ? (TEAM_SHORT[l.team] ?? l.team)
+                          : null;
+                      const band = l.benchmark ?? null;
+                      return (
+                        <li
+                          key={l.id}
+                          className="rounded-md border border-surface-border/50 bg-surface/30 px-2 py-1.5 text-xs"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 sm:flex-nowrap">
+                            <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-slate-100 sm:flex-nowrap sm:overflow-hidden">
+                              <span className="shrink-0 font-medium text-white">
+                                {l.playerName}
+                              </span>
+                              <span className="shrink-0 capitalize text-slate-400">
+                                {l.statType}
+                              </span>
+                              <span className="shrink-0 text-slate-600">·</span>
+                              <span className="shrink-0 text-slate-500">
+                                {l.position ?? "UNK"}
+                              </span>
+                              {club ? (
+                                <>
+                                  <span className="shrink-0 text-slate-600">
+                                    ·
+                                  </span>
+                                  <span className="shrink-0 text-slate-500">
+                                    {club}
+                                  </span>
+                                </>
+                              ) : null}
+                              {l.seasonAvg != null ? (
+                                <span
+                                  className={`shrink-0 rounded border px-1 py-px font-semibold tabular-nums ${
+                                    band
+                                      ? BAND_STAMP[band]
+                                      : "border-surface-border text-slate-400"
+                                  }`}
+                                  title="Season average (Leaders)"
+                                >
+                                  {l.seasonAvg}
+                                </span>
+                              ) : null}
+                              {band ? (
+                                <span
+                                  className={`shrink-0 rounded border px-1 py-px text-[10px] font-semibold uppercase tracking-wide ${BAND_STAMP[band]}`}
+                                >
+                                  {BAND_LABEL[band] ?? band}
+                                  {l.percentile != null ? (
+                                    <span className="ml-0.5 font-normal opacity-70">
+                                      p{Math.round(l.percentile)}
+                                    </span>
+                                  ) : null}
+                                </span>
+                              ) : null}
+                            </div>
+                            <span className="inline-flex shrink-0 items-center gap-1.5">
+                              <span className="inline-flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  className="flex h-5 w-5 items-center justify-center rounded border border-surface-border text-slate-300 disabled:opacity-40"
+                                  disabled={
+                                    locked ||
+                                    nudgingLegId === l.id ||
+                                    target <= floor
+                                  }
+                                  onClick={() => void nudgeLeg(l.id, target - 1)}
+                                  aria-label={`Lower ${l.playerName} target`}
+                                >
+                                  −
+                                </button>
+                                <span className="min-w-[2.5ch] text-center text-sm font-semibold text-white">
+                                  {target}+
+                                </span>
+                                <button
+                                  type="button"
+                                  className="flex h-5 w-5 items-center justify-center rounded border border-surface-border text-slate-300 disabled:opacity-40"
+                                  disabled={locked || nudgingLegId === l.id}
+                                  onClick={() => void nudgeLeg(l.id, target + 1)}
+                                  aria-label={`Raise ${l.playerName} target`}
+                                >
+                                  +
+                                </button>
+                              </span>
+                              <span className="tabular-nums text-slate-400">
+                                {Math.round(l.confidence * 100)}%
+                                {l.actualValue != null
+                                  ? ` · got ${l.actualValue}${l.hit ? " ✓" : " ✗"}`
+                                  : ""}
+                              </span>
+                              {!locked ? (
+                                <button
+                                  type="button"
+                                  disabled={excludingName != null || busy}
+                                  onClick={() =>
+                                    void excludePlayer(l.playerName, l.team)
+                                  }
+                                  className="rounded border border-amber-500/40 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-400 hover:bg-amber-500/10 disabled:opacity-40"
+                                  title="Mark as emergency and rebuild book"
+                                >
+                                  {excludingName === l.playerName
+                                    ? "…"
+                                    : "EMG"}
+                                </button>
+                              ) : null}
+                            </span>
+                          </div>
+                        </li>
+                      );
+                    })}
                   </ul>
+                  <p className="text-[10px] text-slate-600">
+                    Use +/− for Sportsbet lines. Tap EMG on a leg if they&apos;re
+                    an emergency / not playing — rebuilds the book without them.
+                  </p>
                 </div>
               ) : null}
             </li>

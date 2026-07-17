@@ -8,7 +8,12 @@ import { readLineup, type LineupImage } from "@/lib/ai/readLineup";
 import { auth } from "@/lib/auth";
 import { canonicalTeam } from "@/lib/afl/teams";
 import { env } from "@/lib/env";
-import { getLineup, saveLineup } from "@/lib/ingest/lineup";
+import {
+  getLineup,
+  saveLineup,
+  setLineupPlayerStatus,
+} from "@/lib/ingest/lineup";
+import type { LineupStatus } from "@/db/schema";
 
 // Read a game's team sheet from one or more uploaded screenshots (AFL app /
 // afl.com.au Match Centre line-ups) and store the named squad. This is the free
@@ -85,6 +90,61 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     const result = await saveLineup(gameId, extracted, sourceUrl);
 
     return NextResponse.json({ ok: true, ...result });
+  } catch (err) {
+    return NextResponse.json(
+      { ok: false, error: (err as Error).message },
+      { status: 500 },
+    );
+  }
+}
+
+/**
+ * Correct a mis-tagged lineup status (Claude often marks emergencies as named).
+ * Body: { playerName: string, status: "named"|"interchange"|"emergency", team?: string }
+ */
+export async function PATCH(req: Request, { params }: { params: { id: string } }) {
+  const session = await auth();
+  if (!session?.user) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+  const gameId = Number(params.id);
+  if (Number.isNaN(gameId)) {
+    return NextResponse.json({ error: "bad game id" }, { status: 400 });
+  }
+
+  let body: { playerName?: string; status?: string; team?: string };
+  try {
+    body = (await req.json()) as typeof body;
+  } catch {
+    return NextResponse.json({ error: "invalid json" }, { status: 400 });
+  }
+
+  const playerName = body.playerName?.trim();
+  const status = body.status as LineupStatus | undefined;
+  if (!playerName) {
+    return NextResponse.json({ error: "playerName required" }, { status: 400 });
+  }
+  if (status !== "named" && status !== "interchange" && status !== "emergency") {
+    return NextResponse.json({ error: "invalid status" }, { status: 400 });
+  }
+
+  try {
+    const { updated, predictionsCleared } = await setLineupPlayerStatus(
+      gameId,
+      playerName,
+      status,
+      body.team ?? null,
+    );
+    if (updated === 0) {
+      return NextResponse.json({ error: "player not in lineup" }, { status: 404 });
+    }
+    const lineup = await getLineup(gameId);
+    return NextResponse.json({
+      ok: true,
+      updated,
+      predictionsCleared,
+      lineup,
+    });
   } catch (err) {
     return NextResponse.json(
       { ok: false, error: (err as Error).message },

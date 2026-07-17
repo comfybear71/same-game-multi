@@ -15,6 +15,7 @@ import {
   buildStrategySlips,
   projectPlayerForBacktest,
 } from "@/lib/backtest/engine";
+import type { BacktestStrategy } from "@/lib/backtest/matrix";
 import {
   listSeasonPlayers,
   type SeasonPlayerRef,
@@ -36,6 +37,12 @@ export interface BacktestRunnerOptions {
   resumeRunId?: number;
   /** Cap games processed this invocation (smoke tests). */
   maxGames?: number;
+  /** Custom strategy grid (defaults to production 3/6/10). */
+  strategies?: BacktestStrategy[];
+  /** Exclude players already used on earlier slips in the same game. */
+  spreadPlayers?: boolean;
+  /** When false, never refresh live AI helm from this run. */
+  refreshPolicy?: boolean;
   onProgress?: (msg: string) => void;
 }
 
@@ -231,7 +238,10 @@ export async function runBacktest(opts: BacktestRunnerOptions): Promise<{
         }
       }
 
-      const slips = buildStrategySlips(allCandidates);
+      const slips = buildStrategySlips(allCandidates, {
+        strategies: opts.strategies,
+        spreadPlayers: opts.spreadPlayers,
+      });
       for (const slip of slips) {
         const [inserted] = await db
           .insert(backtestSlips)
@@ -299,13 +309,16 @@ export async function runBacktest(opts: BacktestRunnerOptions): Promise<{
 
     log(`Done run #${runId}: ${gamesProcessed} games, ${slipsWritten} slips`);
 
-    // Refresh AI helm from the best lab run (prefers multi-season full-*).
-    // Skip smoke labels so tiny runs don't overwrite a solid policy.
+    // Refresh AI helm from production lab runs only — never from exp-* /
+    // smoke labels so experiments don't overwrite live policy.
     const label = opts.label ?? "";
-    if (
+    const allowPolicyRefresh =
+      opts.refreshPolicy !== false &&
       slipsWritten > 0 &&
-      (label.startsWith("full-") || label.startsWith("strategy-lab-"))
-    ) {
+      !label.startsWith("exp-") &&
+      !label.startsWith("smoke-") &&
+      (label.startsWith("full-") || label.startsWith("strategy-lab-"));
+    if (allowPolicyRefresh) {
       try {
         const policy = await refreshPolicy();
         log(

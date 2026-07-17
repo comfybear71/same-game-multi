@@ -732,9 +732,12 @@ function GameOverSection({
 export function LiveBetTracker({
   legs: initialLegs,
   gameId,
+  embedded = false,
 }: {
   legs: BetTrackerLeg[];
   gameId: number;
+  /** When wrapped in CollapsibleSection — drop outer card chrome. */
+  embedded?: boolean;
 }) {
   const router = useRouter();
   const [legs, setLegs] = useState(initialLegs);
@@ -838,14 +841,26 @@ export function LiveBetTracker({
   }
 
   return (
-    <section className={`card ${live ? "border-accent/40" : "border-accent/20"}`}>
+    <section
+      className={
+        embedded
+          ? live
+            ? "rounded-lg border border-accent/40 p-0"
+            : ""
+          : `card ${live ? "border-accent/40" : "border-accent/20"}`
+      }
+    >
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-accent">
-            Your bets in this game
-          </h2>
+          {embedded ? null : (
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-accent">
+              Your bets in this game
+            </h2>
+          )}
           {live ? (
-            <p className="mt-0.5 text-xs font-medium text-accent-loss">● Live</p>
+            <p className={`${embedded ? "" : "mt-0.5 "}text-xs font-medium text-accent-loss`}>
+              ● Live
+            </p>
           ) : (
             <p className="mt-0.5 text-xs text-slate-500">
               {voids > 0

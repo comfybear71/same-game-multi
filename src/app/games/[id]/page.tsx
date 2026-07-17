@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { CollapsibleSection } from "@/components/CollapsibleSection";
 import { GeneratePredictionsButton } from "@/components/GeneratePredictionsButton";
 import { MatchBriefingCard } from "@/components/MatchBriefingCard";
 import { GameLineupPanel } from "@/components/RoundRosterPanel";
@@ -64,9 +65,6 @@ export default async function GamePage({ params }: { params: { id: string } }) {
   }
   if (!game) notFound();
 
-  // The signed-in user's own legs on this game (for the live "your bets" panel)
-  // plus their per-player betting record (for the "last time you backed him…"
-  // hint on each card).
   let myLegs: BetTrackerLeg[] = [];
   let playerRecord: Record<string, PlayerBetRecord> = {};
   let playerHistory: Record<string, PlayerHistorySummary> = {};
@@ -86,8 +84,6 @@ export default async function GamePage({ params }: { params: { id: string } }) {
     myLegs = [];
   }
 
-  // Team form + league rankings + matchup edges for the two sides (same data as
-  // the fixture cards), shown under the header.
   let homeRanking: TeamRanking | null = null;
   let awayRanking: TeamRanking | null = null;
   let homeForm: FormResult[] | null = null;
@@ -106,7 +102,7 @@ export default async function GamePage({ params }: { params: { id: string } }) {
     homeWins = fixtureStatWins(rankings, game.home, game.away);
     awayWins = fixtureStatWins(rankings, game.away, game.home);
   } catch {
-    // team stats are best-effort; the rest of the page still renders
+    // team stats are best-effort
   }
   const hasTeamStats = !!(homeRanking || awayRanking || homeForm || awayForm);
 
@@ -172,22 +168,28 @@ export default async function GamePage({ params }: { params: { id: string } }) {
       </header>
 
       {matchBriefing ? (
-        <MatchBriefingCard
-          gameId={game.id}
-          home={game.home}
-          away={game.away}
-          venue={game.venue}
-          commenceTime={game.commenceTime}
-          briefing={matchBriefing}
-          matchNotes={game.matchNotes}
-        />
+        <CollapsibleSection
+          title="Match briefing"
+          description="Preview notes, ladder, form and head-to-head."
+        >
+          <MatchBriefingCard
+            gameId={game.id}
+            home={game.home}
+            away={game.away}
+            venue={game.venue}
+            commenceTime={game.commenceTime}
+            briefing={matchBriefing}
+            matchNotes={game.matchNotes}
+            embedded
+          />
+        </CollapsibleSection>
       ) : null}
 
       {hasTeamStats ? (
-        <section className="card">
-          <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">
-            Last 5 &amp; league ranking
-          </div>
+        <CollapsibleSection
+          title="Last 5 & league ranking"
+          description="Recent form and which side ranks higher by key stats."
+        >
           <div className="flex items-start justify-between gap-3">
             <div className="flex-1">
               <div className={`font-semibold ${teamNameClass(homeWins.size)}`}>
@@ -207,7 +209,7 @@ export default async function GamePage({ params }: { params: { id: string } }) {
               />
             </div>
           </div>
-        </section>
+        </CollapsibleSection>
       ) : null}
 
       <LiveScoreboard
@@ -221,6 +223,7 @@ export default async function GamePage({ params }: { params: { id: string } }) {
         kickedOff={kickedOff}
       />
 
+      {/* Already a <details> accordion */}
       <GameLineupPanel
         gameId={game.id}
         home={game.home}
@@ -232,7 +235,13 @@ export default async function GamePage({ params }: { params: { id: string } }) {
       />
 
       {myLegs.length > 0 ? (
-        <LiveBetTracker legs={myLegs} gameId={game.id} />
+        <CollapsibleSection
+          title="Your bets in this game"
+          description="Live +/− tracking and Game over settle."
+          defaultOpen
+        >
+          <LiveBetTracker legs={myLegs} gameId={game.id} embedded />
+        </CollapsibleSection>
       ) : null}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -244,9 +253,26 @@ export default async function GamePage({ params }: { params: { id: string } }) {
 
       {hasData && board ? (
         <>
-          <SuggestedMultis gameId={game.id} round={game.round} />
-          <SystemBookPanel gameId={game.id} />
-          <StatBoardView board={board} record={playerRecord} />
+          <CollapsibleSection
+            title="Suggested multi"
+            description="Build a personal ticket across markets — not the System book."
+            defaultOpen
+          >
+            <SuggestedMultis gameId={game.id} round={game.round} embedded />
+          </CollapsibleSection>
+          <CollapsibleSection
+            title="System book"
+            description="Helm portfolio — place 100%, nudge lines to Sportsbet, log stake + odds."
+            defaultOpen
+          >
+            <SystemBookPanel gameId={game.id} embedded />
+          </CollapsibleSection>
+          <CollapsibleSection
+            title="Player boards"
+            description="Per-stat projections, form and fantasy for the named squad."
+          >
+            <StatBoardView board={board} record={playerRecord} />
+          </CollapsibleSection>
         </>
       ) : (
         <div className="card text-sm text-slate-400">

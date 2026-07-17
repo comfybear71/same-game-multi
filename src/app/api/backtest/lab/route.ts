@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 
 import { auth } from "@/lib/auth";
-import { getBacktestLabData } from "@/lib/data/backtest";
+import { getBacktestLabData, type LabGameScope } from "@/lib/data/backtest";
 
 export const dynamic = "force-dynamic";
 
-/** Strategy lab aggregates for Review — optional ?runId= to switch runs. */
+/** Strategy lab aggregates — optional ?runId=&team= or ?teamA=&teamB= for H2H. */
 export async function GET(request: Request) {
   const session = await auth();
   if (!session?.user) {
@@ -19,8 +19,16 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "bad runId" }, { status: 400 });
   }
 
+  const teamA = url.searchParams.get("teamA") ?? undefined;
+  const teamB = url.searchParams.get("teamB") ?? undefined;
+  const team = url.searchParams.get("team") ?? undefined;
+
+  let scope: LabGameScope | null = null;
+  if (teamA && teamB) scope = { teamA, teamB };
+  else if (team) scope = { team };
+
   try {
-    const data = await getBacktestLabData(runId);
+    const data = await getBacktestLabData(runId, scope);
     return NextResponse.json(data);
   } catch (err) {
     return NextResponse.json(

@@ -49,14 +49,23 @@ function pickSourceRunId(preferredRunId?: number): Promise<number | null> {
     }
     const runs = await listBacktestRuns(30);
     if (runs.length === 0) return null;
-    // Prefer fullest multi-season run, then weekly lab, then anything with slips.
+    // Prefer fullest multi-season production run, then weekly lab.
+    // Never auto-pick exp-* / smoke-* experiment labels into live helm.
     const full = runs
-      .filter((r) => r.label.startsWith("full-") || (r.seasons?.length ?? 0) >= 2)
+      .filter((r) => {
+        const label = r.label ?? "";
+        if (label.startsWith("exp-") || label.startsWith("smoke-")) return false;
+        return label.startsWith("full-") || (r.seasons?.length ?? 0) >= 2;
+      })
       .sort((a, b) => b.slipsWritten - a.slipsWritten)[0];
     if (full) return full.id;
     const weekly = runs.find((r) => r.label.startsWith("strategy-lab-"));
     if (weekly) return weekly.id;
-    return runs[0]!.id;
+    const safe = runs.find((r) => {
+      const label = r.label ?? "";
+      return !label.startsWith("exp-") && !label.startsWith("smoke-") && r.slipsWritten > 0;
+    });
+    return safe?.id ?? null;
   })();
 }
 

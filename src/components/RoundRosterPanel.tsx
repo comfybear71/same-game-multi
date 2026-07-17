@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 
 import { teamColors } from "@/lib/afl/teamColors";
 import type { PlayerHistorySummary } from "@/lib/data/bets";
@@ -236,15 +237,27 @@ export function PlayerHistoryBadge({
 function PlayerRow({
   player,
   playerHistory,
+  editable,
+  busy,
+  onToggleEmergency,
 }: {
   player: RoundLineupPlayer;
   playerHistory: Record<string, PlayerHistorySummary>;
+  editable?: boolean;
+  busy?: boolean;
+  onToggleEmergency?: (player: RoundLineupPlayer) => void;
 }) {
   const c = teamColors(player.team);
   const surname = player.name.split(" ").slice(-1)[0];
+  const isEmg = player.lineupStatus === "emergency";
+  const isInt = player.lineupStatus === "interchange";
 
   return (
-    <li className="flex min-w-0 items-center gap-1 text-[11px] text-slate-300">
+    <li
+      className={`flex min-w-0 items-center gap-1 text-[11px] ${
+        isEmg ? "text-slate-500 line-through decoration-slate-600" : "text-slate-300"
+      }`}
+    >
       <span
         className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-[9px] font-bold"
         style={{ background: c.bg, color: c.fg }}
@@ -254,7 +267,30 @@ function PlayerRow({
       <span className="min-w-0 truncate" title={player.name}>
         {surname}
       </span>
+      {isEmg ? (
+        <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[9px] font-semibold uppercase text-amber-400">
+          emg
+        </span>
+      ) : null}
+      {isInt ? (
+        <span className="shrink-0 text-[9px] uppercase text-slate-600">int</span>
+      ) : null}
       <PlayerHistoryBadge name={player.name} history={playerHistory} />
+      {editable && onToggleEmergency ? (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => onToggleEmergency(player)}
+          className="ml-auto shrink-0 rounded border border-surface-border px-1 py-0.5 text-[9px] text-slate-500 hover:border-amber-500/50 hover:text-amber-400 disabled:opacity-40"
+          title={
+            isEmg
+              ? "Mark as named (in the 22/23)"
+              : "Mark as emergency (exclude from System book)"
+          }
+        >
+          {isEmg ? "Un-EMG" : "EMG"}
+        </button>
+      ) : null}
     </li>
   );
 }
@@ -263,10 +299,16 @@ function TeamColumn({
   team,
   rows,
   playerHistory,
+  editable,
+  busy,
+  onToggleEmergency,
 }: {
   team: string;
   rows: RoundLineupPlayer[];
   playerHistory: Record<string, PlayerHistorySummary>;
+  editable?: boolean;
+  busy?: boolean;
+  onToggleEmergency?: (player: RoundLineupPlayer) => void;
 }) {
   const c = teamColors(team);
   return (
@@ -283,6 +325,9 @@ function TeamColumn({
             key={p.name}
             player={p}
             playerHistory={playerHistory}
+            editable={editable}
+            busy={busy}
+            onToggleEmergency={onToggleEmergency}
           />
         ))}
       </ul>
@@ -295,7 +340,7 @@ export function GameLineupPanel({
   home,
   away,
   phase,
-  players,
+  players: initialPlayers,
   round,
   playerHistory = {},
 }: {
@@ -307,7 +352,15 @@ export function GameLineupPanel({
   round: number | null;
   playerHistory?: Record<string, PlayerHistorySummary>;
 }) {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
+  const [players, setPlayers] = useState(initialPlayers);
+  const [busyName, setBusyName] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setPlayers(initialPlayers);
+  }, [initialPlayers]);
 
   if (players.length === 0) {
     return (
@@ -326,8 +379,49 @@ export function GameLineupPanel({
     );
   }
 
-  const homePlayers = players.filter((p) => p.team === home);
-  const awayPlayers = players.filter((p) => p.team === away);
+  const active = players.filter((p) => p.lineupStatus !== "emergency");
+  const emergencies = players.filter((p) => p.lineupStatus === "emergency");
+  const homePlayers = active.filter((p) => p.team === home);
+  const awayPlayers = active.filter((p) => p.team === away);
+
+  async function toggleEmergency(player: RoundLineupPlayer) {
+    const next =
+      player.lineupStatus === "emergency" ? "named" : "emergency";
+    setBusyName(player.name);
+    setError(null);
+    try {
+      const res = await fetch(`/api/games/${gameId}/lineup`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          playerName: player.name,
+          team: player.team,
+          status: next,
+        }),
+      });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        predictionsCleared?: number;
+      };
+      if (!res.ok || !json.ok) {
+        throw new Error(json.error ?? `Failed (${res.status})`);
+      }
+      setPlayers((prev) =>
+        prev.map((p) =>
+          normalisePlayerName(p.name) === normalisePlayerName(player.name) &&
+          p.team === player.team
+            ? { ...p, lineupStatus: next }
+            : p,
+        ),
+      );
+      router.refresh();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusyName(null);
+    }
+  }
 
   return (
     <details
@@ -336,25 +430,58 @@ export function GameLineupPanel({
       className="rounded-lg border border-surface-border/60 bg-surface/20 px-3 py-2"
     >
       <summary className="cursor-pointer list-none text-sm font-medium text-slate-200">
-        Lineup ({players.length} players) · <PhaseBadge phase={phase} />
+        Lineup ({active.length} selected
+        {emergencies.length > 0 ? ` · ${emergencies.length} emg` : ""}) ·{" "}
+        <PhaseBadge phase={phase} />
         {round != null ? (
           <span className="ml-1 text-xs font-normal text-slate-500">Round {round}</span>
         ) : null}
-        <span className="ml-2 text-xs font-normal text-slate-500">
-          Hit rate shown if you&apos;ve backed them before
-        </span>
       </summary>
       <div className="mt-2 grid gap-3 sm:grid-cols-2">
-        <TeamColumn team={home} rows={homePlayers} playerHistory={playerHistory} />
-        <TeamColumn team={away} rows={awayPlayers} playerHistory={playerHistory} />
+        <TeamColumn
+          team={home}
+          rows={homePlayers}
+          playerHistory={playerHistory}
+          editable
+          busy={busyName != null}
+          onToggleEmergency={(p) => void toggleEmergency(p)}
+        />
+        <TeamColumn
+          team={away}
+          rows={awayPlayers}
+          playerHistory={playerHistory}
+          editable
+          busy={busyName != null}
+          onToggleEmergency={(p) => void toggleEmergency(p)}
+        />
       </div>
+      {emergencies.length > 0 ? (
+        <div className="mt-3 border-t border-surface-border/40 pt-2">
+          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-amber-500/80">
+            Emergencies (excluded from System book)
+          </div>
+          <ul className="space-y-0.5">
+            {emergencies.map((p) => (
+              <PlayerRow
+                key={`emg-${p.name}`}
+                player={p}
+                playerHistory={playerHistory}
+                editable
+                busy={busyName != null}
+                onToggleEmergency={(row) => void toggleEmergency(row)}
+              />
+            ))}
+          </ul>
+        </div>
+      ) : null}
       <p className="mt-2 text-[10px] text-slate-600">
-        <Link href={`/games/${gameId}`} className="hover:text-slate-400">
-          Game #{gameId}
-        </Link>
-        {" · "}
-        Predictions only run for these names.
+        If Claude mis-tags an emergency: tap{" "}
+        <span className="text-slate-400">EMG</span> (they move to the amber
+        list below) → then System book{" "}
+        <span className="text-slate-400">Refresh portfolio</span>. That also
+        clears their predictions so they can&apos;t reappear.
       </p>
+      {error ? <p className="mt-1 text-[10px] text-accent-loss">{error}</p> : null}
     </details>
   );
 }
