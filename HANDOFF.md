@@ -35,17 +35,17 @@ npm run typecheck && npm run lint && npm run build
 - Crons: daily fixture refresh + morning-after settle/accuracy; **Monday**
   Strategy lab incremental (`/api/cron/backtest-strategy`, label
   `strategy-lab-{year}`) once AFL Tables has the prior round.
-- **AI helm / System book (phase 1):** policy derived from Strategy lab
-  (slip hit + flat ROI → strategy tiers). Review “AI helm”; game page
-  “System book” portfolio (separate from personal bets); Suggested multi
-  seeds focus/legs from policy. Grade on game-over / settle cron.
-  Migration `0009_nifty_midnight`.
+- **System book (phase 1):** game-page portfolio (separate from personal bets).
+  Quiet season baseline from Lab still used as a prior + Suggested multi
+  default tip; **not** shown as a separate “AI helm” UI. Grade on game-over /
+  settle cron. Migration `0009_nifty_midnight`.
 - **Bankroll sim (phase 2):** walk-forward $10/game unit on graded lab slips,
   policy recomputed each round, 10% grow / +$10 top-up, season checkpoints.
   Review “Bankroll sim”; `npm run bankroll`. Migration `0010_brave_wallop`.
-- **Live System bank:** after placing helm tickets, enter **stake + bookie odds**
-  on each System book slip; Review “Live System bank” tallies season P&L
-  (`cashReturn = stake × placedOdds` on hit). Migration `0011_sturdy_quentin_quire`.
+- **Live System bank:** after placing System book tickets, enter **stake + bookie
+  odds** on each slip; `/system` tallies season P&L
+  (`cashReturn = stake × placedOdds` on hit). Locked once saved. Migration
+  `0011_sturdy_quentin_quire`.
 
 ### Lineups & predictions
 
@@ -76,9 +76,9 @@ npm run typecheck && npm run lint && npm run build
 
 ### Nav pages
 
-- **System** (`/system`) — Live System bank (prominent) + AI helm. Season cash
-  tally for helm tickets (stake × bookie odds).
-- **Lab** (`/lab`) — Strategy lab + Bankroll sim (backtests / historical dollars).
+- **System** (`/system`) — Live System bank only (season cash on placed tickets).
+- **Lab** (`/lab`) — Strategy lab + Bankroll sim (styles / H2H / historical $).
+- **Leaders** (`/leaders`) — player season bands (Elite→Below) for System book.
 - **Review** (`/review`) — personal Multis stats, Round lineups, Your player
   record. Top stats: best model, multis, ROI, strike rate.
 
@@ -173,20 +173,25 @@ If this conversation is gone, tell the assistant:
 
 ### Product direction — “AFL brain” (maintainer intent)
 
+**Product story:** Lab finds styles (global + who-vs-who) → System book applies
+them to this game → Leaders shortlists players (Elite→Avg). `/system` is the
+money tracker only — no separate “AI helm” panel.
+
 1. **Lab H2H playbooks** (recipe × market × leg band, keep red ROI visible)
-   steer **AI helm / System book per fixture** — not only global recipe ranks.
+   steer **System book per fixture** — not only global recipe ranks.
    Prefer high hit-rate bands (e.g. 60% marks 4–6); keep long-shot flutters
-   small ($5). Exp/wide runs stay research-only (do not refresh live helm).
+   small ($5). Exp/wide runs stay research-only (do not refresh live baseline).
 2. Then **player shortlists** by market + role (Elite→Avg; KEYF vs MID etc.).
 3. More features later to deepen matchup / player×opponent learning.
 
-Lab UX already supports dials + dollar/H2H dashboard.
+**Quiet baseline:** Lab full runs still refresh a stored season prior
+(`system_policy`) used as blend weight + Suggested multi default — not a
+user-facing “helm” page.
 
-**Helm bridge:** `src/lib/system/playbook.ts` blends global AI helm ranks with
-Lab H2H recipe stats per fixture. Dry-run:
-`npx tsx scripts/preview-system-book.ts` / POST system-book `{ preview: true }`.
-Each System book always ends with a **FUN** long **Any** flutter (**≥10 legs**,
-huge upside / $5 lottery) — tier badge `fun`, sorted last.
+**Bridge:** `src/lib/system/playbook.ts` blends that prior with Lab H2H per
+fixture. Dry-run: `npx tsx scripts/preview-system-book.ts` / POST system-book
+`{ preview: true }`. Each System book ends with a **FUN** long **Any** flutter
+(**≥10 legs**, $5 lottery) — tier `fun`, sorted last.
 
 **Stats leaders + benchmarking:** `/leaders` · `src/lib/data/leaders.ts` —
 season avgs (D/M/T/G from features; kicks/handballs from AFL Tables), position

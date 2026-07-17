@@ -222,7 +222,9 @@ export function SystemBookPanel({
       <div className="flex flex-wrap items-start justify-between gap-3">
         {embedded ? (
           <p className="text-sm text-slate-400">
-            Nudge lines to Sportsbet, place, then save stake + odds.
+            Nudge lines, place at Sportsbet, then save stake + odds —{" "}
+            <span className="text-slate-300">🔒 locks</span> that ticket (no
+            cancel at the bookie).
           </p>
         ) : (
           <div>
@@ -230,6 +232,7 @@ export function SystemBookPanel({
             <p className="text-sm text-slate-400">
               Follow the helm 100%: generate after predictions, nudge each leg to
               the Sportsbet line if needed, place, then enter bookie odds + stake.
+              Saved tickets lock — Sportsbet won&apos;t let you cancel.
             </p>
           </div>
         )}
@@ -259,16 +262,24 @@ export function SystemBookPanel({
             ? `Graded: ${hits}/${graded.length} slips hit · `
             : null}
           Game stake logged: {money(gameStake > 0 ? gameStake : null)}
+          {tickets.some(isPlacedTicket)
+            ? ` · 🔒 ${tickets.filter(isPlacedTicket).length} locked`
+            : ""}
         </p>
       ) : null}
 
       <ul className="space-y-2">
         {tickets.map((t) => {
           const open = openId === t.id;
+          const placed = isPlacedTicket(t);
           return (
             <li
               key={t.id}
-              className="rounded-lg border border-surface-border bg-surface/40"
+              className={`rounded-lg border bg-surface/40 ${
+                placed
+                  ? "border-amber-500/35 bg-amber-500/[0.04]"
+                  : "border-surface-border"
+              }`}
             >
               <button
                 type="button"
@@ -283,6 +294,18 @@ export function SystemBookPanel({
                     >
                       {t.tier}
                     </span>
+                    {placed ? (
+                      <span
+                        className="rounded-full border border-amber-500/45 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200"
+                        title="Stake + odds saved — already placed at Sportsbet"
+                      >
+                        🔒 Locked
+                      </span>
+                    ) : (
+                      <span className="rounded-full border border-surface-border px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-500">
+                        Not placed
+                      </span>
+                    )}
                     {t.slipHit === true ? (
                       <span className="text-[10px] font-semibold text-accent-win">HIT</span>
                     ) : null}
@@ -309,6 +332,7 @@ export function SystemBookPanel({
                 <div className="space-y-2 border-t border-surface-border/60 px-3 py-2">
                   <PlacementForm
                     ticket={t}
+                    placed={placed}
                     saving={savingId === t.id}
                     onSave={(stake, odds) => void savePlacement(t.id, stake, odds)}
                   />
@@ -316,7 +340,9 @@ export function SystemBookPanel({
                     {t.legs.map((l) => {
                       const target = lineTarget(l.line);
                       const floor = minLineTarget(l.statType);
-                      const locked = t.slipHit != null || t.gradedAt != null;
+                      // Placed at bookie or already graded — no line/EMG edits.
+                      const locked =
+                        placed || t.slipHit != null || t.gradedAt != null;
                       const club =
                         l.team != null
                           ? (TEAM_SHORT[l.team] ?? l.team)
@@ -430,8 +456,9 @@ export function SystemBookPanel({
                     })}
                   </ul>
                   <p className="text-[10px] text-slate-600">
-                    Use +/− for Sportsbet lines. Tap EMG on a leg if they&apos;re
-                    an emergency / not playing — rebuilds the book without them.
+                    {placed
+                      ? "🔒 Locked ticket — lines and EMG are frozen (already at Sportsbet)."
+                      : "Use +/− for Sportsbet lines. Tap EMG on a leg if they’re an emergency / not playing — rebuilds the book without them."}
                   </p>
                 </div>
               ) : null}
@@ -443,12 +470,18 @@ export function SystemBookPanel({
   );
 }
 
+function isPlacedTicket(t: Pick<SystemTicketView, "stake" | "placedOdds">): boolean {
+  return t.stake != null && t.stake > 0 && t.placedOdds != null && t.placedOdds > 1;
+}
+
 function PlacementForm({
   ticket,
+  placed,
   saving,
   onSave,
 }: {
   ticket: SystemTicketView;
+  placed: boolean;
   saving: boolean;
   onSave: (stake: string, odds: string) => void;
 }) {
@@ -458,10 +491,13 @@ function PlacementForm({
   const [odds, setOdds] = useState(
     ticket.placedOdds != null ? String(ticket.placedOdds) : "",
   );
+  const [editingLocked, setEditingLocked] = useState(false);
+  const inputsLocked = placed && !editingLocked;
 
   useEffect(() => {
     setStake(ticket.stake != null ? String(ticket.stake) : "");
     setOdds(ticket.placedOdds != null ? String(ticket.placedOdds) : "");
+    setEditingLocked(false);
   }, [ticket.id, ticket.stake, ticket.placedOdds]);
 
   return (
@@ -469,7 +505,9 @@ function PlacementForm({
       className="flex flex-wrap items-end gap-2"
       onSubmit={(e) => {
         e.preventDefault();
+        if (inputsLocked) return;
         onSave(stake, odds);
+        setEditingLocked(false);
       }}
       onClick={(e) => e.stopPropagation()}
     >
@@ -481,9 +519,10 @@ function PlacementForm({
           min={0}
           step="0.01"
           value={stake}
+          disabled={inputsLocked}
           onChange={(e) => setStake(e.target.value)}
           placeholder="e.g. 1.25"
-          className="mt-0.5 block w-24 rounded border border-surface-border bg-surface px-2 py-1 text-xs text-white"
+          className="mt-0.5 block w-24 rounded border border-surface-border bg-surface px-2 py-1 text-xs text-white disabled:opacity-60"
         />
       </label>
       <label className="text-[11px] text-slate-500">
@@ -494,20 +533,33 @@ function PlacementForm({
           min={1.01}
           step="0.01"
           value={odds}
+          disabled={inputsLocked}
           onChange={(e) => setOdds(e.target.value)}
           placeholder={ticket.estOdds != null ? `est ${ticket.estOdds.toFixed(2)}` : "e.g. 4.50"}
-          className="mt-0.5 block w-24 rounded border border-surface-border bg-surface px-2 py-1 text-xs text-white"
+          className="mt-0.5 block w-24 rounded border border-surface-border bg-surface px-2 py-1 text-xs text-white disabled:opacity-60"
         />
       </label>
-      <button
-        type="submit"
-        disabled={saving}
-        className="rounded-md border border-surface-border px-2.5 py-1 text-[11px] font-medium text-slate-200 hover:border-accent hover:text-accent disabled:opacity-40"
-      >
-        {saving ? "Saving…" : "Save"}
-      </button>
+      {inputsLocked ? (
+        <button
+          type="button"
+          onClick={() => setEditingLocked(true)}
+          className="rounded-md border border-amber-500/40 px-2.5 py-1 text-[11px] font-medium text-amber-200 hover:bg-amber-500/10"
+        >
+          Correct entry
+        </button>
+      ) : (
+        <button
+          type="submit"
+          disabled={saving}
+          className="rounded-md border border-surface-border px-2.5 py-1 text-[11px] font-medium text-slate-200 hover:border-accent hover:text-accent disabled:opacity-40"
+        >
+          {saving ? "Saving…" : placed ? "Update locked" : "Save & lock"}
+        </button>
+      )}
       <p className="basis-full text-[10px] text-slate-600">
-        Enter after you place at the bookie. Refresh portfolio keeps these values.
+        {placed
+          ? "🔒 Already placed at Sportsbet — locked here too. Use Correct entry only for a typo."
+          : "Enter after you place at the bookie. That locks the ticket. Refresh portfolio keeps locked stake/odds."}
       </p>
     </form>
   );

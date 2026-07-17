@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { unstable_noStore as noStore } from "next/cache";
 import { notFound } from "next/navigation";
 
 import { CollapsibleSection } from "@/components/CollapsibleSection";
@@ -40,6 +41,10 @@ import { resolveLiveGameState, type LiveGameState } from "@/lib/ingest/squiggle"
 export const dynamic = "force-dynamic";
 
 export default async function GamePage({ params }: { params: { id: string } }) {
+  // Soft nav from Fixtures can otherwise reuse a stale RSC payload (notes /
+  // briefing missing until a hard refresh).
+  noStore();
+
   const id = Number(params.id);
   if (Number.isNaN(id)) notFound();
 
@@ -125,6 +130,16 @@ export default async function GamePage({ params }: { params: { id: string } }) {
   const hasData = board ? STAT_TYPES.some((s) => board!.byStat[s].length > 0) : false;
   const upcoming = game.commenceTime.getTime() > Date.now();
   const kickedOff = !upcoming && game.status !== "complete";
+  const lineupNamed = lineupPlayers.filter((p) => p.lineupStatus !== "emergency").length;
+  const lineupEmg = lineupPlayers.length - lineupNamed;
+  const lineupTitle =
+    lineupPlayers.length === 0
+      ? "Lineup"
+      : `Lineup (${lineupNamed} selected${lineupEmg > 0 ? ` · ${lineupEmg} emg` : ""})`;
+  const lineupDescription =
+    lineupPlayers.length === 0
+      ? "Upload the team sheet on Fixtures before generating predictions."
+      : `Named squad · ${lineupPhase}${game.round != null ? ` · Round ${game.round}` : ""}`;
 
   let initialLive: LiveGameState | null = null;
   if (kickedOff && game.season != null && game.round != null) {
@@ -169,8 +184,11 @@ export default async function GamePage({ params }: { params: { id: string } }) {
 
       {matchBriefing ? (
         <CollapsibleSection
+          key={`briefing-${game.id}`}
+          resetKey={game.id}
           title="Match briefing"
           description="Preview notes, ladder, form and head-to-head."
+          defaultOpen
         >
           <MatchBriefingCard
             gameId={game.id}
@@ -187,8 +205,11 @@ export default async function GamePage({ params }: { params: { id: string } }) {
 
       {hasTeamStats ? (
         <CollapsibleSection
+          key={`form-${game.id}`}
+          resetKey={game.id}
           title="Last 5 & league ranking"
           description="Recent form and which side ranks higher by key stats."
+          defaultOpen
         >
           <div className="flex items-start justify-between gap-3">
             <div className="flex-1">
@@ -223,16 +244,18 @@ export default async function GamePage({ params }: { params: { id: string } }) {
         kickedOff={kickedOff}
       />
 
-      {/* Already a <details> accordion */}
-      <GameLineupPanel
-        gameId={game.id}
-        home={game.home}
-        away={game.away}
-        phase={lineupPhase}
-        players={lineupPlayers}
-        round={game.round}
-        playerHistory={playerHistory}
-      />
+      <CollapsibleSection title={lineupTitle} description={lineupDescription}>
+        <GameLineupPanel
+          gameId={game.id}
+          home={game.home}
+          away={game.away}
+          phase={lineupPhase}
+          players={lineupPlayers}
+          round={game.round}
+          playerHistory={playerHistory}
+          embedded
+        />
+      </CollapsibleSection>
 
       {myLegs.length > 0 ? (
         <CollapsibleSection
@@ -251,21 +274,23 @@ export default async function GamePage({ params }: { params: { id: string } }) {
         <GeneratePredictionsButton gameId={game.id} />
       </div>
 
+      {/* System book is independent of predictions — saved stake/odds must
+          still show on cold start even if the board was cleared. */}
+      <CollapsibleSection
+        title="System book"
+        description="Helm portfolio — place 100%, nudge lines to Sportsbet, log stake + odds."
+        defaultOpen
+      >
+        <SystemBookPanel gameId={game.id} embedded />
+      </CollapsibleSection>
+
       {hasData && board ? (
         <>
           <CollapsibleSection
             title="Suggested multi"
             description="Build a personal ticket across markets — not the System book."
-            defaultOpen
           >
             <SuggestedMultis gameId={game.id} round={game.round} embedded />
-          </CollapsibleSection>
-          <CollapsibleSection
-            title="System book"
-            description="Helm portfolio — place 100%, nudge lines to Sportsbet, log stake + odds."
-            defaultOpen
-          >
-            <SystemBookPanel gameId={game.id} embedded />
           </CollapsibleSection>
           <CollapsibleSection
             title="Player boards"
@@ -297,6 +322,7 @@ export default async function GamePage({ params }: { params: { id: string } }) {
                     &ldquo;Generate predictions&rdquo;
                   </span>{" "}
                   above — pulls stats from AFL Tables for everyone in the lineup.
+                  System book stakes above stay put either way.
                 </li>
               </ol>
             </>

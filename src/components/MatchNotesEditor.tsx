@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 /** Paste / edit a per-game match preview shown on the briefing card. */
 export function MatchNotesEditor({
@@ -16,6 +16,13 @@ export function MatchNotesEditor({
   const [draft, setDraft] = useState(initialNotes ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Soft nav between games reuses this client island — sync notes from server.
+  useEffect(() => {
+    setDraft(initialNotes ?? "");
+    setOpen(false);
+    setError(null);
+  }, [gameId, initialNotes]);
 
   const hasNotes = Boolean(initialNotes?.trim());
 
