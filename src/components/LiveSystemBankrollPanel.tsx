@@ -12,7 +12,10 @@ import { formatAwst } from "@/lib/time";
 
 /** Recharts needs a real width — skip SSR so cold start / soft nav don't blank. */
 const EquityChart = dynamic(
-  () => import("@/components/LiveSystemEquityChart").then((m) => m.LiveSystemEquityChart),
+  () =>
+    import("@/components/LiveSystemEquityChart").then(
+      (m) => m.LiveSystemEquityChart,
+    ),
   { ssr: false, loading: () => null },
 );
 
