@@ -73,11 +73,19 @@ export interface ActivePolicyView {
   id: number;
   sourceRunId: number | null;
   sourceLabel: string | null;
+  /** Seasons included in the source lab run (e.g. 2024–2026 YTD). */
+  sourceSeasons: number[];
   defaults: SystemPolicyDefaults;
   weights: SystemPolicyWeights;
   rationale: string | null;
   updatedAt: Date;
   portfolioKeys: string[];
+}
+
+function seasonsPhrase(seasons: number[]): string {
+  if (seasons.length === 0) return "available seasons";
+  if (seasons.length === 1) return String(seasons[0]);
+  return `${seasons[0]}–${seasons[seasons.length - 1]}`;
 }
 
 /** Derive strategy weights from a backtest run and persist as the active policy. */
@@ -165,9 +173,10 @@ export async function refreshPolicy(opts?: {
     legCount: top.legCount,
   };
 
+  const seasons = (run?.seasons ?? []) as number[];
   const pct = (n: number | null) =>
     n == null ? "—" : `${Math.round(n * 1000) / 10}%`;
-  const rationale = `From run #${sourceRunId} (${run?.label ?? "?"}): favours ${top.label} (slip hit ${pct(top.slipHitRate)}, flat ROI ${pct(top.flatRoi)}, n=${top.slips}). Top 8 strategies form the System book portfolio.`;
+  const rationale = `Lab run #${sourceRunId} · seasons ${seasonsPhrase(seasons)} (games in DB through now). Favours ${top.label} (slip hit ${pct(top.slipHitRate)}, flat ROI ${pct(top.flatRoi)}, n=${top.slips}). Baseline only — each game's System book blends this with Lab H2H + FUN flutter.`;
 
   const weights: SystemPolicyWeights = { strategies };
 
@@ -185,12 +194,13 @@ export async function refreshPolicy(opts?: {
     })
     .returning();
 
-  return toView(inserted!, run?.label ?? null);
+  return toView(inserted!, run?.label ?? null, seasons);
 }
 
 function toView(
   row: typeof systemPolicy.$inferSelect,
   sourceLabel: string | null,
+  sourceSeasons: number[] = [],
 ): ActivePolicyView {
   const strategies = row.weights?.strategies ?? [];
   const portfolioKeys = strategies
@@ -202,6 +212,7 @@ function toView(
     id: row.id,
     sourceRunId: row.sourceRunId,
     sourceLabel,
+    sourceSeasons,
     defaults: row.defaults,
     weights: row.weights,
     rationale: row.rationale,
@@ -221,15 +232,17 @@ export async function getActivePolicy(): Promise<ActivePolicyView | null> {
   if (!row) return null;
 
   let sourceLabel: string | null = null;
+  let sourceSeasons: number[] = [];
   if (row.sourceRunId != null) {
     const [run] = await db
-      .select({ label: backtestRuns.label })
+      .select({ label: backtestRuns.label, seasons: backtestRuns.seasons })
       .from(backtestRuns)
       .where(eq(backtestRuns.id, row.sourceRunId))
       .limit(1);
     sourceLabel = run?.label ?? null;
+    sourceSeasons = (run?.seasons ?? []) as number[];
   }
-  return toView(row, sourceLabel);
+  return toView(row, sourceLabel, sourceSeasons);
 }
 
 /** Ensure a policy exists — refresh from best lab run if missing. */

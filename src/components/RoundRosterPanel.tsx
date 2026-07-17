@@ -343,6 +343,8 @@ export function GameLineupPanel({
   players: initialPlayers,
   round,
   playerHistory = {},
+  embedded = false,
+  defaultOpen = false,
 }: {
   gameId: number;
   home: string;
@@ -351,9 +353,12 @@ export function GameLineupPanel({
   players: RoundLineupPlayer[];
   round: number | null;
   playerHistory?: Record<string, PlayerHistorySummary>;
+  /** When wrapped in CollapsibleSection — drop outer accordion chrome. */
+  embedded?: boolean;
+  defaultOpen?: boolean;
 }) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const [players, setPlayers] = useState(initialPlayers);
   const [busyName, setBusyName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -363,18 +368,22 @@ export function GameLineupPanel({
   }, [initialPlayers]);
 
   if (players.length === 0) {
+    const emptyBody = (
+      <p className="text-xs text-slate-400">
+        Upload the team sheet on{" "}
+        <Link href="/" className="text-accent hover:underline">
+          Fixtures
+        </Link>{" "}
+        before generating predictions.
+      </p>
+    );
+    if (embedded) return emptyBody;
     return (
       <details className="rounded-lg border border-surface-border/60 bg-surface/20 px-3 py-2 text-sm text-slate-400">
         <summary className="cursor-pointer list-none font-medium text-slate-300">
           Lineup — not uploaded
         </summary>
-        <p className="mt-2 text-xs">
-          Upload the team sheet on{" "}
-          <Link href="/" className="text-accent hover:underline">
-            Fixtures
-          </Link>{" "}
-          before generating predictions.
-        </p>
+        <div className="mt-2">{emptyBody}</div>
       </details>
     );
   }
@@ -423,21 +432,9 @@ export function GameLineupPanel({
     }
   }
 
-  return (
-    <details
-      open={open}
-      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
-      className="rounded-lg border border-surface-border/60 bg-surface/20 px-3 py-2"
-    >
-      <summary className="cursor-pointer list-none text-sm font-medium text-slate-200">
-        Lineup ({active.length} selected
-        {emergencies.length > 0 ? ` · ${emergencies.length} emg` : ""}) ·{" "}
-        <PhaseBadge phase={phase} />
-        {round != null ? (
-          <span className="ml-1 text-xs font-normal text-slate-500">Round {round}</span>
-        ) : null}
-      </summary>
-      <div className="mt-2 grid gap-3 sm:grid-cols-2">
+  const body = (
+    <>
+      <div className="grid gap-3 sm:grid-cols-2">
         <TeamColumn
           team={home}
           rows={homePlayers}
@@ -482,6 +479,26 @@ export function GameLineupPanel({
         clears their predictions so they can&apos;t reappear.
       </p>
       {error ? <p className="mt-1 text-[10px] text-accent-loss">{error}</p> : null}
+    </>
+  );
+
+  if (embedded) return body;
+
+  return (
+    <details
+      open={open}
+      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
+      className="rounded-lg border border-surface-border/60 bg-surface/20 px-3 py-2"
+    >
+      <summary className="cursor-pointer list-none text-sm font-medium text-slate-200">
+        Lineup ({active.length} selected
+        {emergencies.length > 0 ? ` · ${emergencies.length} emg` : ""}) ·{" "}
+        <PhaseBadge phase={phase} />
+        {round != null ? (
+          <span className="ml-1 text-xs font-normal text-slate-500">Round {round}</span>
+        ) : null}
+      </summary>
+      <div className="mt-2">{body}</div>
     </details>
   );
 }

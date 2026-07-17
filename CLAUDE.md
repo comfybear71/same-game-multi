@@ -71,7 +71,7 @@ src/
       cron/refresh-fixtures/route.ts   daily fixtures sync (Vercel Cron)
       cron/settle-results/route.ts     morning-after settle + accuracy
       cron/backtest-strategy/route.ts  Monday Strategy lab (current season)
-      system/policy/route.ts           AI helm policy read/refresh
+      system/policy/route.ts           Quiet Lab baseline (Suggested multi / blend)
       games/[id]/system-book/route.ts  System book portfolio
       games/[id]/predict/route.ts      generate predictions (lineup roster)
       games/[id]/suggest/route.ts      suggested multi + Claude rationale
@@ -85,8 +85,9 @@ src/
     games/[id]/page.tsx                game detail (stats, multi, live bets)
     bets/page.tsx                      bet tracker (slips by round)
     bets/new/page.tsx                  manual / AI slip entry
-    system/page.tsx                    Live System bank + AI helm
-    lab/page.tsx                       Strategy lab + Bankroll sim
+    system/page.tsx                    Live System bank (placed tickets / P&L)
+    lab/page.tsx                       Strategy lab + Bankroll sim (styles / H2H)
+    leaders/page.tsx                   Player season bands for System book
     review/page.tsx                    personal Multis, round lineups, player record
     login/page.tsx                     invite-only sign in
     layout.tsx, providers.tsx, globals.css

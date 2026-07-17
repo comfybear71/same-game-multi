@@ -1,18 +1,20 @@
-import { CollapsibleSection } from "@/components/CollapsibleSection";
+import Link from "next/link";
+import { unstable_noStore as noStore } from "next/cache";
+
 import { LiveSystemBankrollPanel } from "@/components/LiveSystemBankrollPanel";
-import { SystemHelmPanel } from "@/components/SystemHelmPanel";
 import { currentSeason } from "@/lib/cron";
 import {
   getLiveSystemBankroll,
   type LiveSystemBankroll,
 } from "@/lib/system/liveBankroll";
-import { getActivePolicy, type ActivePolicyView } from "@/lib/system/policy";
 
 export const dynamic = "force-dynamic";
 
 export default async function SystemPage() {
+  // Soft nav / Link prefetch can otherwise reuse a stale empty RSC payload.
+  noStore();
+
   const season = currentSeason();
-  let systemPolicy: ActivePolicyView | null = null;
   let liveBankroll: LiveSystemBankroll = {
     season,
     ticketsTracked: 0,
@@ -29,16 +31,7 @@ export default async function SystemPage() {
   let dbError: string | null = null;
 
   try {
-    try {
-      systemPolicy = await getActivePolicy();
-    } catch {
-      systemPolicy = null;
-    }
-    try {
-      liveBankroll = await getLiveSystemBankroll(season);
-    } catch {
-      /* keep empty */
-    }
+    liveBankroll = await getLiveSystemBankroll(season);
   } catch (err) {
     dbError = (err as Error).message;
   }
@@ -48,8 +41,16 @@ export default async function SystemPage() {
       <header>
         <h1 className="text-2xl font-bold text-white">System book</h1>
         <p className="text-sm text-slate-400">
-          Season {season} · live helm dollars — separate from your personal Multis.
-          Place from each game&apos;s System book, then track progress here.
+          Season {season} · live dollars on placed System book tickets — separate
+          from your personal Multis. Styles from{" "}
+          <Link href="/lab" className="text-accent hover:underline">
+            Lab
+          </Link>
+          , players from{" "}
+          <Link href="/leaders" className="text-accent hover:underline">
+            Leaders
+          </Link>
+          ; place on each game, track P&amp;L here.
         </p>
       </header>
 
@@ -63,20 +64,15 @@ export default async function SystemPage() {
         <div>
           <h2 className="text-lg font-semibold text-white">Live System bank</h2>
           <p className="mt-0.5 text-sm text-slate-400">
-            Real stakes and bookie odds on helm tickets. After settle: HIT/MISS and
-            season P&amp;L.
+            Real stakes and bookie odds. Expand a game for ticket detail; P&amp;L
+            chart fills in as slips settle.
           </p>
         </div>
-        <LiveSystemBankrollPanel initial={liveBankroll} />
+        <LiveSystemBankrollPanel
+          key={`live-${liveBankroll.season}-${liveBankroll.ticketsTracked}-${liveBankroll.totalStaked}`}
+          initial={liveBankroll}
+        />
       </section>
-
-      <CollapsibleSection
-        title="AI helm"
-        description="Policy from Strategy lab — ranks which multi styles to favour. Steers Suggested multi defaults and each game's System book portfolio."
-        defaultOpen
-      >
-        <SystemHelmPanel initial={systemPolicy} />
-      </CollapsibleSection>
     </div>
   );
 }
