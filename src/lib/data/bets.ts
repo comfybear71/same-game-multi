@@ -358,6 +358,8 @@ export async function getUserBetTracker(
 
 export interface PlayerBetRecord {
   playerName: string;
+  /** Club when the leg was matched to a player row (null if unmatched). */
+  team: string | null;
   statType: string;
   bets: number; // settled legs (hit + miss)
   hits: number;
@@ -438,14 +440,17 @@ export async function getPlayerBettingRecord(
       line: betLegs.line,
       actualValue: betLegs.actualValue,
       result: betLegs.result,
+      team: players.team,
     })
     .from(betLegs)
     .innerJoin(bets, eq(betLegs.betId, bets.id))
+    .leftJoin(players, eq(betLegs.playerId, players.id))
     .where(and(eq(bets.userId, userId), inArray(betLegs.result, ["hit", "miss"])))
     .orderBy(desc(betLegs.createdAt));
 
   interface Acc {
     name: string;
+    team: string | null;
     stat: string;
     bets: number;
     hits: number;
@@ -461,10 +466,12 @@ export async function getPlayerBettingRecord(
   for (const leg of legs) {
     if (!leg.playerName) continue; // unnamed legs can't build a player record
     const key = playerRecordKey(leg.playerName, leg.statType);
+    const team = leg.team ? canonicalTeam(leg.team) ?? leg.team : null;
     let a = acc.get(key);
     if (!a) {
       a = {
         name: leg.playerName,
+        team,
         stat: leg.statType,
         bets: 0,
         hits: 0,
@@ -476,6 +483,8 @@ export async function getPlayerBettingRecord(
         lastResult: leg.result as "hit" | "miss",
       };
       acc.set(key, a);
+    } else if (!a.team && team) {
+      a.team = team;
     }
     a.bets++;
     if (leg.result === "hit") a.hits++;
@@ -491,6 +500,7 @@ export async function getPlayerBettingRecord(
   for (const [key, a] of acc) {
     const rec: PlayerBetRecord = {
       playerName: a.name,
+      team: a.team,
       statType: a.stat,
       bets: a.bets,
       hits: a.hits,

@@ -64,6 +64,7 @@ export function MatchBriefingCard({
   commenceTime,
   briefing,
   matchNotes = null,
+  embedded = false,
 }: {
   gameId: number;
   home: string;
@@ -72,6 +73,8 @@ export function MatchBriefingCard({
   commenceTime: Date;
   briefing: MatchBriefing;
   matchNotes?: string | null;
+  /** When wrapped in CollapsibleSection — drop outer card + title. */
+  embedded?: boolean;
 }) {
   const hasLadder = briefing.homeLadder || briefing.awayLadder;
   const hasForm = briefing.homeForm.length > 0 || briefing.awayForm.length > 0;
@@ -79,13 +82,16 @@ export function MatchBriefingCard({
   const lastMeeting = briefing.h2h[0] ?? null;
 
   return (
-    <section className="card space-y-4">
-      <div>
-        <h2 className="text-sm font-semibold text-white">Match briefing</h2>
-        <p className="mt-0.5 text-xs text-slate-400">
-          Context before you pick lines — preview notes, ladder, form and head-to-head.
-        </p>
-      </div>
+    <section className={embedded ? "space-y-4" : "card space-y-4"}>
+      {embedded ? null : (
+        <div>
+          <h2 className="text-sm font-semibold text-white">Match briefing</h2>
+          <p className="mt-0.5 text-xs text-slate-400">
+            Context before you pick lines — preview notes, ladder, form and
+            head-to-head.
+          </p>
+        </div>
+      )}
 
       <BriefRow label="Match notes">
         <MatchNotesEditor gameId={gameId} initialNotes={matchNotes} />

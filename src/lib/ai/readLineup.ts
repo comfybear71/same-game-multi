@@ -50,9 +50,11 @@ function buildPrompt(homeTeam: string | null, awayTeam: string | null): string {
       : `This screenshot is an AFL match team sheet for two clubs.`;
   return `You are reading a screenshot of an official AFL (Australian Football League) team sheet / line-ups (from the AFL app or afl.com.au Match Centre). ${matchLine}
 
-The layout groups players by on-field position (Backs, Half Backs, Centres, Half Forwards, Forwards, Followers/Ruck) and lists Interchange and Emergencies separately. Each player shows a guernsey number and a name, usually as an initial plus surname (e.g. "44 C. Wilkie"). Both clubs may be interleaved on the same field diagram, distinguished by their club colours/badges.
+Layouts you may see:
+1) Field / formation view — players under Backs, Half Backs, Centres, Half Forwards, Forwards, Followers, then Interchange, then Emergencies.
+2) List view — columns of players with a centre position label (FB, HB, C, HF, FF, FOL), then Interchanges, then an "Emergencies" row at the bottom with BOTH clubs' emergencies (e.g. "9 Nick Murray").
 
-Extract the named squads into JSON. Respond with ONLY a JSON object — no prose, no code fences — matching exactly:
+Extract EVERY named player into JSON. Respond with ONLY a JSON object — no prose, no code fences — matching exactly:
 {"teams": [{"team": string, "players": [{"name": string, "jumper": number|null, "position": string|null, "status": "named"|"interchange"|"emergency"}]}]}
 
 Rules:
@@ -60,8 +62,11 @@ Rules:
 - One entry per player on the team sheet, for BOTH clubs.
 - "name": expand the initial+surname to the player's FULL name (first + last) using the guernsey number, club, and your knowledge of current AFL squads — e.g. for St Kilda "44 C. Wilkie" -> "Callum Wilkie". If you are not confident of the first name, return the surname exactly as shown (do NOT invent a first name).
 - "jumper": the guernsey number as an integer, or null if unreadable.
-- "position": the on-field position group heading the player sits under (e.g. "Backs", "Half Back", "Followers"). Use null for interchange and emergency players.
-- "status": "named" for any on-field position, "interchange" for the interchange/bench list, "emergency" for emergencies.
+- "position": the on-field position group heading (e.g. "Backs", "Half Back", "Followers", "FB"). Use null for interchange and emergency players.
+- "status": "named" for any on-field / starting position row, "interchange" for Interchange/Interchanges only, "emergency" for Emergencies only.
+- CRITICAL — Emergencies: ANY player in the Emergencies / Emergency / EMG row or section MUST be status "emergency", never "named" or "interchange". Example: if Adelaide lists "9 Nick Murray" under Emergencies, he is emergency even if he is a regular senior player. Emergencies are NOT in the selected 22/23 and usually will not play.
+- Do NOT promote an emergency into "named" because you recognise the name.
+- Do NOT include players from a separate "OUT" / "IN" / team-changes panel as named starters — only position groups + interchange + emergencies on the team sheet.
 - Ignore umpires, coaches, sponsors and any "thanks to" banners.`;
 }
 

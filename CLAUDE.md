@@ -85,7 +85,9 @@ src/
     games/[id]/page.tsx                game detail (stats, multi, live bets)
     bets/page.tsx                      bet tracker (slips by round)
     bets/new/page.tsx                  manual / AI slip entry
-    review/page.tsx                    per-user review + round lineups
+    system/page.tsx                    Live System bank + AI helm
+    lab/page.tsx                       Strategy lab + Bankroll sim
+    review/page.tsx                    personal Multis, round lineups, player record
     login/page.tsx                     invite-only sign in
     layout.tsx, providers.tsx, globals.css
   components/

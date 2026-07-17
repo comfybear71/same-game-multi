@@ -497,7 +497,7 @@ export type SystemStrategyWeight = {
   label: string;
   score: number;
   rank: number;
-  tier: "banker" | "balanced" | "low";
+  tier: "banker" | "balanced" | "low" | "fun";
   slipHitRate: number | null;
   flatRoi: number | null;
   slips: number;
@@ -602,6 +602,14 @@ export type BankrollParams = {
   growPct: number;
   topUp: number;
   unitCap: number;
+  /** When set, every ticket stakes this fixed $ (no unit grow split). */
+  flatStake?: number | null;
+  focuses?: string[] | null;
+  minLegs?: number | null;
+  maxLegs?: number | null;
+  team?: string | null;
+  teamA?: string | null;
+  teamB?: string | null;
 };
 
 export const bankrollRunStatusEnum = pgEnum("bankroll_run_status", [

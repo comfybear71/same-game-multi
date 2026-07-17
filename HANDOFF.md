@@ -74,15 +74,13 @@ npm run typecheck && npm run lint && npm run build
 - Manual slip entry (`/bets/new`) + AI read placement slip.
 - Settlement: AFL Tables stats, live counts, result screenshots, cron pipeline.
 
-### Review page (per user)
+### Nav pages
 
-- Top stats: best model (global), **your** multis count, ROI, strike rate.
-- **Your multis** — analytics by leg count (collapsible, default closed).
-- **Round lineups** — one card per match, hit-rate badges from **your** betting
-  history (collapsible, default closed).
-- **Your player record** — filter/sort by stat, hit-rate bars.
-- Model leaderboard table **removed** (model accuracy still in top “Best model”
-  stat if data exists).
+- **System** (`/system`) — Live System bank (prominent) + AI helm. Season cash
+  tally for helm tickets (stake × bookie odds).
+- **Lab** (`/lab`) — Strategy lab + Bankroll sim (backtests / historical dollars).
+- **Review** (`/review`) — personal Multis stats, Round lineups, Your player
+  record. Top stats: best model, multis, ROI, strike rate.
 
 ### Auth & data isolation
 
@@ -117,18 +115,35 @@ Flow:
    grows).
 3. **Update `README.md` title** to match app rebrand (nav already updated).
 
+### Experiments (done)
+
+- **Wide + spread backtest** run `#8` `exp-wide-spread-2024-2025-2026`: 586
+  games, 32 923 slips (legs 3–25 × 5 focuses, no player overlap across slips).
+  Model-odds $5 flat report: 3 521/32 923 hit · P&L +$150 450 (91.4% ROI) —
+  long-shot heavy; 15–16 legs were −100%. Does **not** refresh live AI helm.
+  Lab still prefers `full-*` over `exp-*`. Re-run:
+  `npx tsx scripts/backtest-sgm.ts --wide --spread --seasons='2024,2025,2026' --stake=5`
+
 ### Medium
 
-4. ROI / strike-rate **over time** charts on Review.
-5. Recent-form line chart on stat board (data largely ready).
-6. Extend `venues.ts` aliases as mismatches appear.
+4. **Players DB enrichment from AFL.com.au profiles** — persist canonical
+   **position** on `players` (Key Defender / Defender / Midfielder / Forward /
+   Key Forward / Ruck) so Leaders + System book stop showing `UNK`. Example
+   source: `https://www.afl.com.au/players/2304/caleb-serong` (Serong =
+   Midfielder). Later fields from the same profile pages: games, debut, DOB,
+   height, draft, awards, season vs career avgs. Prefer storing position on
+   `players` (not only `lineup_players` free text). May need AFL player id /
+   slug column for stable joins.
+5. ROI / strike-rate **over time** charts on Review.
+6. Recent-form line chart on stat board (data largely ready).
+7. Extend `venues.ts` aliases as mismatches appear.
 
 ### Lower / ongoing
 
-7. Wire `players.aflTablesSlug` for duplicate-name edge cases.
-8. Richer injury adapter beyond RSS heuristics.
-9. Consider **private repo** or GitHub secret scanning if uneasy about public
-   code (secrets must still never be committed).
+8. Wire `players.aflTablesSlug` for duplicate-name edge cases.
+9. Richer injury adapter beyond RSS heuristics.
+10. Consider **private repo** or GitHub secret scanning if uneasy about public
+    code (secrets must still never be committed).
 
 ---
 
@@ -140,6 +155,9 @@ Flow:
   yet limited to admin.
 - **Live tracker** merges all legs from all slips on one game into one list (same
   player may appear multiple times if on several multis).
+- **Player position** is only free-text on lineups today → many Leaders /
+  System book rows show `UNK` (e.g. Serong). Fix via players-DB enrichment
+  backlog item above.
 - Weekly Strategy lab cron assumes Pro (Monday schedule in `vercel.json`).
 - **Public repo:** treat `.env.example` as documentation only; rotate keys if
   ever accidentally committed.
@@ -153,9 +171,29 @@ If this conversation is gone, tell the assistant:
 > Read `CLAUDE.md` and `HANDOFF.md`. AFL multi tracker, deployed on Vercel,
 > public GitHub repo, per-user bets, admin uploads lineups.
 
-Recent work merged to `master` includes: bet tracker UX (fixture + jumpers),
-Review collapsible sections, round lineups with hit badges, suggested multis
-workflow, delete slip / remove leg, removed Settle now, app title rebrand.
+### Product direction — “AFL brain” (maintainer intent)
+
+1. **Lab H2H playbooks** (recipe × market × leg band, keep red ROI visible)
+   steer **AI helm / System book per fixture** — not only global recipe ranks.
+   Prefer high hit-rate bands (e.g. 60% marks 4–6); keep long-shot flutters
+   small ($5). Exp/wide runs stay research-only (do not refresh live helm).
+2. Then **player shortlists** by market + role (Elite→Avg; KEYF vs MID etc.).
+3. More features later to deepen matchup / player×opponent learning.
+
+Lab UX already supports dials + dollar/H2H dashboard.
+
+**Helm bridge:** `src/lib/system/playbook.ts` blends global AI helm ranks with
+Lab H2H recipe stats per fixture. Dry-run:
+`npx tsx scripts/preview-system-book.ts` / POST system-book `{ preview: true }`.
+Each System book always ends with a **FUN** long **Any** flutter (**≥10 legs**,
+huge upside / $5 lottery) — tier badge `fun`, sorted last.
+
+**Stats leaders + benchmarking:** `/leaders` · `src/lib/data/leaders.ts` —
+season avgs (D/M/T/G from features; kicks/handballs from AFL Tables), position
+buckets, Elite / Above / Average / Below bands. **Wired into System book /
+`buildSuggestions`:** Elite→Average preferred, Below demoted
+(`getGameBenchmarkBands`). Personal Suggested multi UI unchanged unless opts
+passed.
 
 ---
 

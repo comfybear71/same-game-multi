@@ -7,7 +7,21 @@ import { buildInputs, STAT_TYPES, type FeatureContext } from "@/lib/predictions/
 import type { StatFocus } from "@/lib/predictions/suggest";
 import type { StatType } from "@/db/schema";
 import { DEFAULT_PARAMS } from "@/lib/predictions/types";
-import { BACKTEST_STRATEGIES } from "./matrix";
+import {
+  BACKTEST_STRATEGIES,
+  type BacktestStrategy,
+} from "./matrix";
+
+export interface BuildStrategySlipsOptions {
+  /** Defaults to production 3/6/10 matrix. */
+  strategies?: BacktestStrategy[];
+  /**
+   * When true, players used on an earlier slip are excluded from later slips
+   * in the same game (spread risk). Strategies are processed shortest-first
+   * so short tickets keep the strongest names.
+   */
+  spreadPlayers?: boolean;
+}
 
 export interface BacktestCandidate {
   playerName: string;
@@ -294,15 +308,28 @@ function buildSlip(
   };
 }
 
-/** Build every strategy slip for one game from projected candidates. */
-export function buildStrategySlips(allCandidates: BacktestCandidate[]): BacktestSlipResult[] {
-  const slips: BacktestSlipResult[] = [];
+/** Build strategy slips for one game from projected candidates. */
+export function buildStrategySlips(
+  allCandidates: BacktestCandidate[],
+  opts?: BuildStrategySlipsOptions,
+): BacktestSlipResult[] {
+  const strategies = [...(opts?.strategies ?? BACKTEST_STRATEGIES)];
+  if (opts?.spreadPlayers) {
+    strategies.sort((a, b) => a.legCount - b.legCount || a.key.localeCompare(b.key));
+  }
 
-  for (const strategy of BACKTEST_STRATEGIES) {
-    const pool =
+  const slips: BacktestSlipResult[] = [];
+  const usedPlayers = new Set<string>();
+
+  for (const strategy of strategies) {
+    let pool =
       strategy.focus === "any"
         ? allCandidates
         : allCandidates.filter((c) => c.statType === strategy.focus);
+
+    if (opts?.spreadPlayers && usedPlayers.size > 0) {
+      pool = pool.filter((c) => !usedPlayers.has(c.playerName));
+    }
 
     const ranked =
       strategy.focus === "any"
@@ -318,7 +345,11 @@ export function buildStrategySlips(allCandidates: BacktestCandidate[]): Backtest
     // Only keep full tickets (skip thin games that can't fill the multi).
     if (ranked.length < strategy.legCount) continue;
     const slip = buildSlip(strategy.key, strategy.focus, strategy.legCount, ranked);
-    if (slip) slips.push(slip);
+    if (!slip) continue;
+    slips.push(slip);
+    if (opts?.spreadPlayers) {
+      for (const l of slip.legs) usedPlayers.add(l.playerName);
+    }
   }
 
   return slips;

@@ -9,6 +9,14 @@ import {
   type StatType,
 } from "@/db/schema";
 import { getPlayerBettingRecord, playerRecordKey } from "@/lib/data/bets";
+import {
+  bandConfidenceMult,
+  bandRank,
+  isBettableBand,
+  type BenchmarkBand,
+  type GameBenchmarkMap,
+} from "@/lib/data/leaders";
+import { getEmergencyMatcher } from "@/lib/ingest/lineup";
 import { getPlayerNews, type InjuryNews } from "@/lib/ingest/injuries";
 import { clearProbability } from "./probability";
 import { modelPropLine } from "./modelLine";
@@ -46,7 +54,17 @@ export interface SuggestedLeg {
   news: InjuryNews | null; // matched injury/team news ("test"/"managed" survive, "out" is dropped)
   /** Recent per-game counts for this stat (most recent first) — for live chance updates. */
   recentForm: number[];
+  /** Position-relative season band from /leaders (System book steering). */
+  benchmark?: BenchmarkBand | "unknown";
 }
+
+export type SuggestOptions = {
+  /**
+   * When set, prefer Elite→Average players for this market and boost/demote
+   * confidence by band. Used by AI helm / System book.
+   */
+  benchmarks?: GameBenchmarkMap;
+};
 
 export interface Suggestion {
   legs: SuggestedLeg[];
@@ -143,6 +161,8 @@ async function candidateLegs(
   focus: StatFocus,
   historyByKey: Record<string, { hits: number; bets: number }>,
 ): Promise<SuggestedLeg[]> {
+  const emergencies = await getEmergencyMatcher(gameId);
+
   const preds = await db
     .select({
       playerId: predictions.playerId,
@@ -157,9 +177,19 @@ async function candidateLegs(
     .innerJoin(players, eq(predictions.playerId, players.id))
     .where(and(eq(predictions.gameId, gameId), eq(predictions.model, "C")));
 
+  // Drop emergencies even if an older predict run still has rows for them.
+  const activePreds = preds.filter(
+    (p) =>
+      !emergencies.matches({
+        name: p.name,
+        team: p.team,
+        jumper: p.jumper,
+      }),
+  );
+
   const roster = [
     ...new Map(
-      preds.map((p) => [p.playerId, { id: p.playerId, name: p.name, team: p.team }]),
+      activePreds.map((p) => [p.playerId, { id: p.playerId, name: p.name, team: p.team }]),
     ).values(),
   ];
   const [lines, feats, newsByPlayer] = await Promise.all([
@@ -191,7 +221,7 @@ async function candidateLegs(
   }
 
   const legs: SuggestedLeg[] = [];
-  for (const p of preds) {
+  for (const p of activePreds) {
     if (focus !== "any" && p.statType !== focus) continue;
     const key = `${p.playerId}:${p.statType}`;
     // No bookmaker prop for this player+stat (common now that the squad seed
@@ -314,7 +344,11 @@ function pickBestPerPlayer(pool: SuggestedLeg[], n: number): SuggestedLeg[] {
     if (!prev || score(l) > score(prev)) bestByPlayer.set(l.playerId, l);
   }
 
-  const ranked = [...bestByPlayer.values()].sort((a, b) => score(b) - score(a));
+  const ranked = [...bestByPlayer.values()].sort(
+    (a, b) =>
+      bandRank(a.benchmark ?? "unknown") - bandRank(b.benchmark ?? "unknown") ||
+      score(b) - score(a),
+  );
   const out: SuggestedLeg[] = [];
   const usedLegs = new Set<string>();
   const legKey = (l: SuggestedLeg) => `${l.playerId}:${l.statType}`;
@@ -329,7 +363,11 @@ function pickBestPerPlayer(pool: SuggestedLeg[], n: number): SuggestedLeg[] {
   if (out.length < n) {
     const rest = [...source]
       .filter((l) => !usedLegs.has(legKey(l)))
-      .sort((a, b) => score(b) - score(a));
+      .sort(
+        (a, b) =>
+          bandRank(a.benchmark ?? "unknown") -
+            bandRank(b.benchmark ?? "unknown") || score(b) - score(a),
+      );
     for (const l of rest) {
       if (out.length >= n) break;
       out.push(l);
@@ -338,6 +376,36 @@ function pickBestPerPlayer(pool: SuggestedLeg[], n: number): SuggestedLeg[] {
   }
 
   return out;
+}
+
+/** Attach /leaders bands and prefer Elite→Average when filling the ticket. */
+function applyBenchmarks(
+  legs: SuggestedLeg[],
+  bands: GameBenchmarkMap,
+): SuggestedLeg[] {
+  return legs.map((l) => {
+    const band = bands.get(`${l.playerId}:${l.statType}`) ?? "unknown";
+    return {
+      ...l,
+      benchmark: band,
+      confidence: clamp(l.confidence * bandConfidenceMult(band), 0, 1),
+    };
+  });
+}
+
+function rankForBenchmarks(legs: SuggestedLeg[]): SuggestedLeg[] {
+  const preferred = legs.filter((l) =>
+    isBettableBand(l.benchmark ?? "unknown"),
+  );
+  const rest = legs.filter((l) => !isBettableBand(l.benchmark ?? "unknown"));
+  const byBandThenConf = (a: SuggestedLeg, b: SuggestedLeg) =>
+    bandRank(a.benchmark ?? "unknown") - bandRank(b.benchmark ?? "unknown") ||
+    b.confidence - a.confidence ||
+    b.edge - a.edge;
+  return [
+    ...[...preferred].sort(byBandThenConf),
+    ...[...rest].sort(byBandThenConf),
+  ];
 }
 
 function finalize(legs: SuggestedLeg[]): Suggestion {
@@ -358,13 +426,18 @@ export async function buildSuggestions(
   focus: StatFocus = "any",
   legCount: number = DEFAULT_LEGS,
   userId: number | null = null,
+  opts?: SuggestOptions,
 ): Promise<Suggestion> {
   const n = clamp(Math.round(legCount), MIN_LEGS, MAX_LEGS);
   const historyByKey = userId != null ? (await getPlayerBettingRecord(userId)).byKey : {};
-  const legs = bettableLegs(await candidateLegs(gameId, focus, historyByKey));
+  let legs = bettableLegs(await candidateLegs(gameId, focus, historyByKey));
 
   if (legs.length === 0) {
     return finalize([]);
+  }
+
+  if (opts?.benchmarks && opts.benchmarks.size > 0) {
+    legs = applyBenchmarks(legs, opts.benchmarks);
   }
 
   // "Any" spreads the ticket across all four markets (round-robin, best players
@@ -376,9 +449,11 @@ export async function buildSuggestions(
   }
 
   // Within a single market, prefer legs the model rates over the line (+edge),
-  // best confidence first.
+  // best confidence first. With benchmarks, Elite→Average outrank Below.
   const byConfidence = (ls: SuggestedLeg[]) =>
-    [...ls].sort((a, b) => b.confidence - a.confidence);
+    opts?.benchmarks
+      ? rankForBenchmarks(ls)
+      : [...ls].sort((a, b) => b.confidence - a.confidence);
   const positive = byConfidence(legs.filter((l) => l.edge > 0));
 
   // Top up toward the requested leg count with the next-best legs when the

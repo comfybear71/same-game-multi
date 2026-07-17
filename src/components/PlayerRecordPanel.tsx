@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 
+import { teamColors } from "@/lib/afl/teamColors";
 import type { PlayerBetRecord } from "@/lib/data/bets";
 import { floorStat, targetLabel } from "@/lib/format";
 
@@ -36,6 +37,7 @@ function statSummary(records: PlayerBetRecord[], stat: string) {
 
 type PlayerAggregate = {
   playerName: string;
+  team: string | null;
   bets: number;
   hits: number;
   topStat: string;
@@ -48,8 +50,18 @@ function aggregateByPlayer(records: PlayerBetRecord[]): PlayerAggregate[] {
   for (const r of records) {
     let row = byName.get(r.playerName);
     if (!row) {
-      row = { playerName: r.playerName, bets: 0, hits: 0, topStat: r.statType, topStatBets: 0, byStat: new Map() };
+      row = {
+        playerName: r.playerName,
+        team: r.team,
+        bets: 0,
+        hits: 0,
+        topStat: r.statType,
+        topStatBets: 0,
+        byStat: new Map(),
+      };
       byName.set(r.playerName, row);
+    } else if (!row.team && r.team) {
+      row.team = r.team;
     }
     row.bets += r.bets;
     row.hits += r.hits;
@@ -66,6 +78,20 @@ function aggregateByPlayer(records: PlayerBetRecord[]): PlayerAggregate[] {
   return [...byName.values()]
     .sort((a, b) => b.bets - a.bets || a.playerName.localeCompare(b.playerName))
     .map(({ byStat: _, ...rest }) => rest);
+}
+
+function TeamChip({ team }: { team: string | null | undefined }) {
+  if (!team) return null;
+  const c = teamColors(team);
+  return (
+    <span
+      className="inline-block max-w-[9rem] truncate rounded px-1.5 py-0.5 text-[10px] font-semibold"
+      style={{ background: c.bg, color: c.fg }}
+      title={team}
+    >
+      {team}
+    </span>
+  );
 }
 
 function statInsight(
@@ -199,8 +225,11 @@ export function PlayerRecordPanel({ records }: { records: PlayerBetRecord[] }) {
                   className={`flex min-w-[9rem] shrink-0 flex-col rounded-lg border px-2.5 py-2 ${cls}`}
                 >
                   <div className="truncate text-sm font-semibold text-white">{p.playerName}</div>
-                  <div className="mt-0.5 text-[11px] capitalize text-slate-500">
-                    Mostly {p.topStat} · {p.bets} legs
+                  <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                    <TeamChip team={p.team} />
+                    <span className="text-[11px] capitalize text-slate-500">
+                      {p.topStat} · {p.bets} legs
+                    </span>
                   </div>
                   <div
                     className={`mt-1 text-sm font-bold tabular-nums ${
@@ -283,7 +312,12 @@ function RecordRow({ record: r }: { record: PlayerBetRecord }) {
     <li className="rounded-lg border border-surface-border/60 bg-surface/30 px-3 py-2">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-white">{r.playerName}</div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="truncate text-sm font-semibold text-white">
+              {r.playerName}
+            </span>
+            <TeamChip team={r.team} />
+          </div>
           <div className="text-[11px] capitalize text-slate-500">{r.statType}</div>
         </div>
         <div className="shrink-0 text-right">

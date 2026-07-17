@@ -23,6 +23,8 @@ export interface PlayerGameLogEntry {
   round: string;
   opponent: string | null; // canonical team name
   jumper: number | null; // guernsey number worn that game
+  kicks: number;
+  handballs: number;
   disposals: number;
   marks: number;
   tackles: number;
@@ -145,7 +147,9 @@ export function parseGameLog(html: string): PlayerGameLogEntry[] {
         round: cells[2],
         opponent: canonicalTeam(cells[1]),
         jumper: jumperRaw ? parseInt(jumperRaw, 10) : null,
+        kicks: toInt(cells[5]),
         marks: toInt(cells[6]),
+        handballs: toInt(cells[7]),
         disposals: toInt(cells[8]),
         goals: toInt(cells[9]),
         tackles: toInt(cells[12]),

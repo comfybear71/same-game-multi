@@ -31,13 +31,11 @@ async function main() {
   console.log("Bankroll walk-forward sim");
   if (sourceRunId != null) console.log("  source run:", sourceRunId);
 
-  const { runId } = await runBankrollSim({
+  const { runId, view } = await runBankrollSim({
     sourceRunId:
       sourceRunId != null && Number.isFinite(sourceRunId) ? sourceRunId : undefined,
   });
 
-  const { getLatestBankrollSim } = await import("../src/lib/system/bankroll");
-  const view = await getLatestBankrollSim();
   console.log("Done run #" + runId);
   if (view.run) {
     console.log(

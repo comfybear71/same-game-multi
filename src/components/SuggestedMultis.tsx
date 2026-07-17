@@ -26,9 +26,12 @@ const STRATEGY =
 export function SuggestedMultis({
   gameId,
   round = null,
+  embedded = false,
 }: {
   gameId: number;
   round?: number | null;
+  /** When wrapped in CollapsibleSection — drop outer card + title. */
+  embedded?: boolean;
 }) {
   const [focus, setFocus] = useState<StatType | "any">("any");
   const [legCount, setLegCount] = useState(DEFAULT_LEGS);
@@ -114,20 +117,28 @@ export function SuggestedMultis({
   const ticketStatCounts = countByStat(editableLegs);
 
   return (
-    <section className="card relative z-20 space-y-3">
-      <div>
-        <h2 className="text-lg font-semibold text-white">Suggested multi</h2>
-        <p className="text-sm text-slate-400">
-          Build your ticket across markets — pick disposals, switch to Goals, add
-          more, nothing drops off. Tabs show AI picks for that stat (tick to add).
-          Tap{" "}
-          <span className="text-slate-300">↻ New picks</span> to reset the whole
-          ticket from scratch.
-        </p>
-        {policyBadge ? (
-          <p className="mt-1 text-[11px] text-sky-400/90">{policyBadge}</p>
-        ) : null}
-      </div>
+    <section
+      className={`${embedded ? "" : "card "}relative z-20 space-y-3`}
+    >
+      {embedded ? (
+        policyBadge ? (
+          <p className="text-[11px] text-sky-400/90">{policyBadge}</p>
+        ) : null
+      ) : (
+        <div>
+          <h2 className="text-lg font-semibold text-white">Suggested multi</h2>
+          <p className="text-sm text-slate-400">
+            Build your ticket across markets — pick disposals, switch to Goals, add
+            more, nothing drops off. Tabs show AI picks for that stat (tick to add).
+            Tap{" "}
+            <span className="text-slate-300">↻ New picks</span> to reset the whole
+            ticket from scratch.
+          </p>
+          {policyBadge ? (
+            <p className="mt-1 text-[11px] text-sky-400/90">{policyBadge}</p>
+          ) : null}
+        </div>
+      )}
 
       {/* Focus */}
       <div className="flex gap-2 overflow-x-auto pb-1">
