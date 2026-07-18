@@ -219,6 +219,75 @@ describe("snake draft vs greedy", () => {
     assert.equal(new Set(families).size, families.length);
   });
 
+  it("fills a full Rich/Haw-style book (not stuck at 2 every ticket)", () => {
+    const teams = ["Hawthorn", "Richmond"];
+    const families = [
+      "goals",
+      "marks",
+      "disposals",
+      "tackles",
+      "kicks",
+      "handballs",
+    ] as const;
+    const bigPool: FillCandidate[] = [];
+    let id = 200;
+    for (const fam of families) {
+      for (let i = 0; i < 22; i++) {
+        bigPool.push(
+          cand({
+            playerId: id,
+            playerName: `P${id}`,
+            team: teams[i % 2]!,
+            statFamily: fam,
+            softScore: 95 - i,
+            confidence: 0.7,
+          }),
+        );
+        id++;
+      }
+    }
+    const bookSlots: TicketSlot[] = [
+      { id: "1", strategyKey: "goals_3", focus: "goals", legCount: 3 },
+      { id: "2", strategyKey: "goals_6", focus: "goals", legCount: 6 },
+      { id: "3", strategyKey: "marks_5", focus: "marks", legCount: 5 },
+      {
+        id: "4",
+        strategyKey: "disposals_11",
+        focus: "disposals",
+        legCount: 11,
+      },
+      {
+        id: "5",
+        strategyKey: "disposals_6",
+        focus: "disposals",
+        legCount: 6,
+      },
+      {
+        id: "6",
+        strategyKey: "disposals_9",
+        focus: "disposals",
+        legCount: 9,
+      },
+      { id: "7", strategyKey: "tackles_8", focus: "tackles", legCount: 8 },
+      {
+        id: "8",
+        strategyKey: "any_14",
+        focus: "any",
+        legCount: 14,
+        isFun: true,
+      },
+    ];
+    const draft = fillSnakeDraft(bookSlots, bigPool, { lambda: 4 });
+    for (const slot of bookSlots) {
+      const t = draft.tickets.find((x) => x.strategyKey === slot.strategyKey);
+      assert.equal(
+        t?.legs.length,
+        slot.legCount,
+        `${slot.strategyKey} got ${t?.legs.length}, want ${slot.legCount}`,
+      );
+    }
+  });
+
   it("fills odd leg counts under 50% team cap (not stuck at 2/3)", () => {
     const goalsPool: FillCandidate[] = [
       cand({
