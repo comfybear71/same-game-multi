@@ -752,6 +752,43 @@ export const playerGameStatsRelations = relations(
   }),
 );
 
+/** Required for Drizzle Studio — both sides of games/players → predictions. */
+export const predictionsRelations = relations(predictions, ({ one }) => ({
+  player: one(players, {
+    fields: [predictions.playerId],
+    references: [players.id],
+  }),
+  game: one(games, {
+    fields: [predictions.gameId],
+    references: [games.id],
+  }),
+}));
+
+export const bookmakerLinesRelations = relations(bookmakerLines, ({ one }) => ({
+  game: one(games, {
+    fields: [bookmakerLines.gameId],
+    references: [games.id],
+  }),
+  player: one(players, {
+    fields: [bookmakerLines.playerId],
+    references: [players.id],
+  }),
+}));
+
+export const playerGameFeaturesRelations = relations(
+  playerGameFeatures,
+  ({ one }) => ({
+    player: one(players, {
+      fields: [playerGameFeatures.playerId],
+      references: [players.id],
+    }),
+    game: one(games, {
+      fields: [playerGameFeatures.gameId],
+      references: [games.id],
+    }),
+  }),
+);
+
 export const betsRelations = relations(bets, ({ one, many }) => ({
   user: one(users, { fields: [bets.userId], references: [users.id] }),
   legs: many(betLegs),
