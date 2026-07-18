@@ -218,6 +218,78 @@ describe("snake draft vs greedy", () => {
     const families = draft.cores.map((c) => c.family);
     assert.equal(new Set(families).size, families.length);
   });
+
+  it("fills odd leg counts under 50% team cap (not stuck at 2/3)", () => {
+    const goalsPool: FillCandidate[] = [
+      cand({
+        playerId: 101,
+        playerName: "Gunston",
+        team: "Hawthorn",
+        statFamily: "goals",
+        softScore: 90,
+        confidence: 0.6,
+      }),
+      cand({
+        playerId: 102,
+        playerName: "Taranto",
+        team: "Richmond",
+        statFamily: "goals",
+        softScore: 88,
+        confidence: 0.58,
+      }),
+      cand({
+        playerId: 103,
+        playerName: "Ginnivan",
+        team: "Hawthorn",
+        statFamily: "goals",
+        softScore: 86,
+        confidence: 0.57,
+      }),
+      cand({
+        playerId: 104,
+        playerName: "Balta",
+        team: "Richmond",
+        statFamily: "goals",
+        softScore: 84,
+        confidence: 0.55,
+      }),
+      cand({
+        playerId: 105,
+        playerName: "Breust",
+        team: "Hawthorn",
+        statFamily: "goals",
+        softScore: 82,
+        confidence: 0.54,
+      }),
+      cand({
+        playerId: 106,
+        playerName: "Rioli",
+        team: "Richmond",
+        statFamily: "goals",
+        softScore: 80,
+        confidence: 0.53,
+      }),
+    ];
+    const goalSlots: TicketSlot[] = [
+      {
+        id: "g3",
+        strategyKey: "goals_3",
+        focus: "goals",
+        legCount: 3,
+      },
+      {
+        id: "g6",
+        strategyKey: "goals_6",
+        focus: "goals",
+        legCount: 6,
+      },
+    ];
+    const draft = fillSnakeDraft(goalSlots, goalsPool, { lambda: 4 });
+    const g3 = draft.tickets.find((t) => t.strategyKey === "goals_3");
+    const g6 = draft.tickets.find((t) => t.strategyKey === "goals_6");
+    assert.equal(g3?.legs.length, 3, `goals_3 got ${g3?.legs.length}`);
+    assert.equal(g6?.legs.length, 6, `goals_6 got ${g6?.legs.length}`);
+  });
 });
 
 describe("metrics", () => {

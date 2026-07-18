@@ -167,20 +167,23 @@ export function assembleSoftScore(opts: {
   return confPts + band + tilt + tape;
 }
 
-function teamShare(legs: FillCandidate[], team: string): number {
-  if (legs.length === 0) return 0;
-  return legs.filter((l) => l.team === team).length / legs.length;
-}
-
+/**
+ * Team share cap vs the *target* ticket size.
+ * Using share-of-legs-so-far breaks odd counts: after Haw+Rich on a 3-leg,
+ * any third pick is 2/3 ≈ 67% > 50% and the ticket stalls at 2 forever.
+ * Allow up to ceil(target × cap) from one club (3 @ 50% → 2).
+ */
 function wouldBreachTeamCap(
   legs: FillCandidate[],
   next: FillCandidate,
   cap: number,
+  targetLegCount: number,
 ): boolean {
-  // First leg is always allowed (1/1 = 100% would otherwise hard-block).
   if (legs.length === 0) return false;
-  const nextLegs = [...legs, next];
-  return teamShare(nextLegs, next.team) > cap + 1e-9;
+  const maxAllowed = Math.max(1, Math.ceil(targetLegCount * cap));
+  const nextCount =
+    legs.filter((l) => l.team === next.team).length + 1;
+  return nextCount > maxAllowed;
 }
 
 /** Avg pairwise Jaccard overlap of exposure-key sets across tickets. */
@@ -336,7 +339,7 @@ export function fillGreedy(
     for (const c of ranked) {
       if (legs.length >= slot.legCount) break;
       if (usedPlayers.has(c.playerId)) continue;
-      if (wouldBreachTeamCap(legs, c, DEFAULTS.teamCapPct) && legs.length > 0) {
+      if (wouldBreachTeamCap(legs, c, DEFAULTS.teamCapPct, slot.legCount)) {
         continue;
       }
       legs.push(c);
@@ -424,7 +427,11 @@ export function fillSnakeDraft(
         continue;
       }
 
-      if (wouldBreachTeamCap(ticket.legs, c, opts.teamCapPct)) continue;
+      if (
+        wouldBreachTeamCap(ticket.legs, c, opts.teamCapPct, slot.legCount)
+      ) {
+        continue;
+      }
 
       const penalised = c.softScore - opts.lambda * apps * apps;
       if (penalised > bestScore) {
@@ -440,7 +447,11 @@ export function fillSnakeDraft(
         const key = exposureKey(c.playerId, c.statFamily);
         const apps = appearances.get(key) ?? 0;
         if (apps >= opts.hardWall) continue;
-        if (wouldBreachTeamCap(ticket.legs, c, opts.teamCapPct)) continue;
+        if (
+          wouldBreachTeamCap(ticket.legs, c, opts.teamCapPct, slot.legCount)
+        ) {
+          continue;
+        }
         const penalised = c.softScore - opts.lambda * apps * apps;
         if (penalised > bestScore) {
           bestScore = penalised;
@@ -455,6 +466,42 @@ export function fillSnakeDraft(
     usedOnTicket[ti]!.add(best.playerId);
     const key = exposureKey(best.playerId, best.statFamily);
     appearances.set(key, (appearances.get(key) ?? 0) + 1);
+  }
+
+  // Top-up pass: finish underfilled tickets from focus pool (same caps).
+  for (let ti = 0; ti < tickets.length; ti++) {
+    const ticket = tickets[ti]!;
+    const slot = nonFunSlots[ti]!;
+    while (ticket.legs.length < slot.legCount) {
+      const focusFamily =
+        slot.focus === "any"
+          ? null
+          : resolveStatFamily(slot.focus as StatType);
+      let best: FillCandidate | null = null;
+      let bestScore = -Infinity;
+      for (const c of pool) {
+        if (usedOnTicket[ti]!.has(c.playerId)) continue;
+        if (focusFamily && c.statFamily !== focusFamily) continue;
+        const key = exposureKey(c.playerId, c.statFamily);
+        const apps = appearances.get(key) ?? 0;
+        if (apps >= opts.hardWall) continue;
+        if (
+          wouldBreachTeamCap(ticket.legs, c, opts.teamCapPct, slot.legCount)
+        ) {
+          continue;
+        }
+        const penalised = c.softScore - opts.lambda * apps * apps;
+        if (penalised > bestScore) {
+          bestScore = penalised;
+          best = c;
+        }
+      }
+      if (!best) break;
+      ticket.legs.push(best);
+      usedOnTicket[ti]!.add(best.playerId);
+      const key = exposureKey(best.playerId, best.statFamily);
+      appearances.set(key, (appearances.get(key) ?? 0) + 1);
+    }
   }
 
   // FUN: core-free, prefer high-model players the draft passed over
