@@ -135,13 +135,19 @@ export async function getSystemBookResponse(
   };
 }
 
-function strategyLabel(key: string): string {
+/** Label from strategy key; prefer actual filled leg count when known. */
+function strategyLabel(key: string, actualLegs?: number): string {
   const known = BACKTEST_STRATEGIES.find((s) => s.key === key)?.label;
-  if (known) return known;
+  if (known && actualLegs == null) return known;
   const m = key.match(/^([a-z]+)_(\d+)$/i);
-  if (!m) return key;
+  if (!m) {
+    if (known && actualLegs != null) {
+      return known.replace(/\d+\s*legs?/i, `${actualLegs} legs`);
+    }
+    return key;
+  }
   const focus = m[1]!;
-  const legs = m[2]!;
+  const legs = actualLegs ?? Number(m[2]!);
   const title = focus.charAt(0).toUpperCase() + focus.slice(1);
   return `${title} · ${legs} legs`;
 }
@@ -255,7 +261,9 @@ export async function previewSystemPortfolio(
       const { combinedChance, estOdds } = modelStatsFromLegs(t.legs);
       tickets.push({
         strategyKey: t.strategyKey,
-        label: note?.label ?? strategyLabel(t.strategyKey),
+        label: note?.label
+          ? note.label.replace(/\d+\s*legs?/i, `${t.legs.length} legs`)
+          : strategyLabel(t.strategyKey, t.legs.length),
         focus: strat?.focus ?? "any",
         legCount: t.legs.length,
         tier: t.isFun ? "fun" : (note?.tier ?? strat?.tier ?? "balanced"),
@@ -291,7 +299,12 @@ export async function previewSystemPortfolio(
       const note = noteByKey.get(strat.strategyKey);
       tickets.push({
         strategyKey: strat.strategyKey,
-        label: note?.label ?? strategyLabel(strat.strategyKey),
+        label: note?.label
+          ? note.label.replace(
+              /\d+\s*legs?/i,
+              `${suggestion.legs.length} legs`,
+            )
+          : strategyLabel(strat.strategyKey, suggestion.legs.length),
         focus: strat.focus,
         legCount: suggestion.legs.length,
         tier: note?.tier ?? strat.tier,
@@ -380,7 +393,10 @@ export async function getSystemBook(gameId: number): Promise<SystemTicketView[]>
       focus: t.focus,
       legCount: t.legCount,
       tier: t.tier || tierByKey.get(t.strategyKey) || "balanced",
-      label: strategyLabel(t.strategyKey),
+      label: strategyLabel(
+        t.strategyKey,
+        (byTicket.get(t.id) ?? []).length || t.legCount,
+      ),
       modelledChance: t.modelledChance,
       estOdds: t.estOdds,
       placedOdds: t.placedOdds,
