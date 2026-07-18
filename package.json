@@ -17,6 +17,8 @@
     "check:env": "node scripts/check-env.mjs",
     "dev:safe": "node scripts/check-env.mjs && next dev",
     "backtest": "tsx scripts/backtest-sgm.ts",
+    "backtest:portfolio": "tsx scripts/backtest-portfolio.ts",
+    "test:portfolio-fill": "tsx --test src/lib/system/portfolioFill.test.ts",
     "bankroll": "tsx scripts/bankroll-sim.ts"
   },
   "dependencies": {

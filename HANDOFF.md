@@ -1,6 +1,6 @@
 # HANDOFF.md — Matty's got big balls multi tracker
 
-**Last updated:** July 2026 (post–first production merge to `master`).
+**Last updated:** July 2026 (Portfolio draft fill ON by default — test on live games).
 
 State of the build, what's done, what's next. Pair with **`CLAUDE.md`**
 (conventions/architecture) and **`README.md`** / **`docs/LOCAL-DEV.md`** (setup).
@@ -199,6 +199,65 @@ buckets, Elite / Above / Average / Below bands. **Wired into System book /
 `buildSuggestions`:** Elite→Average preferred, Below demoted
 (`getGameBenchmarkBands`). Personal Suggested multi UI unchanged unless opts
 passed.
+
+## Portfolio fill plan — "anti-Daicos-everywhere" (LOCKED, July 2026)
+
+**Problem:** per-ticket greedy fill produces a correlated book — the same
+elite names win every ticket slot, so one quiet night from one player kills
+multiple tickets at once. Observed on Carlton v Collingwood book (Nick +
+Cripps cloned across Disp·3/·4/·5).
+
+**Locked config:**
+
+```text
+CORE_MAX = 2 per fixture (must be DISTINCT markets; an "Any" core counts
+           as the stat family its model probability rides on)
+Core is earned per-fixture: top 1-2 by final soft score, AND must clear a
+           personal floor of shrunk tape >= 60% (no global core list)
+Exposure unit = player + market (Nick·disposals counts once across lines)
+Fill = snake draft across all non-FUN tickets simultaneously (not A→B→C)
+Appearance penalty = quadratic soft penalty (score' = score − λ·appearances²)
+Hard wall = 3 appearances per exposure unit across non-FUN tickets
+Team cap = ≤50% of legs per ticket from one club
+Book lean = warning (not block) at ~60% single-club across non-FUN book;
+           display "Book lean: X% <club>" on System book before lock
+FUN ticket = exempt from caps but CORE-FREE (it is the hedge against the
+           book being wrong, built from model-liked players the draft passed)
+Personal tape = shrinkage-adjusted modifier, capped at ±10 soft-score
+           points. adjusted = (hits + priorHits) / (n + priorN),
+           prior ≈ 10 legs @ 65% baseline (tunable; optional 0.9/round
+           decay). NEVER raw win-loss records.
+```
+
+> Personal history enters as a shrinkage-adjusted modifier capped at ±10
+> points, never as raw win–loss — at n≤3 your ticks are mostly luck
+> wearing a jersey.
+
+**Division of labour:** Model + Leaders say who's good · shrunk personal
+tape says who's good *for you* (tie-break only) · snake draft + penalties +
+caps spread the book · core–satellite keeps conviction without cloning.
+
+**Gate:** NO production fill change until a backtest pass shows, vs greedy
+fill on the same rounds: effective-independent-bets ↑, max player
+appearances ↓, drawdown on quiet-star nights ↓. If not, retune λ / wall
+first.
+
+**Metric:** `/system` (and game System book pre-lock) shows effective
+independent bets = tickets × (1 − avg pairwise leg overlap), plus max
+appearances and book lean %, before lock.
+
+**Lab UX note:** “What we learned” / strategy tables sort by **slip hit**
+first (ROI tie-break) — lottery +ROI must not lead the story.
+
+**Deliberately NOT in v1:** round-level multi-fixture optimiser · hard bans
+from single misses · FUN under full portfolio rules.
+
+**Build status (draft fill ON by default — Jul 2026):**
+- Engine: `src/lib/system/portfolioFill.ts` + bridge `portfolioFillBridge.ts`
+- Tests: `npm run test:portfolio-fill` · Backtest: `npm run backtest:portfolio`
+  → `docs/portfolio-fill-backtest.md` (λ=4 recommended; gate PASS).
+- Default ON after review; set `PORTFOLIO_DRAFT_FILL=off` to revert greedy.
+- System book UI shows effective independent bets, max appearances, book lean.
 
 ---
 

@@ -688,10 +688,9 @@ npx tsx scripts/backtest-sgm.ts --seasons='2024,2025,2026' --label=full-2024-202
               Strategy table
             </h3>
             <p className="mb-2 text-[11px] text-slate-500">
-              Sorted by flat ROI. A rare long-shot hit can show huge +ROI on
-              model odds while almost never clearing — that is not the same as a
-              Sportsbet price. Prefer strategies with both decent hit rate and
-              ROI.
+              Sorted by slip hit (ROI as tie-break). A rare long-shot can show
+              huge +ROI while almost never clearing — that is not a Sportsbet
+              price. Prefer decent hit rate first, then ROI.
             </p>
             <div className="overflow-x-auto rounded-lg border border-surface-border">
               <table className="w-full min-w-[36rem] text-left text-xs">
@@ -707,7 +706,11 @@ npx tsx scripts/backtest-sgm.ts --seasons='2024,2025,2026' --label=full-2024-202
                 </thead>
                 <tbody>
                   {[...filteredStrategies]
-                    .sort((a, b) => (b.flatRoi ?? -999) - (a.flatRoi ?? -999))
+                    .sort((a, b) => {
+                      const hit = (b.slipHitRate ?? 0) - (a.slipHitRate ?? 0);
+                      if (hit !== 0) return hit;
+                      return (b.flatRoi ?? -999) - (a.flatRoi ?? -999);
+                    })
                     .map((s) => {
                       const isDead =
                         s.slips >= 20 &&

@@ -36,8 +36,19 @@ import {
   PORTFOLIO_K,
   type ActivePolicyView,
 } from "@/lib/system/policy";
+import {
+  isPortfolioDraftFillEnabled,
+  type PortfolioMetrics,
+} from "@/lib/system/portfolioFill";
+import {
+  loadFillPool,
+  metricsFromLegSets,
+  runPortfolioFill,
+  strategiesToSlots,
+} from "@/lib/system/portfolioFillBridge";
 
 export { computeCashReturn };
+export type { PortfolioMetrics };
 
 /**
  * Mark a player emergency on the lineup, clear their predictions, rebuild book.
@@ -97,6 +108,33 @@ export interface SystemTicketView {
   }[];
 }
 
+export type SystemBookResponse = {
+  tickets: SystemTicketView[];
+  metrics: PortfolioMetrics;
+  draftFillEnabled: boolean;
+};
+
+function bookMetricsFromViews(tickets: SystemTicketView[]): PortfolioMetrics {
+  return metricsFromLegSets(
+    tickets.map((t) => ({
+      strategyKey: t.strategyKey,
+      isFun: t.tier === "fun",
+      legs: t.legs,
+    })),
+  );
+}
+
+export async function getSystemBookResponse(
+  gameId: number,
+): Promise<SystemBookResponse> {
+  const tickets = await getSystemBook(gameId);
+  return {
+    tickets,
+    metrics: bookMetricsFromViews(tickets),
+    draftFillEnabled: isPortfolioDraftFillEnabled(),
+  };
+}
+
 function strategyLabel(key: string): string {
   const known = BACKTEST_STRATEGIES.find((s) => s.key === key)?.label;
   if (known) return known;
@@ -119,6 +157,8 @@ export type SystemPortfolioPreview = {
     sourceLabel: string | null;
   } | null;
   recipes: PlaybookNote[];
+  metrics: PortfolioMetrics;
+  draftFillEnabled: boolean;
   tickets: {
     strategyKey: string;
     label: string;
@@ -132,6 +172,7 @@ export type SystemPortfolioPreview = {
     modelledChance: number | null;
     estOdds: number | null;
     legs: {
+      playerId: number | null;
       playerName: string;
       team: string | null;
       statType: StatType;
@@ -188,7 +229,7 @@ async function selectStrategiesForGame(
  */
 export async function previewSystemPortfolio(
   gameId: number,
-  opts?: { policy?: ActivePolicyView; k?: number },
+  opts?: { policy?: ActivePolicyView; k?: number; userId?: number | null },
 ): Promise<SystemPortfolioPreview> {
   const policy = opts?.policy ?? (await ensureActivePolicy());
   const k = opts?.k ?? PORTFOLIO_K;
@@ -201,40 +242,77 @@ export async function previewSystemPortfolio(
   const noteByKey = new Map(notes.map((n) => [n.strategyKey, n]));
   const { bands } = await getGameBenchmarkBands(gameId);
   const tickets: SystemPortfolioPreview["tickets"] = [];
+  const useDraft = isPortfolioDraftFillEnabled();
 
-  for (const strat of ranked) {
-    const focus = strat.focus as StatFocus;
-    const suggestion = await buildSuggestions(
-      gameId,
-      focus,
-      strat.legCount,
-      null,
-      { benchmarks: bands },
-    );
-    if (suggestion.legs.length === 0) continue;
-    const note = noteByKey.get(strat.strategyKey);
-    tickets.push({
-      strategyKey: strat.strategyKey,
-      label: note?.label ?? strategyLabel(strat.strategyKey),
-      focus: strat.focus,
-      legCount: suggestion.legs.length,
-      tier: note?.tier ?? strat.tier,
-      why: note?.why ?? "Global helm",
-      h2hHitRate: note?.h2hHitRate ?? null,
-      h2hRoi: note?.h2hRoi ?? null,
-      h2hSlips: note?.h2hSlips ?? 0,
-      modelledChance: suggestion.combinedChance,
-      estOdds: suggestion.estOdds,
-      legs: suggestion.legs.map((l) => ({
-        playerName: l.playerName,
-        team: l.team,
-        statType: l.statType,
-        line: l.line,
-        prediction: l.prediction,
-        confidence: l.confidence,
-        benchmark: l.benchmark,
-      })),
-    });
+  if (useDraft) {
+    const pool = await loadFillPool(gameId, bands, opts?.userId ?? null);
+    const slots = strategiesToSlots(ranked);
+    const filled = runPortfolioFill(slots, pool, "draft");
+    for (const t of filled.tickets) {
+      if (t.legs.length === 0) continue;
+      const note = noteByKey.get(t.strategyKey);
+      const strat = ranked.find((s) => s.strategyKey === t.strategyKey);
+      const { combinedChance, estOdds } = modelStatsFromLegs(t.legs);
+      tickets.push({
+        strategyKey: t.strategyKey,
+        label: note?.label ?? strategyLabel(t.strategyKey),
+        focus: strat?.focus ?? "any",
+        legCount: t.legs.length,
+        tier: t.isFun ? "fun" : (note?.tier ?? strat?.tier ?? "balanced"),
+        why: note?.why ?? "Global helm",
+        h2hHitRate: note?.h2hHitRate ?? null,
+        h2hRoi: note?.h2hRoi ?? null,
+        h2hSlips: note?.h2hSlips ?? 0,
+        modelledChance: combinedChance,
+        estOdds,
+        legs: t.legs.map((l) => ({
+          playerId: l.playerId,
+          playerName: l.playerName,
+          team: l.team,
+          statType: l.statType as StatType,
+          line: l.line,
+          prediction: l.prediction,
+          confidence: l.confidence,
+          benchmark: bands.get(`${l.playerId}:${l.statType}`) ?? undefined,
+        })),
+      });
+    }
+  } else {
+    for (const strat of ranked) {
+      const focus = strat.focus as StatFocus;
+      const suggestion = await buildSuggestions(
+        gameId,
+        focus,
+        strat.legCount,
+        opts?.userId ?? null,
+        { benchmarks: bands },
+      );
+      if (suggestion.legs.length === 0) continue;
+      const note = noteByKey.get(strat.strategyKey);
+      tickets.push({
+        strategyKey: strat.strategyKey,
+        label: note?.label ?? strategyLabel(strat.strategyKey),
+        focus: strat.focus,
+        legCount: suggestion.legs.length,
+        tier: note?.tier ?? strat.tier,
+        why: note?.why ?? "Global helm",
+        h2hHitRate: note?.h2hHitRate ?? null,
+        h2hRoi: note?.h2hRoi ?? null,
+        h2hSlips: note?.h2hSlips ?? 0,
+        modelledChance: suggestion.combinedChance,
+        estOdds: suggestion.estOdds,
+        legs: suggestion.legs.map((l) => ({
+          playerId: l.playerId,
+          playerName: l.playerName,
+          team: l.team,
+          statType: l.statType,
+          line: l.line,
+          prediction: l.prediction,
+          confidence: l.confidence,
+          benchmark: l.benchmark,
+        })),
+      });
+    }
   }
 
   return {
@@ -250,6 +328,14 @@ export async function previewSystemPortfolio(
         }
       : null,
     recipes: notes,
+    metrics: metricsFromLegSets(
+      tickets.map((t) => ({
+        strategyKey: t.strategyKey,
+        isFun: t.tier === "fun",
+        legs: t.legs,
+      })),
+    ),
+    draftFillEnabled: useDraft,
     tickets,
   };
 }
@@ -492,13 +578,29 @@ export async function updateSystemTicketLegTarget(
   return book.find((t) => t.id === ticket.id) ?? null;
 }
 
+function modelStatsFromLegs(
+  legs: { confidence: number; odds?: number | null }[],
+): { combinedChance: number | null; estOdds: number | null } {
+  if (legs.length === 0) return { combinedChance: null, estOdds: null };
+  const combinedChance = legs.reduce((p, l) => p * l.confidence, 1);
+  const estOdds =
+    Math.round(
+      legs.reduce((p, l) => p * (l.odds ?? 1 / Math.max(l.confidence, 0.05)), 1) *
+        100,
+    ) / 100;
+  return { combinedChance, estOdds };
+}
+
 /**
  * Build top-K strategy tickets for a game from active policy + H2H Lab playbook.
  * Replaces any existing ungraded/graded tickets for this game (refresh).
+ *
+ * When `PORTFOLIO_DRAFT_FILL` is on, uses snake-draft fill; default OFF keeps
+ * per-ticket greedy `buildSuggestions` (unchanged until maintainer flips flag).
  */
 export async function buildAndPersistSystemPortfolio(
   gameId: number,
-  opts?: { policy?: ActivePolicyView; k?: number },
+  opts?: { policy?: ActivePolicyView; k?: number; userId?: number | null },
 ): Promise<SystemTicketView[]> {
   const policy = opts?.policy ?? (await ensureActivePolicy());
   const k = opts?.k ?? PORTFOLIO_K;
@@ -522,13 +624,68 @@ export async function buildAndPersistSystemPortfolio(
   // Wipe prior book for this game (idempotent regenerate).
   await db.delete(systemTickets).where(eq(systemTickets.gameId, gameId));
 
+  const useDraft = isPortfolioDraftFillEnabled();
+
+  if (useDraft) {
+    const pool = await loadFillPool(gameId, bands, opts?.userId ?? null);
+    const slots = strategiesToSlots(ranked);
+    const filled = runPortfolioFill(slots, pool, "draft");
+    const tierByKey = new Map(ranked.map((s) => [s.strategyKey, s.tier]));
+    const focusByKey = new Map(ranked.map((s) => [s.strategyKey, s.focus]));
+
+    for (const t of filled.tickets) {
+      if (t.legs.length === 0) continue;
+      const kept = placementByKey.get(t.strategyKey);
+      const tierRaw = tierByKey.get(t.strategyKey) ?? "balanced";
+      const tier = t.isFun || tierRaw === "fun" ? "fun" : tierRaw;
+      const { combinedChance, estOdds } = modelStatsFromLegs(t.legs);
+
+      const [ticket] = await db
+        .insert(systemTickets)
+        .values({
+          gameId,
+          strategyKey: t.strategyKey,
+          focus: focusByKey.get(t.strategyKey) ?? "any",
+          legCount: t.legs.length,
+          tier,
+          modelledChance: combinedChance,
+          estOdds,
+          stake: kept?.stake ?? null,
+          placedOdds: kept?.placedOdds ?? null,
+          legsTotal: t.legs.length,
+          legsHit: 0,
+          slipHit: null,
+          flatReturn: 0,
+          cashReturn: 0,
+        })
+        .returning();
+
+      await db.insert(systemTicketLegs).values(
+        t.legs.map((l) => ({
+          ticketId: ticket!.id,
+          playerId: l.playerId,
+          playerName: l.playerName,
+          team: l.team,
+          statType: l.statType as StatType,
+          line: l.line,
+          prediction: l.prediction,
+          confidence: l.confidence,
+          actualValue: null,
+          hit: null,
+        })),
+      );
+    }
+
+    return getSystemBook(gameId);
+  }
+
   for (const strat of ranked) {
     const focus = strat.focus as StatFocus;
     const suggestion = await buildSuggestions(
       gameId,
       focus,
       strat.legCount,
-      null,
+      opts?.userId ?? null,
       { benchmarks: bands },
     );
     if (suggestion.legs.length === 0) continue;

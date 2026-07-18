@@ -4,7 +4,7 @@ import { auth } from "@/lib/auth";
 import {
   buildAndPersistSystemPortfolio,
   excludePlayerFromSystemBook,
-  getSystemBook,
+  getSystemBookResponse,
   previewSystemPortfolio,
   updateSystemTicketLegTarget,
   updateSystemTicketPlacement,
@@ -27,8 +27,8 @@ export async function GET(
     return NextResponse.json({ error: "bad game id" }, { status: 400 });
   }
   try {
-    const tickets = await getSystemBook(gameId);
-    return NextResponse.json({ ok: true, tickets });
+    const book = await getSystemBookResponse(gameId);
+    return NextResponse.json({ ok: true, ...book });
   } catch (err) {
     return NextResponse.json(
       { ok: false, error: (err as Error).message },
@@ -78,7 +78,10 @@ export async function POST(
       return NextResponse.json({ ok: true, ...result });
     }
 
-    const tickets = await buildAndPersistSystemPortfolio(gameId);
+    const userId = Number((session.user as { id?: string }).id);
+    const tickets = await buildAndPersistSystemPortfolio(gameId, {
+      userId: Number.isFinite(userId) ? userId : null,
+    });
     if (tickets.length === 0) {
       return NextResponse.json(
         {
@@ -89,7 +92,8 @@ export async function POST(
         { status: 400 },
       );
     }
-    return NextResponse.json({ ok: true, tickets });
+    const book = await getSystemBookResponse(gameId);
+    return NextResponse.json({ ok: true, ...book });
   } catch (err) {
     return NextResponse.json(
       { ok: false, error: (err as Error).message },

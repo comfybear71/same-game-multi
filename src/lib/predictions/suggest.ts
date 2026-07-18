@@ -488,3 +488,14 @@ export async function listCandidateLegs(
   const legs = await candidateLegs(gameId, "any", historyByKey);
   return withEstimatedOdds([...legs].sort((a, b) => b.confidence - a.confidence));
 }
+
+/**
+ * Model-priced legs with no personal-history blend — for System book draft fill
+ * (tape enters as a separate ±10 soft-score modifier in portfolioFill).
+ */
+export async function listModelCandidateLegs(
+  gameId: number,
+): Promise<SuggestedLeg[]> {
+  const legs = await candidateLegs(gameId, "any", {});
+  return withEstimatedOdds([...legs].sort((a, b) => b.confidence - a.confidence));
+}

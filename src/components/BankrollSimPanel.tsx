@@ -31,11 +31,15 @@ export type MatchupDash = {
   strategies: RecipeRow[];
 };
 
-/** Best first by flat ROI — keep red ROI visible (useful “avoid” signal). */
+/** Best first by slip hit — ROI as tie-break (lottery +ROI stays visible, not on top). */
 function rankedRecipes(rows: RecipeRow[], limit = 20): RecipeRow[] {
   return [...rows]
     .filter((s) => s.slips >= 2)
-    .sort((a, b) => (b.flatRoi ?? -999) - (a.flatRoi ?? -999))
+    .sort((a, b) => {
+      const hit = (b.slipHitRate ?? 0) - (a.slipHitRate ?? 0);
+      if (hit !== 0) return hit;
+      return (b.flatRoi ?? -999) - (a.flatRoi ?? -999);
+    })
     .slice(0, limit);
 }
 
@@ -340,8 +344,8 @@ export function BankrollSimPanel({
                   </h3>
                   <p className="mb-1.5 text-[11px] text-slate-600">
                     Legs {controls.minLegs}–{controls.maxLegs}
-                    {isH2h ? " in these meetings" : ""} — sorted by flat ROI
-                    (red = avoid).
+                    {isH2h ? " in these meetings" : ""} — sorted by slip hit
+                    (ROI as tie-break; red ROI = still avoid).
                   </p>
                   <ol className="max-h-[14rem] space-y-1 overflow-y-auto text-xs">
                     {ranked.map((s, i) => (

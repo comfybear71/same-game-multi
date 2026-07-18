@@ -4,7 +4,10 @@ import { useCallback, useEffect, useState } from "react";
 
 import { lineTarget } from "@/lib/format";
 import { minLineTarget } from "@/lib/predictions/modelLine";
-import type { SystemTicketView } from "@/lib/system/portfolio";
+import type {
+  PortfolioMetrics,
+  SystemTicketView,
+} from "@/lib/system/portfolio";
 
 function pct(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return "—";
@@ -67,6 +70,7 @@ export function SystemBookPanel({
   embedded?: boolean;
 }) {
   const [tickets, setTickets] = useState<SystemTicketView[]>([]);
+  const [metrics, setMetrics] = useState<PortfolioMetrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -83,10 +87,12 @@ export function SystemBookPanel({
       const json = (await res.json()) as {
         ok?: boolean;
         tickets?: SystemTicketView[];
+        metrics?: PortfolioMetrics;
         error?: string;
       };
       if (!res.ok || !json.ok) throw new Error(json.error ?? `Failed (${res.status})`);
       setTickets(json.tickets ?? []);
+      setMetrics(json.metrics ?? null);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -106,10 +112,12 @@ export function SystemBookPanel({
       const json = (await res.json()) as {
         ok?: boolean;
         tickets?: SystemTicketView[];
+        metrics?: PortfolioMetrics;
         error?: string;
       };
       if (!res.ok || !json.ok) throw new Error(json.error ?? `Failed (${res.status})`);
       setTickets(json.tickets ?? []);
+      setMetrics(json.metrics ?? null);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -257,15 +265,35 @@ export function SystemBookPanel({
       ) : null}
 
       {tickets.length > 0 ? (
-        <p className="text-xs text-slate-400">
-          {graded.length > 0
-            ? `Graded: ${hits}/${graded.length} slips hit · `
-            : null}
-          Game stake logged: {money(gameStake > 0 ? gameStake : null)}
-          {tickets.some(isPlacedTicket)
-            ? ` · 🔒 ${tickets.filter(isPlacedTicket).length} locked`
-            : ""}
-        </p>
+        <div className="space-y-1 text-xs text-slate-400">
+          <p>
+            {graded.length > 0
+              ? `Graded: ${hits}/${graded.length} slips hit · `
+              : null}
+            Game stake logged: {money(gameStake > 0 ? gameStake : null)}
+            {tickets.some(isPlacedTicket)
+              ? ` · 🔒 ${tickets.filter(isPlacedTicket).length} locked`
+              : ""}
+          </p>
+          {metrics ? (
+            <p className="text-slate-500">
+              Book spread: ~{metrics.effectiveIndependentBets.toFixed(2)}{" "}
+              independent bets
+              {metrics.ticketCount > 0
+                ? ` across ${metrics.ticketCount} tickets`
+                : ""}
+              {" · "}max appearances {metrics.maxAppearances}
+              {metrics.bookLeanWarning ? (
+                <span className="text-amber-300/90">
+                  {" · "}
+                  {metrics.bookLeanWarning}
+                </span>
+              ) : metrics.bookLeanClub ? (
+                ` · lean ${metrics.bookLeanPct}% ${metrics.bookLeanClub}`
+              ) : null}
+            </p>
+          ) : null}
+        </div>
       ) : null}
 
       <ul className="space-y-2">
