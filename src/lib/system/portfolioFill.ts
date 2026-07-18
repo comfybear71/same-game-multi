@@ -13,6 +13,13 @@ export type StatFamily =
   | "kicks"
   | "handballs";
 
+export type LeadersBand =
+  | "elite"
+  | "above"
+  | "average"
+  | "below"
+  | "unknown";
+
 export type FillCandidate = {
   playerId: number;
   playerName: string;
@@ -28,25 +35,65 @@ export type FillCandidate = {
   confidence: number;
   /** Pre-assembled soft score (confidence×100 + band + tilt + tape ±10). */
   softScore: number;
+  /** Leaders band for this player×market (Sicily·marks Above, etc.). */
+  band?: LeadersBand;
   historyHits?: number;
   historyBets?: number;
 };
 
-/** Leaders band → soft-score points (separate from confidence mult in suggest). */
+/**
+ * Leaders band → soft-score points.
+ * Sized so Elite/Above beat easy Average 2+ model legs (e.g. Elite @56%
+ * clears Average @70%). Same player can be Elite in goals and marks —
+ * each market carries its own band.
+ */
 export function bandSoftBonus(
-  band: "elite" | "above" | "average" | "below" | "unknown" | null | undefined,
+  band: LeadersBand | null | undefined,
 ): number {
   switch (band) {
     case "elite":
-      return 8;
+      return 28;
     case "above":
-      return 4;
+      return 18;
     case "average":
       return 0;
     case "below":
-      return -8;
+      return -35;
     default:
-      return -2;
+      return -12;
+  }
+}
+
+/** Lower = better. Focus tickets: Elite → Above → Average → rest. */
+export function bandPickTier(
+  band: LeadersBand | null | undefined,
+  focusStrict: boolean,
+): number {
+  if (!focusStrict) {
+    switch (band) {
+      case "elite":
+        return 0;
+      case "above":
+        return 1;
+      case "average":
+        return 2;
+      case "below":
+        return 4;
+      default:
+        return 3;
+    }
+  }
+  switch (band) {
+    case "elite":
+      return 0;
+    case "above":
+      return 1;
+    case "average":
+      return 2;
+    case "below":
+      return 4;
+    default:
+      return 3;
   }
 }
 
@@ -318,6 +365,13 @@ function coreAppearances(
   return n;
 }
 
+function betterPick(
+  a: { tier: number; score: number },
+  b: { tier: number; score: number },
+): boolean {
+  return a.tier < b.tier || (a.tier === b.tier && a.score > b.score);
+}
+
 /** Per-ticket greedy fill (legacy) — ignores cross-ticket state. */
 export function fillGreedy(
   slots: TicketSlot[],
@@ -329,7 +383,12 @@ export function fillGreedy(
       slot.focus === "any"
         ? null
         : resolveStatFamily(slot.focus as StatType);
-    let ranked = [...pool].sort((a, b) => b.softScore - a.softScore);
+    const focusStrict = focusFamily != null && !slot.isFun;
+    let ranked = [...pool].sort((a, b) => {
+      const ta = bandPickTier(a.band, focusStrict);
+      const tb = bandPickTier(b.band, focusStrict);
+      return ta - tb || b.softScore - a.softScore;
+    });
     if (focusFamily) {
       const focused = ranked.filter((c) => c.statFamily === focusFamily);
       if (focused.length >= slot.legCount) ranked = focused;
@@ -395,36 +454,41 @@ export function fillSnakeDraft(
 
   const usedOnTicket = tickets.map(() => new Set<number>());
 
-  for (const ti of order) {
+  const pickBest = (
+    ti: number,
+    relaxFocus: boolean,
+  ): FillCandidate | null => {
     const ticket = tickets[ti]!;
     const slot = nonFunSlots[ti]!;
-    if (ticket.legs.length >= slot.legCount) continue;
-
     const focusFamily =
       slot.focus === "any"
         ? null
         : resolveStatFamily(slot.focus as StatType);
+    const focusStrict = focusFamily != null;
 
     let best: FillCandidate | null = null;
+    let bestTier = Infinity;
     let bestScore = -Infinity;
 
     for (const c of pool) {
       if (usedOnTicket[ti]!.has(c.playerId)) continue;
-      if (focusFamily && c.statFamily !== focusFamily) continue;
+      if (!relaxFocus && focusFamily && c.statFamily !== focusFamily) continue;
 
       const key = exposureKey(c.playerId, c.statFamily);
       const apps = appearances.get(key) ?? 0;
       if (apps >= opts.hardWall) continue;
 
-      const core = isCore(c, cores);
-      if (
-        core &&
-        coreAppearances(tickets, {
-          playerId: c.playerId,
-          family: c.statFamily,
-        }) >= coreCap
-      ) {
-        continue;
+      if (!relaxFocus) {
+        const core = isCore(c, cores);
+        if (
+          core &&
+          coreAppearances(tickets, {
+            playerId: c.playerId,
+            family: c.statFamily,
+          }) >= coreCap
+        ) {
+          continue;
+        }
       }
 
       if (
@@ -434,32 +498,28 @@ export function fillSnakeDraft(
       }
 
       const penalised = c.softScore - opts.lambda * apps * apps;
-      if (penalised > bestScore) {
+      const tier = bandPickTier(c.band, focusStrict && !relaxFocus);
+      if (
+        betterPick(
+          { tier, score: penalised },
+          { tier: bestTier, score: bestScore },
+        )
+      ) {
+        bestTier = tier;
         bestScore = penalised;
         best = c;
       }
     }
+    return best;
+  };
 
-    if (!best) {
-      // Relax focus filter once if stuck
-      for (const c of pool) {
-        if (usedOnTicket[ti]!.has(c.playerId)) continue;
-        const key = exposureKey(c.playerId, c.statFamily);
-        const apps = appearances.get(key) ?? 0;
-        if (apps >= opts.hardWall) continue;
-        if (
-          wouldBreachTeamCap(ticket.legs, c, opts.teamCapPct, slot.legCount)
-        ) {
-          continue;
-        }
-        const penalised = c.softScore - opts.lambda * apps * apps;
-        if (penalised > bestScore) {
-          bestScore = penalised;
-          best = c;
-        }
-      }
-    }
+  for (const ti of order) {
+    const ticket = tickets[ti]!;
+    const slot = nonFunSlots[ti]!;
+    if (ticket.legs.length >= slot.legCount) continue;
 
+    let best = pickBest(ti, false);
+    if (!best) best = pickBest(ti, true); // relax focus if stuck
     if (!best) continue;
 
     ticket.legs.push(best);
@@ -473,29 +533,7 @@ export function fillSnakeDraft(
     const ticket = tickets[ti]!;
     const slot = nonFunSlots[ti]!;
     while (ticket.legs.length < slot.legCount) {
-      const focusFamily =
-        slot.focus === "any"
-          ? null
-          : resolveStatFamily(slot.focus as StatType);
-      let best: FillCandidate | null = null;
-      let bestScore = -Infinity;
-      for (const c of pool) {
-        if (usedOnTicket[ti]!.has(c.playerId)) continue;
-        if (focusFamily && c.statFamily !== focusFamily) continue;
-        const key = exposureKey(c.playerId, c.statFamily);
-        const apps = appearances.get(key) ?? 0;
-        if (apps >= opts.hardWall) continue;
-        if (
-          wouldBreachTeamCap(ticket.legs, c, opts.teamCapPct, slot.legCount)
-        ) {
-          continue;
-        }
-        const penalised = c.softScore - opts.lambda * apps * apps;
-        if (penalised > bestScore) {
-          bestScore = penalised;
-          best = c;
-        }
-      }
+      const best = pickBest(ti, false) ?? pickBest(ti, true);
       if (!best) break;
       ticket.legs.push(best);
       usedOnTicket[ti]!.add(best.playerId);

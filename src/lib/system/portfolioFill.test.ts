@@ -7,6 +7,7 @@ import { describe, it } from "node:test";
 import {
   assembleSoftScore,
   avgPairwiseOverlap,
+  bandSoftBonus,
   computeMetrics,
   exposureKey,
   fillGreedy,
@@ -15,6 +16,7 @@ import {
   shrunkRate,
   tapeModifier,
   type FillCandidate,
+  type LeadersBand,
   type TicketSlot,
 } from "@/lib/system/portfolioFill";
 
@@ -46,13 +48,24 @@ function cand(
   partial: Partial<FillCandidate> &
     Pick<FillCandidate, "playerId" | "playerName" | "team" | "statFamily">,
 ): FillCandidate {
+  const band = (partial.band ?? "unknown") as LeadersBand;
+  const confidence = partial.confidence ?? 0.7;
+  const softScore =
+    partial.softScore ??
+    assembleSoftScore({
+      confidence,
+      bandBonus: bandSoftBonus(band),
+      historyHits: partial.historyHits,
+      historyBets: partial.historyBets,
+    });
   return {
     statType: partial.statFamily as FillCandidate["statType"],
     line: 20,
     prediction: 22,
-    confidence: 0.7,
-    softScore: 70,
     ...partial,
+    confidence,
+    band,
+    softScore,
   };
 }
 
@@ -217,6 +230,114 @@ describe("snake draft vs greedy", () => {
     const draft = fillSnakeDraft(slots, pool2);
     const families = draft.cores.map((c) => c.family);
     assert.equal(new Set(families).size, families.length);
+  });
+
+  it("focus Marks prefers Elite/Above over high-conf Average 2+ fluff", () => {
+    const marksPool: FillCandidate[] = [
+      cand({
+        playerId: 1,
+        playerName: "AverageEasy",
+        team: "Richmond",
+        statFamily: "marks",
+        band: "average",
+        confidence: 0.7,
+        line: 2,
+      }),
+      cand({
+        playerId: 2,
+        playerName: "AverageEasy2",
+        team: "Hawthorn",
+        statFamily: "marks",
+        band: "average",
+        confidence: 0.68,
+        line: 2,
+      }),
+      cand({
+        playerId: 3,
+        playerName: "Sicily",
+        team: "Hawthorn",
+        statFamily: "marks",
+        band: "above",
+        confidence: 0.56,
+        line: 6,
+      }),
+      cand({
+        playerId: 4,
+        playerName: "Battle",
+        team: "Hawthorn",
+        statFamily: "marks",
+        band: "above",
+        confidence: 0.55,
+        line: 6,
+      }),
+      cand({
+        playerId: 5,
+        playerName: "Ginnivan",
+        team: "Hawthorn",
+        statFamily: "marks",
+        band: "elite",
+        confidence: 0.54,
+        line: 5,
+      }),
+      cand({
+        playerId: 6,
+        playerName: "Short",
+        team: "Richmond",
+        statFamily: "marks",
+        band: "above",
+        confidence: 0.55,
+        line: 6,
+      }),
+      cand({
+        playerId: 7,
+        playerName: "BelowGuy",
+        team: "Richmond",
+        statFamily: "marks",
+        band: "below",
+        confidence: 0.75,
+        line: 1,
+      }),
+    ];
+    const draft = fillSnakeDraft(
+      [
+        {
+          id: "m5",
+          strategyKey: "marks_5",
+          focus: "marks",
+          legCount: 5,
+        },
+      ],
+      marksPool,
+      { lambda: 4 },
+    );
+    const legs = draft.tickets[0]!.legs;
+    assert.equal(legs.length, 5);
+    const names = legs.map((l) => l.playerName);
+    assert.ok(names.includes("Sicily"), `missing Sicily: ${names.join(",")}`);
+    assert.ok(names.includes("Ginnivan"), `missing Ginnivan: ${names.join(",")}`);
+    assert.ok(names.includes("Short"), `missing Short: ${names.join(",")}`);
+    assert.ok(!names.includes("BelowGuy"), "Below should not beat Elite/Above");
+    // Elite goals+marks hypothetical: same player Elite on two markets outweighs Below
+    const ginnGoals = cand({
+      playerId: 5,
+      playerName: "Ginnivan",
+      team: "Hawthorn",
+      statFamily: "goals",
+      band: "elite",
+      confidence: 0.5,
+    });
+    const belowDisp = cand({
+      playerId: 99,
+      playerName: "BelowDisp",
+      team: "Richmond",
+      statFamily: "disposals",
+      band: "below",
+      confidence: 0.8,
+    });
+    assert.ok(
+      ginnGoals.softScore > belowDisp.softScore,
+      `Elite goals soft ${ginnGoals.softScore} should beat Below ${belowDisp.softScore}`,
+    );
   });
 
   it("fills odd leg counts under 50% team cap (not stuck at 2/3)", () => {
