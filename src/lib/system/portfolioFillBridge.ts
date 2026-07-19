@@ -32,6 +32,12 @@ export function suggestedLegToFillCandidate(
 ): FillCandidate {
   const hits = history?.hits ?? leg.history?.hits;
   const bets = history?.bets ?? leg.history?.bets;
+  const resolvedBand = (band ?? leg.benchmark ?? "unknown") as
+    | "elite"
+    | "above"
+    | "average"
+    | "below"
+    | "unknown";
   return {
     playerId: leg.playerId,
     playerName: leg.playerName,
@@ -42,9 +48,10 @@ export function suggestedLegToFillCandidate(
     prediction: leg.prediction,
     odds: leg.odds,
     confidence: leg.confidence,
+    band: resolvedBand,
     softScore: assembleSoftScore({
       confidence: leg.confidence,
-      bandBonus: bandSoftBonus(band ?? leg.benchmark),
+      bandBonus: bandSoftBonus(resolvedBand),
       historyHits: hits,
       historyBets: bets,
     }),
