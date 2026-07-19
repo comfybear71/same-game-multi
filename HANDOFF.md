@@ -124,6 +124,24 @@ Flow:
   Lab still prefers `full-*` over `exp-*`. Re-run:
   `npx tsx scripts/backtest-sgm.ts --wide --spread --seasons='2024,2025,2026' --stake=5`
 
+### Odds API harvest (calibration dataset)
+
+Paid Odds API sub has ~1 month left. App does **not** use live odds.
+Harvest player props into append-only `odds_snapshots` for later model % vs
+bookie implied % analysis:
+
+```bash
+npm run db:migrate          # applies 0012_odds_snapshots
+npm run harvest:odds        # needs ODDS_API_KEY in .env.local
+npm run test:odds-harvest
+```
+
+Markets (docs): `player_disposals`, `_over`, `player_goals_scored_over`,
+`player_marks_over`, `player_tackles_over`, `player_afl_fantasy_points` (+ `_over`).
+Quota floor default 50 remaining. Optional cron: `HARVEST_ODDS_CRON=on` +
+`/api/cron/harvest-odds` (Wed/Sat schedules documented in the route file —
+not enabled in vercel.json by default).
+
 ### Medium
 
 4. **Players DB enrichment from AFL.com.au profiles** — persist canonical

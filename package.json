@@ -19,6 +19,8 @@
     "backtest": "tsx scripts/backtest-sgm.ts",
     "backtest:portfolio": "tsx scripts/backtest-portfolio.ts",
     "test:portfolio-fill": "tsx --test src/lib/system/portfolioFill.test.ts",
+    "test:odds-harvest": "tsx --test src/lib/odds/resolvePlayer.test.ts src/lib/odds/dedupe.test.ts src/lib/odds/quota.test.ts src/lib/odds/parseOutcomes.test.ts",
+    "harvest:odds": "tsx scripts/harvest-odds.ts",
     "bankroll": "tsx scripts/bankroll-sim.ts"
   },
   "dependencies": {

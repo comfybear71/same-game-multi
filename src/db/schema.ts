@@ -316,6 +316,55 @@ export const bookmakerLines = pgTable(
   }),
 );
 
+/**
+ * Append-only Odds API player-prop harvest (calibration dataset).
+ * Separate from bookmaker_lines — that table is live D/M/T/G only and not
+ * snapshot-shaped; this keeps line movement across the week.
+ */
+export const oddsSnapshots = pgTable(
+  "odds_snapshots",
+  {
+    id: serial("id").primaryKey(),
+    oddsApiEventId: text("odds_api_event_id").notNull(),
+    gameId: integer("game_id").references(() => games.id, {
+      onDelete: "set null",
+    }),
+    playerName: text("player_name").notNull(),
+    playerId: integer("player_id").references(() => players.id, {
+      onDelete: "set null",
+    }),
+    /** Odds API market key, e.g. player_disposals. */
+    marketKey: text("market_key").notNull(),
+    /**
+     * Mapped family when known: disposals|marks|tackles|goals|fantasy|
+     * kicks|handballs. Null if we stored an unmapped market.
+     */
+    statFamily: text("stat_family"),
+    line: doublePrecision("line").notNull(),
+    overOdds: doublePrecision("over_odds"),
+    underOdds: doublePrecision("under_odds"),
+    bookmaker: text("bookmaker").notNull(),
+    snapshotAt: timestamp("snapshot_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    eventIdx: index("odds_snapshots_event_idx").on(t.oddsApiEventId),
+    gameSnapIdx: index("odds_snapshots_game_snap_idx").on(
+      t.gameId,
+      t.snapshotAt,
+    ),
+    lookupIdx: index("odds_snapshots_lookup_idx").on(
+      t.oddsApiEventId,
+      t.playerName,
+      t.marketKey,
+      t.bookmaker,
+      t.line,
+    ),
+  }),
+);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Bets (slip) + legs
 // ─────────────────────────────────────────────────────────────────────────────
@@ -811,6 +860,7 @@ export type PlayerGameStat = typeof playerGameStats.$inferSelect;
 export type Prediction = typeof predictions.$inferSelect;
 export type PlayerGameFeature = typeof playerGameFeatures.$inferSelect;
 export type BookmakerLine = typeof bookmakerLines.$inferSelect;
+export type OddsSnapshot = typeof oddsSnapshots.$inferSelect;
 export type LineupPlayer = typeof lineupPlayers.$inferSelect;
 export type LineupStatus = (typeof lineupStatusEnum.enumValues)[number];
 export type Bet = typeof bets.$inferSelect;
