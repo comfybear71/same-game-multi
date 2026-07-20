@@ -12,6 +12,18 @@
     {
       "path": "/api/cron/backtest-strategy",
       "schedule": "0 3 * * 1"
+    },
+    {
+      "path": "/api/cron/harvest-odds",
+      "schedule": "0 10 * * 3"
+    },
+    {
+      "path": "/api/cron/harvest-odds",
+      "schedule": "0 10 * * 5"
+    },
+    {
+      "path": "/api/cron/harvest-odds",
+      "schedule": "0 0 * * 6"
     }
   ]
 }

@@ -33,6 +33,7 @@ export function BottomNav() {
             <Link
               key={t.href}
               href={t.href}
+              prefetch={false}
               className={`flex flex-1 flex-col items-center gap-0.5 py-2 text-[10px] font-medium ${
                 active ? "text-accent" : "text-slate-400"
               }`}

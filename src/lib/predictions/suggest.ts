@@ -113,16 +113,37 @@ function chooseRung(rungs: number[], prediction: number): number | null {
  * projection — that was dropping high-fantasy players (e.g. a 116-fantasy mid
  * with a steep posted line) from the +edge pool entirely.
  */
+/**
+ * Goals: one loud bag (e.g. Stringer 7) must not chase 4+/5+ rungs.
+ * Cap the target at floor(seasonAvg)+1 (avg 2.1 → max 3+ → line 2.5).
+ */
+export function capGoalsLine(
+  line: number,
+  seasonAvg: number | null | undefined,
+): number {
+  if (seasonAvg == null || !Number.isFinite(seasonAvg) || seasonAvg < 0) {
+    return line;
+  }
+  const maxTarget = Math.max(1, Math.floor(seasonAvg) + 1);
+  const maxLine = maxTarget - 0.5;
+  return Math.min(line, maxLine);
+}
+
 function pickSuggestLine(
   rungs: number[],
   prediction: number,
   statType: StatType,
+  seasonAvg?: number | null,
 ): number | null {
   const bookie = rungs.length > 0 ? chooseRung(rungs, prediction) : null;
   const model = modelPropLine(statType, prediction);
-  if (bookie != null && prediction > bookie) return bookie;
-  if (model != null && prediction > model) return model;
-  return model ?? bookie;
+  let line: number | null = null;
+  if (bookie != null && prediction > bookie) line = bookie;
+  else if (model != null && prediction > model) line = model;
+  else line = model ?? bookie;
+  if (line == null) return null;
+  if (statType === "goals") return capGoalsLine(line, seasonAvg);
+  return line;
 }
 
 /**
@@ -230,8 +251,9 @@ async function candidateLegs(
     // the stat board's "AI pick". Odds stay null; the picker shows "—" and
     // the punter sets their own target.
     const rungs = [...(rungsByKey.get(key) ?? [])];
+    const seasonAvg = seasonAvgByKey.get(key) ?? null;
     const bookieLine = rungs.length > 0 ? chooseRung(rungs, p.value) : null;
-    const line = pickSuggestLine(rungs, p.value, p.statType);
+    const line = pickSuggestLine(rungs, p.value, p.statType, seasonAvg);
     if (line == null) continue;
     const odds =
       bookieLine != null && line === bookieLine && p.value > bookieLine
@@ -258,7 +280,7 @@ async function candidateLegs(
       odds: odds == null ? null : Math.round(odds * 100) / 100,
       prediction: p.value,
       edge,
-      seasonAvg: seasonAvgByKey.get(key) ?? null,
+      seasonAvg,
       fantasyAvg: p.recentFantasyAvg,
       hitRate,
       confidence: clamp(base * newsMultiplier(news), 0, 1),

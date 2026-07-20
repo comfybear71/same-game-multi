@@ -36,10 +36,20 @@ import {
   PORTFOLIO_K,
   type ActivePolicyView,
 } from "@/lib/system/policy";
+import { modelEdge, impliedProbability } from "@/lib/system/edgeScore";
+import { loadLastGameLeadersMap } from "@/lib/system/lastGameLeadersDb";
+import { loadBookPricesForGame, pickPrice } from "@/lib/system/oddsPrices";
 import {
   isPortfolioDraftFillEnabled,
+  isPortfolioEdgeScoreEnabled,
   type PortfolioMetrics,
 } from "@/lib/system/portfolioFill";
+import {
+  buildChooserBook,
+  materialiseSelections,
+  type CardStyle,
+  type ChooserBook,
+} from "@/lib/system/chooser";
 import {
   loadFillPool,
   metricsFromLegSets,
@@ -71,6 +81,20 @@ export async function excludePlayerFromSystemBook(
   return buildAndPersistSystemPortfolio(gameId);
 }
 
+export type LegEdgeBadge = {
+  /** Positive = +EV (green); negative = taxed (red). */
+  edge: number;
+  modelPct: number;
+  impliedPct: number;
+};
+
+export type LegHotBadge = {
+  rank: number;
+  lastValue: number;
+  /** e.g. "5 goals last wk" */
+  label: string;
+};
+
 export interface SystemTicketView {
   id: number;
   gameId: number;
@@ -86,6 +110,7 @@ export interface SystemTicketView {
   legsHit: number;
   legsTotal: number;
   slipHit: boolean | null;
+  voided: boolean;
   flatReturn: number;
   cashReturn: number;
   gradedAt: Date | null;
@@ -100,11 +125,16 @@ export interface SystemTicketView {
     confidence: number;
     actualValue: number | null;
     hit: boolean | null;
+    voided: boolean;
     /** Leaders stamp — position / season avg / Elite→Below. */
     position?: PositionBucket | null;
     seasonAvg?: number | null;
     benchmark?: BenchmarkBand | "unknown" | null;
     percentile?: number | null;
+    /** Present when PORTFOLIO_EDGE_SCORE on and a bookie price exists. */
+    edgeBadge?: LegEdgeBadge | null;
+    /** Present when PORTFOLIO_EDGE_SCORE on and player was top-3 last game. */
+    hotBadge?: LegHotBadge | null;
   }[];
 }
 
@@ -112,7 +142,19 @@ export type SystemBookResponse = {
   tickets: SystemTicketView[];
   metrics: PortfolioMetrics;
   draftFillEnabled: boolean;
+  edgeScoreEnabled: boolean;
+  chooser?: ChooserBook | null;
+  selections?: Record<string, CardStyle>;
 };
+
+export type { CardStyle, ChooserBook };
+
+function hotLabel(statType: StatType, lastValue: number): string {
+  const n = Number.isInteger(lastValue)
+    ? String(lastValue)
+    : lastValue.toFixed(1);
+  return `${n} ${statType} last wk`;
+}
 
 function bookMetricsFromViews(tickets: SystemTicketView[]): PortfolioMetrics {
   return metricsFromLegSets(
@@ -124,14 +166,56 @@ function bookMetricsFromViews(tickets: SystemTicketView[]): PortfolioMetrics {
   );
 }
 
+async function attachEdgeHotBadges(
+  gameId: number,
+  tickets: SystemTicketView[],
+): Promise<SystemTicketView[]> {
+  if (!isPortfolioEdgeScoreEnabled() || tickets.length === 0) return tickets;
+
+  const [prices, leaders] = await Promise.all([
+    loadBookPricesForGame(gameId),
+    loadLastGameLeadersMap(gameId),
+  ]);
+
+  return tickets.map((t) => ({
+    ...t,
+    legs: t.legs.map((l) => {
+      let edgeBadge: LegEdgeBadge | null = null;
+      let hotBadge: LegHotBadge | null = null;
+      if (l.playerId != null) {
+        const odds = pickPrice(prices, l.playerId, l.statType, l.line);
+        const edge = modelEdge(l.confidence, odds);
+        if (edge != null && odds != null) {
+          edgeBadge = {
+            edge,
+            modelPct: l.confidence,
+            impliedPct: impliedProbability(odds),
+          };
+        }
+        const leader = leaders.get(`${l.playerId}:${l.statType}`);
+        if (leader) {
+          hotBadge = {
+            rank: leader.rank,
+            lastValue: leader.lastValue,
+            label: hotLabel(l.statType, leader.lastValue),
+          };
+        }
+      }
+      return { ...l, edgeBadge, hotBadge };
+    }),
+  }));
+}
+
 export async function getSystemBookResponse(
   gameId: number,
 ): Promise<SystemBookResponse> {
-  const tickets = await getSystemBook(gameId);
+  const base = await getSystemBook(gameId);
+  const tickets = await attachEdgeHotBadges(gameId, base);
   return {
     tickets,
     metrics: bookMetricsFromViews(tickets),
     draftFillEnabled: isPortfolioDraftFillEnabled(),
+    edgeScoreEnabled: isPortfolioEdgeScoreEnabled(),
   };
 }
 
@@ -404,6 +488,7 @@ export async function getSystemBook(gameId: number): Promise<SystemTicketView[]>
       legsHit: t.legsHit,
       legsTotal: t.legsTotal,
       slipHit: t.slipHit,
+      voided: t.voided,
       flatReturn: t.flatReturn,
       cashReturn: t.cashReturn,
       gradedAt: t.gradedAt,
@@ -434,6 +519,7 @@ export async function getSystemBook(gameId: number): Promise<SystemTicketView[]>
           confidence: l.confidence,
           actualValue: l.actualValue,
           hit: l.hit,
+          voided: l.voided,
           position: stamp?.position ?? null,
           seasonAvg: stamp?.average ?? null,
           benchmark: stamp?.band ?? null,
@@ -492,7 +578,12 @@ export async function updateSystemTicketPlacement(
     throw new Error("Placed odds must be greater than 1.00");
   }
 
-  const cashReturn = computeCashReturn(existing.slipHit, stake, placedOdds);
+  const cashReturn = computeCashReturn(
+    existing.slipHit,
+    stake,
+    placedOdds,
+    existing.voided,
+  );
 
   await db
     .update(systemTickets)
@@ -586,7 +677,12 @@ export async function updateSystemTicketLegTarget(
     .set({
       modelledChance: combinedChance,
       estOdds,
-      cashReturn: computeCashReturn(ticket.slipHit, ticket.stake, ticket.placedOdds),
+      cashReturn: computeCashReturn(
+        ticket.slipHit,
+        ticket.stake,
+        ticket.placedOdds,
+        ticket.voided,
+      ),
     })
     .where(eq(systemTickets.id, ticket.id));
 
@@ -605,6 +701,126 @@ function modelStatsFromLegs(
         100,
     ) / 100;
   return { combinedChance, estOdds };
+}
+
+async function persistMaterialisedTickets(
+  gameId: number,
+  materialised: ReturnType<typeof materialiseSelections>,
+  placementByKey: Map<
+    string,
+    { stake: number | null; placedOdds: number | null }
+  >,
+): Promise<void> {
+  for (const t of materialised) {
+    const kept = placementByKey.get(t.strategyKey);
+    const [ticket] = await db
+      .insert(systemTickets)
+      .values({
+        gameId,
+        strategyKey: t.strategyKey,
+        focus: t.focus,
+        legCount: t.legs.length,
+        tier: t.tier,
+        modelledChance: t.modelledChance,
+        estOdds: t.estOdds,
+        stake: kept?.stake ?? null,
+        placedOdds: kept?.placedOdds ?? null,
+        legsTotal: t.legs.length,
+        legsHit: 0,
+        slipHit: null,
+        flatReturn: 0,
+        cashReturn: 0,
+      })
+      .returning();
+
+    await db.insert(systemTicketLegs).values(
+      t.legs.map((l) => ({
+        ticketId: ticket!.id,
+        playerId: l.playerId,
+        playerName: l.playerName,
+        team: l.team,
+        statType: l.statType as StatType,
+        line: l.line,
+        prediction: l.prediction,
+        confidence: l.confidence,
+        actualValue: null,
+        hit: null,
+      })),
+    );
+  }
+}
+
+/**
+ * 3-card chooser build: edge / hot / spread portfolios, persist the selected
+ * card per slot (default green/edge). Returns chooser for the UI.
+ */
+export async function buildSystemBookWithChooser(
+  gameId: number,
+  opts?: {
+    policy?: ActivePolicyView;
+    k?: number;
+    userId?: number | null;
+    selections?: Record<string, CardStyle>;
+  },
+): Promise<{
+  tickets: SystemTicketView[];
+  metrics: PortfolioMetrics;
+  chooser: ChooserBook;
+  selections: Record<string, CardStyle>;
+  draftFillEnabled: boolean;
+  edgeScoreEnabled: boolean;
+}> {
+  const policy = opts?.policy ?? (await ensureActivePolicy());
+  const k = opts?.k ?? PORTFOLIO_K;
+  const { ranked } = await selectStrategiesForGame(gameId, policy, k);
+  const { bands } = await getGameBenchmarkBands(gameId);
+
+  const prior = await db
+    .select({
+      strategyKey: systemTickets.strategyKey,
+      stake: systemTickets.stake,
+      placedOdds: systemTickets.placedOdds,
+    })
+    .from(systemTickets)
+    .where(eq(systemTickets.gameId, gameId));
+  const placementByKey = new Map(
+    prior.map((p) => [p.strategyKey, { stake: p.stake, placedOdds: p.placedOdds }]),
+  );
+
+  await db.delete(systemTickets).where(eq(systemTickets.gameId, gameId));
+
+  const pool = await loadFillPool(gameId, bands, opts?.userId ?? null, {
+    edgePackage: true,
+  });
+  const slots = strategiesToSlots(ranked);
+  const tierByKey = new Map(ranked.map((s) => [s.strategyKey, s.tier]));
+
+  const chooser = buildChooserBook(slots, pool, {
+    labelFor: (key, n) => strategyLabel(key, n),
+    tierFor: (key, isFun) => {
+      if (isFun) return "fun";
+      const t = tierByKey.get(key) ?? "balanced";
+      return t === "fun" ? "fun" : t;
+    },
+  });
+
+  const selections: Record<string, CardStyle> = { ...opts?.selections };
+  for (const slot of chooser.slots) {
+    if (!selections[slot.strategyKey]) selections[slot.strategyKey] = "edge";
+  }
+
+  const materialised = materialiseSelections(chooser, selections);
+  await persistMaterialisedTickets(gameId, materialised, placementByKey);
+
+  const tickets = await attachEdgeHotBadges(gameId, await getSystemBook(gameId));
+  return {
+    tickets,
+    metrics: bookMetricsFromViews(tickets),
+    chooser,
+    selections,
+    draftFillEnabled: isPortfolioDraftFillEnabled(),
+    edgeScoreEnabled: isPortfolioEdgeScoreEnabled(),
+  };
 }
 
 /**

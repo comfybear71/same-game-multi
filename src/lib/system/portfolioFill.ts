@@ -39,6 +39,22 @@ export type FillCandidate = {
   band?: LeadersBand;
   historyHits?: number;
   historyBets?: number;
+  /** Season average for cushion (edge package). */
+  seasonAvg?: number | null;
+  /** Most-recent-first form for last-5 trend. */
+  recentForm?: number[];
+  /** Real bookie decimal odds (null = no price; never block). */
+  bookOdds?: number | null;
+  /** model% − implied% when bookOdds present. */
+  edge?: number | null;
+  impliedProb?: number | null;
+  edgePts?: number;
+  cushionPts?: number;
+  trendPts?: number;
+  /** 1–3 if top-3 last-game leader in this category. */
+  leaderRank?: number | null;
+  leaderLastValue?: number | null;
+  leaderPts?: number;
 };
 
 /**
@@ -131,6 +147,13 @@ export type FillOptions = {
   coreMax?: number;
   coreFloorShrunk?: number;
   baselineHit?: number;
+  /**
+   * Non-core max appearances per player×market (v2 satellite rule).
+   * When set, satellites cannot repeat; cores use coreMaxAppearances.
+   */
+  satelliteMaxAppearances?: number;
+  /** Core max appearances when satellite rule is on (default 2). */
+  coreMaxAppearances?: number;
 };
 
 export type FillResult = {
@@ -201,6 +224,8 @@ export function assembleSoftScore(opts: {
   historyHits?: number;
   historyBets?: number;
   baselineHit?: number;
+  /** Sum of edge + cushion + trend + leaders soft points (edge package). */
+  edgePackagePts?: number;
 }): number {
   const baseline = opts.baselineHit ?? DEFAULTS.baselineHit;
   const confPts = opts.confidence * 100;
@@ -211,7 +236,8 @@ export function assembleSoftScore(opts: {
     const s = shrunkRate(opts.historyHits ?? 0, opts.historyBets);
     tape = tapeModifier(s, baseline, 10);
   }
-  return confPts + band + tilt + tape;
+  const edgePkg = opts.edgePackagePts ?? 0;
+  return confPts + band + tilt + tape + edgePkg;
 }
 
 /**
@@ -478,8 +504,19 @@ export function fillSnakeDraft(
       const apps = appearances.get(key) ?? 0;
       if (apps >= opts.hardWall) continue;
 
+      const core = isCore(c, cores);
+      // v2 satellite rule: non-cores max 1; cores max 2 (wall 3 = circuit-breaker).
+      if (opts.satelliteMaxAppearances != null) {
+        const satMax = opts.satelliteMaxAppearances;
+        const coreMaxApps = opts.coreMaxAppearances ?? 2;
+        if (core) {
+          if (apps >= coreMaxApps) continue;
+        } else if (apps >= satMax) {
+          continue;
+        }
+      }
+
       if (!relaxFocus) {
-        const core = isCore(c, cores);
         if (
           core &&
           coreAppearances(tickets, {
@@ -607,4 +644,27 @@ export function isPortfolioDraftFillEnabled(): boolean {
   const v = process.env.PORTFOLIO_DRAFT_FILL?.trim().toLowerCase();
   if (v === undefined || v === "") return true;
   return v !== "0" && v !== "false" && v !== "no" && v !== "off";
+}
+
+/**
+ * System book v2 package: satellite-1 + odds edge + last-game leaders.
+ * Default OFF — maintainer flips after docs/portfolio-edge-backtest.md review.
+ * Does not change PORTFOLIO_DRAFT_FILL.
+ */
+export function isPortfolioEdgeScoreEnabled(): boolean {
+  const v = process.env.PORTFOLIO_EDGE_SCORE?.trim().toLowerCase();
+  if (v === undefined || v === "") return false;
+  return v === "1" || v === "true" || v === "yes" || v === "on";
+}
+
+/** Fill options when PORTFOLIO_EDGE_SCORE is on. */
+export function edgePackageFillOptions(
+  overrides?: FillOptions,
+): FillOptions {
+  return {
+    satelliteMaxAppearances: 1,
+    coreMaxAppearances: 2,
+    hardWall: 3,
+    ...overrides,
+  };
 }

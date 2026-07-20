@@ -1,7 +1,14 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import { db } from "@/db";
-import { betLegs, bets, games, playerGameStats, type LegResult } from "@/db/schema";
+import {
+  betLegs,
+  bets,
+  games,
+  playerGameStats,
+  systemTickets,
+  type LegResult,
+} from "@/db/schema";
 import { currentSeason } from "@/lib/cron";
 import { gamePlayerNameSet, legInGameScope, slipBetIdsForGame, type LegGameScope } from "@/lib/data/bets";
 import { settleGamePlayerStats } from "@/lib/ingest/playerStats";
@@ -95,6 +102,19 @@ export async function settlePendingBets(): Promise<SettleResult> {
         .limit(1)
     )[0];
     if (!stat) continue; // no actuals yet — leave pending
+
+    // Injured / DNP → void (stake returned on the slip).
+    if (stat.didPlay === false) {
+      const updated = await db
+        .update(betLegs)
+        .set({ result: "void", actualValue: null })
+        .where(and(eq(betLegs.id, leg.id), eq(betLegs.result, "pending")))
+        .returning({ id: betLegs.id });
+      if (updated.length === 0) continue;
+      legsSettled++;
+      touchedBetIds.add(leg.betId);
+      continue;
+    }
 
     const actualValue = (stat as unknown as Record<string, number | null>)[
       leg.statType
@@ -399,32 +419,103 @@ export interface SettlementPipelineResult {
   actualsBackfilled: number;
   accuracyRows: number;
   systemTicketsGraded: number;
+  /** Strategy lab catch-up after new actuals (null if skipped / failed). */
+  lab: {
+    runId: number;
+    gamesProcessed: number;
+    slipsWritten: number;
+  } | null;
+  /** Bankroll sim re-run against the lab source (null if skipped / failed). */
+  bankrollRunId: number | null;
 }
 
 /**
- * The full morning-after pipeline: refresh results from Squiggle, pull actual
- * player stats from AFL Tables for every completed game, settle pending legs
- * against those actuals, then recompute model accuracy for affected rounds.
- * Shared by the daily cron and the "Settle now" button. Pass `gameIds` to
- * scope the (slow, scraping) stats step to just those games — the manual
- * button uses this so it only touches the games your pending bets reference
- * and finishes well inside the serverless time limit. The unscoped cron run
- * sweeps every completed game.
+ * Games the daily cron should touch: latest completed round (+ previous if
+ * stats still thin), plus any with ungraded System tickets or pending personal
+ * legs. Never re-scrapes the whole season — historical rounds stay in
+ * player_game_stats.
+ */
+export async function gamesNeedingSettlement(
+  season: number,
+): Promise<number[]> {
+  const ids = new Set<number>();
+
+  const [latest] = await db
+    .select({ round: games.round })
+    .from(games)
+    .where(and(eq(games.season, season), eq(games.status, "complete")))
+    .orderBy(desc(games.round))
+    .limit(1);
+
+  if (latest?.round != null) {
+    const rounds = [latest.round];
+    // One round back — AFL Tables often lags a day on Sunday night games.
+    if (latest.round > 0) rounds.push(latest.round - 1);
+
+    const recent = await db
+      .select({ id: games.id })
+      .from(games)
+      .where(
+        and(
+          eq(games.season, season),
+          eq(games.status, "complete"),
+          inArray(games.round, rounds),
+        ),
+      );
+    for (const g of recent) ids.add(g.id);
+  }
+
+  const [ungradedSystem, pendingPersonal] = await Promise.all([
+    db
+      .selectDistinct({ gameId: systemTickets.gameId })
+      .from(systemTickets)
+      .innerJoin(games, eq(games.id, systemTickets.gameId))
+      .where(
+        and(
+          eq(games.season, season),
+          isNull(systemTickets.slipHit),
+          sql`${systemTickets.stake} is not null and ${systemTickets.stake} > 0`,
+        ),
+      ),
+    pendingLegGameIds(),
+  ]);
+  for (const r of ungradedSystem) ids.add(r.gameId);
+  for (const id of pendingPersonal) ids.add(id);
+
+  return [...ids];
+}
+
+/**
+ * Morning-after pipeline: sync Squiggle → append AFL Tables actuals for
+ * games that still need them → grade System book + personal bets → accuracy
+ * → catch up Strategy lab + bankroll sim when new actuals landed.
+ * Shared by daily cron and "Settle now". Pass `gameIds` to force a scope;
+ * default is latest round(s) only (not the whole season).
+ *
+ * Surfaces after a successful run:
+ *   System  — graded tickets (immediate)
+ *   Review  — settled legs + model_accuracy (immediate)
+ *   Leaders — season avgs from player_game_stats (immediate read)
+ *   Lab     — strategy-lab + bankroll when statsRecorded > 0
  */
 export async function runSettlementPipeline(
-  opts: { gameIds?: number[] } = {},
+  opts: { gameIds?: number[]; refreshLab?: boolean } = {},
 ): Promise<SettlementPipelineResult> {
   const season = currentSeason();
   const sync = await syncFixtures(season);
 
-  const completedAll = await db
-    .select({ id: games.id, round: games.round })
-    .from(games)
-    .where(eq(games.status, "complete"));
+  const targetIds =
+    opts.gameIds ?? (await gamesNeedingSettlement(season));
+
   const completed =
-    opts.gameIds == null
-      ? completedAll
-      : completedAll.filter((g) => opts.gameIds!.includes(g.id));
+    targetIds.length === 0
+      ? []
+      : await db
+          .select({ id: games.id, round: games.round })
+          .from(games)
+          .where(
+            and(eq(games.status, "complete"), inArray(games.id, targetIds)),
+          );
 
   let statsRecorded = 0;
   let systemTicketsGraded = 0;
@@ -432,7 +523,9 @@ export async function runSettlementPipeline(
   for (const g of completed) {
     const res = await settleGamePlayerStats(g.id);
     statsRecorded += res.recorded;
-    if (g.round != null && res.recorded > 0) rounds.add(g.round);
+    if (g.round != null && (res.recorded > 0 || res.skipped > 0)) {
+      rounds.add(g.round);
+    }
     const graded = await gradeSystemBookForGame(g.id).catch(() => ({
       ticketsGraded: 0,
       legsUpdated: 0,
@@ -449,6 +542,40 @@ export async function runSettlementPipeline(
     accuracyRows += acc.rowsWritten;
   }
 
+  // Lab + bankroll: when new actuals landed, or caller forced refreshLab: true.
+  // Leaders/System/Review already read settled tables — no extra step.
+  let lab: SettlementPipelineResult["lab"] = null;
+  let bankrollRunId: number | null = null;
+  const wantLab =
+    opts.refreshLab === true ||
+    (opts.refreshLab !== false && statsRecorded > 0);
+  if (wantLab) {
+    try {
+      const { runWeeklyStrategyLab } = await import("@/lib/backtest/runner");
+      const labResult = await runWeeklyStrategyLab({
+        season,
+        onProgress: (msg) => console.log(`[settle→lab] ${msg}`),
+      });
+      lab = {
+        runId: labResult.runId,
+        gamesProcessed: labResult.gamesProcessed,
+        slipsWritten: labResult.slipsWritten,
+      };
+      // Re-sim bankroll when lab graded new games, or when lab was force-refreshed.
+      if (labResult.gamesProcessed > 0 || opts.refreshLab === true) {
+        const { runBankrollSim } = await import("@/lib/system/bankroll");
+        const br = await runBankrollSim({
+          sourceRunId: labResult.runId,
+          persist: true,
+          label: `bankroll-after-settle-${season}`,
+        });
+        bankrollRunId = br.runId;
+      }
+    } catch (err) {
+      console.error("[settle] lab/bankroll refresh failed:", err);
+    }
+  }
+
   return {
     sync,
     statsRecorded,
@@ -456,5 +583,7 @@ export async function runSettlementPipeline(
     actualsBackfilled,
     accuracyRows,
     systemTicketsGraded,
+    lab,
+    bankrollRunId,
   };
 }

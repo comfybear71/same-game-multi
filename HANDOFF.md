@@ -1,6 +1,6 @@
 # HANDOFF.md — Matty's got big balls multi tracker
 
-**Last updated:** July 2026 (Portfolio draft fill ON by default — test on live games).
+**Last updated:** July 2026 (System book v2 edge package behind flag — review backtest).
 
 State of the build, what's done, what's next. Pair with **`CLAUDE.md`**
 (conventions/architecture) and **`README.md`** / **`docs/LOCAL-DEV.md`** (setup).
@@ -35,6 +35,15 @@ npm run typecheck && npm run lint && npm run build
 - Crons: daily fixture refresh + morning-after settle/accuracy; **Monday**
   Strategy lab incremental (`/api/cron/backtest-strategy`, label
   `strategy-lab-{year}`) once AFL Tables has the prior round.
+- **Settle is append-only for recent rounds:** daily settle cron targets the
+  latest completed round (+ previous if AFL Tables lags), plus any games with
+  ungraded System tickets or pending personal legs. It does **not** re-scrape
+  the whole season — R0–prior rounds already in `player_game_stats` stay put.
+  Per game it only fetches predicted/lineup players still unset, then grades
+  System + personal bets. When new stats land it also catches up Strategy lab +
+  bankroll. Leaders read settled `player_game_stats` averages (not stale
+  predict-time features). Manual: `npm run settle:now -- --round=N`
+  (`--lab` forces Lab/bankroll even if stats already recorded).
 - **System book (phase 1):** game-page portfolio (separate from personal bets).
   Quiet season baseline from Lab still used as a prior + Suggested multi
   default tip; **not** shown as a separate “AI helm” UI. Grade on game-over /
@@ -138,9 +147,10 @@ npm run test:odds-harvest
 
 Markets (docs): `player_disposals`, `_over`, `player_goals_scored_over`,
 `player_marks_over`, `player_tackles_over`, `player_afl_fantasy_points` (+ `_over`).
-Quota floor default 50 remaining. Optional cron: `HARVEST_ODDS_CRON=on` +
-`/api/cron/harvest-odds` (Wed/Sat schedules documented in the route file —
-not enabled in vercel.json by default).
+Quota floor default 50 remaining. **Auto harvest cron enabled** in
+`vercel.json`: `/api/cron/harvest-odds` Wed + Fri 18:00 AWST and Sat 08:00
+AWST (needs `ODDS_API_KEY` in Vercel). Kill switch: `HARVEST_ODDS_CRON=off`.
+Manual: `npm run harvest:odds`.
 
 ### Medium
 
@@ -236,6 +246,22 @@ Exposure unit = player + market (Nick·disposals counts once across lines)
 Fill = snake draft across all non-FUN tickets simultaneously (not A→B→C)
 Appearance penalty = quadratic soft penalty (score' = score − λ·appearances²)
 Hard wall = 3 appearances per exposure unit across non-FUN tickets
+           (absolute circuit-breaker only)
+
+--- Amendment (System book v2 — Jul 2026) ---
+Satellite rule (when PORTFOLIO_EDGE_SCORE=on):
+  Non-cores: max 1 appearance per player×market across non-FUN tickets
+  Cores:     max 2 appearances (same exposure unit)
+  Wall 3 remains only as absolute circuit-breaker
+Odds edge (same flag): soft-score += w_edge × (model% − implied%)
+  Price: odds_snapshots (latest per player×market×line) PRIMARY,
+         bookmaker_lines fallback. Missing price → skip edge term only.
+  Also: line-vs-season-avg cushion; last-5 trend (smaller weight).
+Last-game leaders (same flag): top 3 per stat from BOTH clubs' previous
+  completed games → small soft bonus for legs IN THAT CATEGORY only.
+  UI: EDGE badge (+EV green / taxed red) + HOT badge ("5 goals last wk").
+Team cap / book lean / FUN core-free: unchanged.
+
 Team cap = ≤50% of legs per ticket from one club
 Book lean = warning (not block) at ~60% single-club across non-FUN book;
            display "Book lean: X% <club>" on System book before lock
@@ -276,6 +302,17 @@ from single misses · FUN under full portfolio rules.
   → `docs/portfolio-fill-backtest.md` (λ=4 recommended; gate PASS).
 - Default ON after review; set `PORTFOLIO_DRAFT_FILL=off` to revert greedy.
 - System book UI shows effective independent bets, max appearances, book lean.
+
+**System book v2 (edge package — FLAG OFF pending review):**
+- Satellite-1 + odds edge + cushion + last-5 + last-game leaders.
+- Flag: `PORTFOLIO_EDGE_SCORE` (default **off**). Does not touch draft-fill flag.
+- Modules: `edgeScore.ts`, `oddsPrices.ts`, `lastGameLeaders.ts` (+ Db).
+- Backtest: `npm run backtest:portfolio-edge` → `docs/portfolio-edge-backtest.md`.
+- Stop after report; maintainer flips flag if gate PASS.
+- **Goals rung cap:** max target = floor(seasonAvg)+1 (stops Stringer 4+ on a 2.1 avg).
+- **3-card chooser (localhost sketch):** when edge flag on, Refresh builds
+  edge (green) / hot (orange) / spread (sky) cards per multi; tap to select.
+  `chooser.ts` + `SystemBookPanel` grid. Not production-polished yet.
 
 ---
 

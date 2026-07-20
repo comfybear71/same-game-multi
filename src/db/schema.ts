@@ -599,9 +599,11 @@ export const systemTickets = pgTable(
     legsHit: integer("legs_hit").notNull().default(0),
     legsTotal: integer("legs_total").notNull().default(0),
     slipHit: boolean("slip_hit"),
+    /** True when any leg voided (e.g. injured / DNP) — stake returned. */
+    voided: boolean("voided").notNull().default(false),
     /** Model flat $1 return: estOdds if hit else 0. */
     flatReturn: doublePrecision("flat_return").notNull().default(0),
-    /** Real cash return: stake × placedOdds if hit else 0 (when both set). */
+    /** Real cash return: stake × placedOdds if hit; stake if voided; else 0. */
     cashReturn: doublePrecision("cash_return").notNull().default(0),
     gradedAt: timestamp("graded_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -635,6 +637,8 @@ export const systemTicketLegs = pgTable(
     confidence: doublePrecision("confidence").notNull(),
     actualValue: integer("actual_value"),
     hit: boolean("hit"),
+    /** Injured / did not play — leg removed, ticket voids (stake back). */
+    voided: boolean("voided").notNull().default(false),
   },
   (t) => ({
     ticketIdx: index("system_ticket_legs_ticket_idx").on(t.ticketId),

@@ -20,6 +20,7 @@ export default async function SystemPage() {
     ticketsTracked: 0,
     ticketsGraded: 0,
     ticketsHit: 0,
+    ticketsVoided: 0,
     ticketsPending: 0,
     totalStaked: 0,
     openStake: 0,

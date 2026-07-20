@@ -142,15 +142,28 @@ export async function getBetsForUser(userId: number): Promise<BetWithLegs[]> {
 
   if (slips.length === 0) return [];
 
-  const result: BetWithLegs[] = [];
-  for (const slip of slips) {
-    const legs = await db
-      .select()
-      .from(betLegs)
-      .where(eq(betLegs.betId, slip.id));
-    result.push({ ...slip, legs });
+  // One legs query for all slips (was N+1 — one round-trip per slip).
+  const allLegs = await db
+    .select()
+    .from(betLegs)
+    .where(
+      inArray(
+        betLegs.betId,
+        slips.map((s) => s.id),
+      ),
+    );
+
+  const legsByBet = new Map<number, BetLeg[]>();
+  for (const leg of allLegs) {
+    const list = legsByBet.get(leg.betId) ?? [];
+    list.push(leg);
+    legsByBet.set(leg.betId, list);
   }
-  return result;
+
+  return slips.map((slip) => ({
+    ...slip,
+    legs: legsByBet.get(slip.id) ?? [],
+  }));
 }
 
 function normaliseName(name: string): string {

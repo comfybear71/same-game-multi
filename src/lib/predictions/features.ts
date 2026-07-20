@@ -168,19 +168,31 @@ export function buildStatFeatures(
   });
 }
 
-/** Actual stat values for a completed game (round + opponent match). */
+/**
+ * Actual stat values for a completed game.
+ * Prefer season+round+opponent; fall back to season+opponent when Squiggle and
+ * AFL Tables round numbers diverge (common after Opening Round / bye weeks).
+ */
 export function actualForGame(
   log: PlayerGameLogEntry[],
   season: number,
   round: string,
   opponent: string | null,
 ): Record<StatType, number> | null {
-  const entry = log.find(
-    (g) =>
-      g.season === season &&
-      String(g.round) === String(round) &&
-      (opponent ? g.opponent === opponent : true),
-  );
+  const seasonLog = log.filter((g) => g.season === season);
+  let entry =
+    seasonLog.find(
+      (g) =>
+        String(g.round) === String(round) &&
+        (opponent ? g.opponent === opponent : true),
+    ) ?? null;
+
+  // Squiggle R19 vs AFL Tables R20 (same opponent) — trust opponent + season.
+  if (!entry && opponent) {
+    const vsOpp = seasonLog.filter((g) => g.opponent === opponent);
+    if (vsOpp.length > 0) entry = vsOpp[vsOpp.length - 1]!;
+  }
+
   if (!entry) return null;
   return {
     disposals: entry.disposals,
