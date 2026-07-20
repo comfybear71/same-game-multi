@@ -35,51 +35,6 @@ function statSummary(records: PlayerBetRecord[], stat: string) {
   return { rows: rows.length, bets, hits, rate: bets > 0 ? hits / bets : null };
 }
 
-type PlayerAggregate = {
-  playerName: string;
-  team: string | null;
-  bets: number;
-  hits: number;
-  topStat: string;
-  topStatBets: number;
-};
-
-function aggregateByPlayer(records: PlayerBetRecord[]): PlayerAggregate[] {
-  const byName = new Map<string, PlayerAggregate & { byStat: Map<string, { bets: number; hits: number }> }>();
-
-  for (const r of records) {
-    let row = byName.get(r.playerName);
-    if (!row) {
-      row = {
-        playerName: r.playerName,
-        team: r.team,
-        bets: 0,
-        hits: 0,
-        topStat: r.statType,
-        topStatBets: 0,
-        byStat: new Map(),
-      };
-      byName.set(r.playerName, row);
-    } else if (!row.team && r.team) {
-      row.team = r.team;
-    }
-    row.bets += r.bets;
-    row.hits += r.hits;
-    const statRow = row.byStat.get(r.statType) ?? { bets: 0, hits: 0 };
-    statRow.bets += r.bets;
-    statRow.hits += r.hits;
-    row.byStat.set(r.statType, statRow);
-    if (statRow.bets > row.topStatBets) {
-      row.topStatBets = statRow.bets;
-      row.topStat = r.statType;
-    }
-  }
-
-  return [...byName.values()]
-    .sort((a, b) => b.bets - a.bets || a.playerName.localeCompare(b.playerName))
-    .map(({ byStat: _, ...rest }) => rest);
-}
-
 function TeamChip({ team }: { team: string | null | undefined }) {
   if (!team) return null;
   const c = teamColors(team);
@@ -127,8 +82,6 @@ export function PlayerRecordPanel({ records }: { records: PlayerBetRecord[] }) {
 
   const insight = useMemo(() => statInsight(summaries), [summaries]);
 
-  const mostBacked = useMemo(() => aggregateByPlayer(records).slice(0, 8), [records]);
-
   const filtered = useMemo(() => {
     let rows =
       statFilter === "all"
@@ -160,6 +113,12 @@ export function PlayerRecordPanel({ records }: { records: PlayerBetRecord[] }) {
     });
     return rows;
   }, [records, statFilter, sortMode]);
+
+  /** Horizontal spotlight cards follow the same filter + sort as the list. */
+  const spotlight = useMemo(() => filtered.slice(0, 8), [filtered]);
+
+  const spotlightTitle =
+    SORT_OPTIONS.find((o) => o.key === sortMode)?.label ?? "Most backed";
 
   const totalBets = records.reduce((n, r) => n + r.bets, 0);
   const totalHits = records.reduce((n, r) => n + r.hits, 0);
@@ -209,42 +168,6 @@ export function PlayerRecordPanel({ records }: { records: PlayerBetRecord[] }) {
         </div>
       ) : null}
 
-      {mostBacked.length > 0 ? (
-        <div>
-          <div className="mb-2 text-xs uppercase tracking-wide text-slate-500">
-            Most backed players
-          </div>
-          <div className="scroll-x-top flex gap-2 overflow-x-auto pb-1">
-            {mostBacked.map((p) => {
-              const pct = p.bets > 0 ? Math.round((p.hits / p.bets) * 100) : 0;
-              const cls =
-                pct >= 70 ? "border-accent-win/40 bg-accent-win/5" : pct < 45 ? "border-accent-loss/30" : "border-surface-border";
-              return (
-                <div
-                  key={p.playerName}
-                  className={`flex min-w-[9rem] shrink-0 flex-col rounded-lg border px-2.5 py-2 ${cls}`}
-                >
-                  <div className="truncate text-sm font-semibold text-white">{p.playerName}</div>
-                  <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
-                    <TeamChip team={p.team} />
-                    <span className="text-[11px] capitalize text-slate-500">
-                      {p.topStat} · {p.bets} legs
-                    </span>
-                  </div>
-                  <div
-                    className={`mt-1 text-sm font-bold tabular-nums ${
-                      pct >= 70 ? "text-accent-win" : pct < 45 ? "text-accent-loss" : "text-accent-pending"
-                    }`}
-                  >
-                    {p.hits}/{p.bets} ({pct}%)
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
-
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
         <span>
           Overall{" "}
@@ -288,6 +211,52 @@ export function PlayerRecordPanel({ records }: { records: PlayerBetRecord[] }) {
           </button>
         ))}
       </div>
+
+      {spotlight.length > 0 ? (
+        <div>
+          <div className="mb-2 text-xs uppercase tracking-wide text-slate-500">
+            {spotlightTitle}
+          </div>
+          <div className="scroll-x-top flex gap-2 overflow-x-auto pb-1">
+            {spotlight.map((r) => {
+              const pct = r.bets > 0 ? Math.round((r.hits / r.bets) * 100) : 0;
+              const cls =
+                pct >= 70
+                  ? "border-accent-win/40 bg-accent-win/5"
+                  : pct < 45
+                    ? "border-accent-loss/30"
+                    : "border-surface-border";
+              return (
+                <div
+                  key={`${r.playerName}:${r.statType}`}
+                  className={`flex min-w-[9rem] shrink-0 flex-col rounded-lg border px-2.5 py-2 ${cls}`}
+                >
+                  <div className="truncate text-sm font-semibold text-white">
+                    {r.playerName}
+                  </div>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                    <TeamChip team={r.team} />
+                    <span className="text-[11px] capitalize text-slate-500">
+                      {r.statType} · {r.bets} legs
+                    </span>
+                  </div>
+                  <div
+                    className={`mt-1 text-sm font-bold tabular-nums ${
+                      pct >= 70
+                        ? "text-accent-win"
+                        : pct < 45
+                          ? "text-accent-loss"
+                          : "text-accent-pending"
+                    }`}
+                  >
+                    {r.hits}/{r.bets} ({pct}%)
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
 
       <ul className="max-h-[70vh] space-y-2 overflow-y-auto">
         {filtered.map((r) => (

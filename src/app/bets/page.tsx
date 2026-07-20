@@ -1,14 +1,17 @@
 import Link from "next/link";
 
 import { BetSlipScrollRow } from "@/components/BetSlipScrollRow";
+import { CollapsibleSection } from "@/components/CollapsibleSection";
 import { DeleteBetButton } from "@/components/DeleteBetButton";
 import { EditLegMarket } from "@/components/EditLegMarket";
 import { LegResultControls } from "@/components/LegResultControls";
+import { MultiStatsPanel } from "@/components/MultiStatsPanel";
 import { RunMigrationsButton } from "@/components/RunMigrationsButton";
 import { UploadResultButton } from "@/components/UploadResultButton";
 import { auth } from "@/lib/auth";
 import { teamColors } from "@/lib/afl/teamColors";
 import {
+  analyseMultis,
   getEnrichedBetsForUser,
   summarise,
   userIdForEmail,
@@ -52,6 +55,7 @@ export default async function BetsPage() {
   }
 
   const summary = summarise(slips);
+  const multiStats = analyseMultis(slips);
 
   return (
     <div className="space-y-6">
@@ -74,6 +78,13 @@ export default async function BetsPage() {
           value={summary.roi == null ? "—" : `${(summary.roi * 100).toFixed(0)}%`}
         />
       </section>
+
+      <CollapsibleSection
+        title="Your multis"
+        description="Slip performance by ticket size — filter chips, compact table."
+      >
+        <MultiStatsPanel analytics={multiStats} />
+      </CollapsibleSection>
 
       {dbError ? (
         <div className="card border-accent-loss/40 text-sm text-slate-400">

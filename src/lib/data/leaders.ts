@@ -6,6 +6,7 @@ import {
   games,
   lineupPlayers,
   playerGameFeatures,
+  playerGameStats,
   players,
 } from "@/db/schema";
 import { canonicalTeam } from "@/lib/afl/teams";
@@ -170,7 +171,59 @@ type BaseRow = {
   games: number;
 };
 
-/** Season averages from prediction features (D/M/T/G). */
+/** Season averages from settled player_game_stats (D/M/T/G) — current after settle. */
+async function leadersFromPlayerGameStats(
+  season: number,
+  metric: LeaderMetric,
+  teamFilter: string[],
+): Promise<BaseRow[]> {
+  if (!FEATURE_STATS.has(metric)) return [];
+
+  const col =
+    metric === "disposals"
+      ? playerGameStats.disposals
+      : metric === "marks"
+        ? playerGameStats.marks
+        : metric === "tackles"
+          ? playerGameStats.tackles
+          : playerGameStats.goals;
+
+  const filters = [
+    eq(games.season, season),
+    eq(playerGameStats.settled, true),
+    eq(playerGameStats.didPlay, true),
+    sql`${col} is not null`,
+  ];
+  if (teamFilter.length > 0) {
+    filters.push(inArray(players.team, teamFilter));
+  }
+
+  const rows = await db
+    .select({
+      playerId: playerGameStats.playerId,
+      name: players.name,
+      team: players.team,
+      average: sql<number>`avg(${col})::float`,
+      games: sql<number>`count(*)::int`,
+    })
+    .from(playerGameStats)
+    .innerJoin(players, eq(players.id, playerGameStats.playerId))
+    .innerJoin(games, eq(games.id, playerGameStats.gameId))
+    .where(and(...filters))
+    .groupBy(playerGameStats.playerId, players.name, players.team);
+
+  return rows
+    .filter((r) => r.average != null && Number.isFinite(r.average) && r.average > 0)
+    .map((r) => ({
+      playerId: r.playerId,
+      playerName: r.name,
+      team: r.team,
+      average: Math.round(r.average * 10) / 10,
+      games: r.games,
+    }));
+}
+
+/** Fallback: season averages from prediction features (D/M/T/G) at predict time. */
 async function leadersFromFeatures(
   season: number,
   metric: LeaderMetric,
@@ -380,7 +433,11 @@ export async function getStatLeaders(
 
   let base: BaseRow[];
   if (FEATURE_STATS.has(metric)) {
-    base = await leadersFromFeatures(query.season, metric, teams);
+    // Prefer settled actuals so Leaders (and System bands) update with settle.
+    base = await leadersFromPlayerGameStats(query.season, metric, teams);
+    if (base.length < (teams.length > 0 ? 5 : 10)) {
+      base = await leadersFromFeatures(query.season, metric, teams);
+    }
     if (base.length < (teams.length > 0 ? 5 : 10)) {
       base = await leadersFromHistory(query.season, metric, teams, 120);
     }

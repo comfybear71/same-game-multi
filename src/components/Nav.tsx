@@ -23,7 +23,12 @@ export function Nav({ email }: { email?: string | null }) {
           {/* Section links live in the bottom tab bar on mobile. */}
           <div className="hidden items-center gap-1 sm:flex">
             {links.map((l) => (
-              <Link key={l.href} href={l.href} className="nav-link">
+              <Link
+                key={l.href}
+                href={l.href}
+                prefetch={false}
+                className="nav-link"
+              >
                 {l.label}
               </Link>
             ))}

@@ -10,12 +10,23 @@ import {
   type SuggestedLeg,
 } from "@/lib/predictions/suggest";
 import {
+  computeEdgeModifiers,
+  type EdgeScoreWeights,
+} from "@/lib/system/edgeScore";
+import { loadLastGameLeadersMap } from "@/lib/system/lastGameLeadersDb";
+import {
+  loadBookPricesForGame,
+  pickPrice,
+} from "@/lib/system/oddsPrices";
+import {
   assembleSoftScore,
   bandSoftBonus,
   computeMetrics,
+  edgePackageFillOptions,
   exposureKey,
   fillGreedy,
   fillSnakeDraft,
+  isPortfolioEdgeScoreEnabled,
   resolveStatFamily,
   type FillCandidate,
   type FillOptions,
@@ -57,6 +68,50 @@ export function suggestedLegToFillCandidate(
     }),
     historyHits: hits,
     historyBets: bets,
+    seasonAvg: leg.seasonAvg,
+    recentForm: leg.recentForm,
+  };
+}
+
+/** Apply edge / cushion / trend / last-game leaders onto a candidate (pure). */
+export function applyEdgePackageToCandidate(
+  c: FillCandidate,
+  opts: {
+    bookOdds: number | null;
+    leaderRank: number | null;
+    leaderLastValue: number | null;
+    weights?: Partial<EdgeScoreWeights>;
+  },
+): FillCandidate {
+  const mods = computeEdgeModifiers({
+    modelProb: c.confidence,
+    bookOdds: opts.bookOdds,
+    line: c.line,
+    seasonAvg: c.seasonAvg,
+    recentForm: c.recentForm,
+    leaderRank: opts.leaderRank,
+    leaderLastValue: opts.leaderLastValue,
+    weights: opts.weights,
+  });
+  const softScore = assembleSoftScore({
+    confidence: c.confidence,
+    bandBonus: bandSoftBonus(c.band),
+    historyHits: c.historyHits,
+    historyBets: c.historyBets,
+    edgePackagePts: mods.totalPts,
+  });
+  return {
+    ...c,
+    bookOdds: mods.bookOdds,
+    edge: mods.edge,
+    impliedProb: mods.impliedProb,
+    edgePts: mods.edgePts,
+    cushionPts: mods.cushionPts,
+    trendPts: mods.trendPts,
+    leaderRank: mods.leaderRank,
+    leaderLastValue: mods.leaderLastValue,
+    leaderPts: mods.leaderPts,
+    softScore,
   };
 }
 
@@ -65,16 +120,53 @@ export async function loadFillPool(
   gameId: number,
   bands: GameBenchmarkMap,
   userId?: number | null,
+  opts?: {
+    edgePackage?: boolean;
+    edgeWeights?: Partial<EdgeScoreWeights>;
+  },
 ): Promise<FillCandidate[]> {
   const legs = await listModelCandidateLegs(gameId);
   const historyByKey =
     userId != null ? (await getPlayerBettingRecord(userId)).byKey : {};
 
-  return legs.map((leg) => {
+  let pool = legs.map((leg) => {
     const band = bands.get(`${leg.playerId}:${leg.statType}`) ?? "unknown";
-    const history = historyByKey[playerRecordKey(leg.playerName, leg.statType)] ?? null;
-    return suggestedLegToFillCandidate({ ...leg, benchmark: band }, band, history);
+    const history =
+      historyByKey[playerRecordKey(leg.playerName, leg.statType)] ?? null;
+    return suggestedLegToFillCandidate(
+      { ...leg, benchmark: band },
+      band,
+      history,
+    );
   });
+
+  const useEdge =
+    opts?.edgePackage ?? isPortfolioEdgeScoreEnabled();
+  if (!useEdge) return pool;
+
+  const [prices, leaders] = await Promise.all([
+    loadBookPricesForGame(gameId),
+    loadLastGameLeadersMap(gameId),
+  ]);
+
+  pool = pool.map((c) => {
+    const bookOdds =
+      c.statType === "any"
+        ? null
+        : pickPrice(prices, c.playerId, c.statType, c.line);
+    const leader =
+      c.statType === "any"
+        ? undefined
+        : leaders.get(`${c.playerId}:${c.statType}`);
+    return applyEdgePackageToCandidate(c, {
+      bookOdds,
+      leaderRank: leader?.rank ?? null,
+      leaderLastValue: leader?.lastValue ?? null,
+      weights: opts?.edgeWeights,
+    });
+  });
+
+  return pool;
 }
 
 export function strategiesToSlots(
@@ -100,8 +192,32 @@ export function runPortfolioFill(
   mode: "greedy" | "draft",
   options?: FillOptions,
 ): FillResult {
+  const opts =
+    isPortfolioEdgeScoreEnabled() && mode === "draft"
+      ? edgePackageFillOptions(options)
+      : options;
   return mode === "draft"
-    ? fillSnakeDraft(slots, pool, options)
+    ? fillSnakeDraft(slots, pool, opts)
+    : fillGreedy(slots, pool);
+}
+
+/**
+ * Explicit fill for backtests — pass edgePackage true to force v2 rules
+ * regardless of env flag.
+ */
+export function runPortfolioFillExplicit(
+  slots: TicketSlot[],
+  pool: FillCandidate[],
+  mode: "greedy" | "draft",
+  options?: FillOptions & { edgePackage?: boolean },
+): FillResult {
+  const { edgePackage, ...fillOpts } = options ?? {};
+  const opts =
+    edgePackage && mode === "draft"
+      ? edgePackageFillOptions(fillOpts)
+      : fillOpts;
+  return mode === "draft"
+    ? fillSnakeDraft(slots, pool, opts)
     : fillGreedy(slots, pool);
 }
 

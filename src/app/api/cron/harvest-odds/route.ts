@@ -5,13 +5,13 @@ import { QuotaFloorError } from "@/lib/odds/quota";
 import { runOddsHarvest } from "@/lib/odds/runHarvest";
 
 /**
- * Optional Odds API harvest cron (disabled unless HARVEST_ODDS_CRON=on).
+ * Odds API player-prop harvest (append-only odds_snapshots).
  *
- * Suggested vercel.json entries when enabling (JSON has no comments — paste in):
- *   { "path": "/api/cron/harvest-odds", "schedule": "0 10 * * 3" }  // Wed ~AWST eve
- *   { "path": "/api/cron/harvest-odds", "schedule": "0 0 * * 6" }   // Sat morning AWST
+ * Scheduled in vercel.json (AWST ≈ UTC+8):
+ *   Wed 18:00 · Fri 18:00 · Sat 08:00 — when props usually appear pre-bounce.
  *
- * Prefer `npm run harvest:odds` locally while watching credits this month.
+ * Runs whenever Vercel Cron hits this route and ODDS_API_KEY is set.
+ * Kill switch: HARVEST_ODDS_CRON=off (or 0). Manual: `npm run harvest:odds`.
  */
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -20,15 +20,14 @@ export async function GET(request: Request) {
   const denied = authorizeCron(request);
   if (denied) return denied;
 
-  const enabled =
-    process.env.HARVEST_ODDS_CRON?.trim().toLowerCase() === "on" ||
-    process.env.HARVEST_ODDS_CRON?.trim() === "1";
-  if (!enabled) {
+  const flag = process.env.HARVEST_ODDS_CRON?.trim().toLowerCase();
+  const disabled = flag === "off" || flag === "0";
+  if (disabled) {
     return NextResponse.json({
       ok: false,
       skipped: true,
       reason:
-        "HARVEST_ODDS_CRON is not on. Use npm run harvest:odds, or set HARVEST_ODDS_CRON=on.",
+        "HARVEST_ODDS_CRON=off — harvest skipped. Unset the flag or set to on to resume.",
     });
   }
 

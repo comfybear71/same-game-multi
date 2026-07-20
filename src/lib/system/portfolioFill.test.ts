@@ -474,4 +474,112 @@ describe("assembleSoftScore", () => {
     assert.ok(boosted > base);
     assert.ok(boosted - base <= 10);
   });
+
+  it("adds edge package points", () => {
+    const base = assembleSoftScore({ confidence: 0.7 });
+    const withEdge = assembleSoftScore({
+      confidence: 0.7,
+      edgePackagePts: 8,
+    });
+    assert.equal(withEdge - base, 8);
+  });
+});
+
+describe("v2 satellite rule", () => {
+  const bigPool: FillCandidate[] = Array.from({ length: 20 }, (_, i) =>
+    cand({
+      playerId: i + 1,
+      playerName: `P${i + 1}`,
+      team: i % 2 === 0 ? "Collingwood" : "Carlton",
+      statFamily: "disposals",
+      softScore: 95 - i,
+      confidence: 0.85 - i * 0.01,
+      // Only P1 clears core floor with strong tape
+      historyHits: i === 0 ? 7 : 0,
+      historyBets: i === 0 ? 8 : 0,
+    }),
+  );
+
+  const multiSlots: TicketSlot[] = [
+    { id: "a", strategyKey: "disposals:3", focus: "disposals", legCount: 3 },
+    { id: "b", strategyKey: "disposals:4", focus: "disposals", legCount: 4 },
+    { id: "c", strategyKey: "disposals:5", focus: "disposals", legCount: 5 },
+  ];
+
+  it("rejects non-core 2nd appearance (satellite max 1)", () => {
+    const draft = fillSnakeDraft(multiSlots, bigPool, {
+      lambda: 4,
+      satelliteMaxAppearances: 1,
+      coreMaxAppearances: 2,
+      hardWall: 3,
+    });
+    const counts = new Map<string, number>();
+    for (const t of draft.tickets.filter((x) => !x.isFun)) {
+      for (const l of t.legs) {
+        const k = exposureKey(l.playerId, l.statFamily);
+        counts.set(k, (counts.get(k) ?? 0) + 1);
+      }
+    }
+    const coreKeys = new Set(
+      draft.cores.map((c) => exposureKey(c.playerId, c.family)),
+    );
+    for (const [k, n] of counts) {
+      if (coreKeys.has(k)) {
+        assert.ok(n <= 2, `core ${k} appearances ${n}`);
+      } else {
+        assert.ok(n <= 1, `satellite ${k} appearances ${n} (expected ≤1)`);
+      }
+    }
+  });
+
+  it("cores may appear twice, never three (wall 3 unused)", () => {
+    // Tiny elite pool forces reuse of the core
+    const tiny = [
+      cand({
+        playerId: 1,
+        playerName: "CoreStar",
+        team: "Collingwood",
+        statFamily: "disposals",
+        softScore: 99,
+        confidence: 0.9,
+        historyHits: 8,
+        historyBets: 9,
+      }),
+      ...Array.from({ length: 8 }, (_, i) =>
+        cand({
+          playerId: i + 10,
+          playerName: `Sat${i}`,
+          team: i % 2 ? "Carlton" : "Collingwood",
+          statFamily: "disposals",
+          softScore: 70 - i,
+          confidence: 0.6,
+        }),
+      ),
+    ];
+    const draft = fillSnakeDraft(
+      [
+        { id: "a", strategyKey: "d3", focus: "disposals", legCount: 3 },
+        { id: "b", strategyKey: "d4", focus: "disposals", legCount: 4 },
+        { id: "c", strategyKey: "d5", focus: "disposals", legCount: 5 },
+      ],
+      tiny,
+      {
+        lambda: 1,
+        satelliteMaxAppearances: 1,
+        coreMaxAppearances: 2,
+        hardWall: 3,
+      },
+    );
+    const core = draft.cores.find((c) => c.playerId === 1);
+    assert.ok(core, "expected CoreStar as core");
+    let apps = 0;
+    for (const t of draft.tickets) {
+      if (t.isFun) continue;
+      if (t.legs.some((l) => l.playerId === 1 && l.statFamily === "disposals")) {
+        apps++;
+      }
+    }
+    assert.ok(apps <= 2, `core apps ${apps}`);
+    assert.ok(draft.metrics.maxAppearances <= 2);
+  });
 });

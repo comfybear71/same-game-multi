@@ -5,6 +5,8 @@ import { useCallback, useEffect, useState } from "react";
 import { lineTarget } from "@/lib/format";
 import { minLineTarget } from "@/lib/predictions/modelLine";
 import type {
+  CardStyle,
+  ChooserBook,
   PortfolioMetrics,
   SystemTicketView,
 } from "@/lib/system/portfolio";
@@ -61,6 +63,18 @@ const TEAM_SHORT: Record<string, string> = {
   "Western Bulldogs": "Dogs",
 };
 
+const CARD_RING: Record<string, string> = {
+  green: "border-emerald-500/60 bg-emerald-500/[0.07] ring-emerald-400/40",
+  orange: "border-orange-500/60 bg-orange-500/[0.07] ring-orange-400/40",
+  sky: "border-sky-500/60 bg-sky-500/[0.07] ring-sky-400/40",
+};
+
+const CARD_TITLE: Record<string, string> = {
+  green: "text-emerald-300",
+  orange: "text-orange-300",
+  sky: "text-sky-300",
+};
+
 export function SystemBookPanel({
   gameId,
   embedded = false,
@@ -71,6 +85,8 @@ export function SystemBookPanel({
 }) {
   const [tickets, setTickets] = useState<SystemTicketView[]>([]);
   const [metrics, setMetrics] = useState<PortfolioMetrics | null>(null);
+  const [chooser, setChooser] = useState<ChooserBook | null>(null);
+  const [selections, setSelections] = useState<Record<string, CardStyle>>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -104,25 +120,42 @@ export function SystemBookPanel({
     void load();
   }, [load]);
 
-  async function generate() {
+  async function generate(nextSelections?: Record<string, CardStyle>) {
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(`/api/games/${gameId}/system-book`, { method: "POST" });
+      const res = await fetch(`/api/games/${gameId}/system-book`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chooser: true,
+          selections: nextSelections ?? selections,
+        }),
+      });
       const json = (await res.json()) as {
         ok?: boolean;
         tickets?: SystemTicketView[];
         metrics?: PortfolioMetrics;
+        chooser?: ChooserBook;
+        selections?: Record<string, CardStyle>;
         error?: string;
       };
       if (!res.ok || !json.ok) throw new Error(json.error ?? `Failed (${res.status})`);
       setTickets(json.tickets ?? []);
       setMetrics(json.metrics ?? null);
+      setChooser(json.chooser ?? null);
+      setSelections(json.selections ?? {});
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setBusy(false);
     }
+  }
+
+  async function pickCard(strategyKey: string, style: CardStyle) {
+    const next = { ...selections, [strategyKey]: style };
+    setSelections(next);
+    await generate(next);
   }
 
   async function excludePlayer(playerName: string, team: string | null) {
@@ -152,6 +185,8 @@ export function SystemBookPanel({
         throw new Error(json.error ?? `Failed (${res.status})`);
       }
       setTickets(json.tickets ?? []);
+      // Rebuild chooser so cards drop the EMG player
+      await generate(selections);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -224,23 +259,23 @@ export function SystemBookPanel({
   const graded = tickets.filter((t) => t.slipHit != null);
   const hits = graded.filter((t) => t.slipHit).length;
   const gameStake = tickets.reduce((s, t) => s + (t.stake ?? 0), 0);
+  const ticketByKey = new Map(tickets.map((t) => [t.strategyKey, t]));
 
   return (
     <section className={embedded ? "space-y-3" : "card space-y-3"}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         {embedded ? (
           <p className="text-sm text-slate-400">
-            Nudge lines, place at Sportsbet, then save stake + odds —{" "}
-            <span className="text-slate-300">🔒 locks</span> that ticket (no
-            cancel at the bookie).
+            Pick a card per multi (green edge / orange hot / sky spread), nudge
+            lines, then save stake + odds —{" "}
+            <span className="text-slate-300">🔒 locks</span> that ticket.
           </p>
         ) : (
           <div>
             <h2 className="text-lg font-semibold text-white">System book</h2>
             <p className="text-sm text-slate-400">
-              Follow the helm 100%: generate after predictions, nudge each leg to
-              the Sportsbet line if needed, place, then enter bookie odds + stake.
-              Saved tickets lock — Sportsbet won&apos;t let you cancel.
+              Three cards per multi — green = best edge, orange = last-week hot,
+              sky = spread. Tap a card to select it, then place and lock.
             </p>
           </div>
         )}
@@ -250,21 +285,21 @@ export function SystemBookPanel({
           disabled={busy}
           className="rounded-md bg-accent px-3 py-1.5 text-xs font-semibold text-surface disabled:opacity-40"
         >
-          {busy ? "Building…" : tickets.length ? "Refresh portfolio" : "Generate portfolio"}
+          {busy ? "Building…" : tickets.length || chooser ? "Refresh portfolio" : "Generate portfolio"}
         </button>
       </div>
 
       {loading ? <p className="text-sm text-slate-400">Loading…</p> : null}
       {error ? <p className="text-sm text-accent-loss">{error}</p> : null}
 
-      {!loading && tickets.length === 0 && !error ? (
+      {!loading && tickets.length === 0 && !chooser && !error ? (
         <p className="text-sm text-slate-500">
           No system tickets yet. Refresh AI policy on Review if needed, then generate
           here.
         </p>
       ) : null}
 
-      {tickets.length > 0 ? (
+      {tickets.length > 0 || chooser ? (
         <div className="space-y-1 text-xs text-slate-400">
           <p>
             {graded.length > 0
@@ -293,208 +328,372 @@ export function SystemBookPanel({
               ) : null}
             </p>
           ) : null}
+          {chooser ? (
+            <p className="text-slate-500">
+              Chooser on — selected cards are what you place. Refresh rebuilds all
+              three styles.
+            </p>
+          ) : null}
         </div>
       ) : null}
 
-      <ul className="space-y-2">
-        {tickets.map((t) => {
-          const open = openId === t.id;
-          const placed = isPlacedTicket(t);
-          return (
-            <li
-              key={t.id}
-              className={`rounded-lg border bg-surface/40 ${
-                placed
-                  ? "border-amber-500/35 bg-amber-500/[0.04]"
-                  : "border-surface-border"
-              }`}
-            >
-              <button
-                type="button"
-                className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left"
-                onClick={() => setOpenId(open ? null : t.id)}
-              >
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-medium text-white">{t.label}</span>
-                    <span
-                      className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${TIER_BADGE[t.tier] ?? TIER_BADGE.low}`}
-                    >
-                      {t.tier}
+      {chooser ? (
+        <div className="space-y-5">
+          {chooser.slots.map((slot) => {
+            const selected = selections[slot.strategyKey] ?? "edge";
+            const persisted = ticketByKey.get(slot.strategyKey);
+            const placed = persisted ? isPlacedTicket(persisted) : false;
+            const open = persisted != null && openId === persisted.id;
+            return (
+              <div key={slot.strategyKey} className="space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-sm font-semibold text-white">{slot.label}</h3>
+                  <span
+                    className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${TIER_BADGE[slot.tier] ?? TIER_BADGE.low}`}
+                  >
+                    {slot.tier}
+                  </span>
+                  {placed ? (
+                    <span className="rounded-full border border-amber-500/45 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
+                      🔒 Locked
                     </span>
-                    {placed ? (
-                      <span
-                        className="rounded-full border border-amber-500/45 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200"
-                        title="Stake + odds saved — already placed at Sportsbet"
-                      >
-                        🔒 Locked
-                      </span>
-                    ) : (
-                      <span className="rounded-full border border-surface-border px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-500">
-                        Not placed
-                      </span>
-                    )}
-                    {t.slipHit === true ? (
-                      <span className="text-[10px] font-semibold text-accent-win">HIT</span>
-                    ) : null}
-                    {t.slipHit === false ? (
-                      <span className="text-[10px] font-semibold text-accent-loss">MISS</span>
-                    ) : null}
-                  </div>
-                  <p className="mt-0.5 text-[11px] text-slate-500">
-                    {t.legsTotal} legs · model {pct(t.modelledChance)} · est{" "}
-                    {t.estOdds != null ? `${t.estOdds.toFixed(2)}` : "—"}
-                    {t.stake != null ? ` · $${t.stake.toFixed(2)}` : ""}
-                    {t.placedOdds != null ? ` @ ${t.placedOdds.toFixed(2)}` : ""}
-                    {t.slipHit != null
-                      ? ` · ${t.legsHit}/${t.legsTotal} legs`
-                      : ""}
-                    {t.slipHit === true && t.cashReturn > 0
-                      ? ` · ret ${money(t.cashReturn)}`
-                      : ""}
-                  </p>
+                  ) : null}
                 </div>
-                <span className="text-slate-500">{open ? "▴" : "▾"}</span>
-              </button>
-              {open ? (
-                <div className="space-y-2 border-t border-surface-border/60 px-3 py-2">
-                  <PlacementForm
-                    ticket={t}
-                    placed={placed}
-                    saving={savingId === t.id}
-                    onSave={(stake, odds) => void savePlacement(t.id, stake, odds)}
-                  />
-                  <ul className="space-y-2">
-                    {t.legs.map((l) => {
-                      const target = lineTarget(l.line);
-                      const floor = minLineTarget(l.statType);
-                      // Placed at bookie or already graded — no line/EMG edits.
-                      const locked =
-                        placed || t.slipHit != null || t.gradedAt != null;
-                      const club =
-                        l.team != null
-                          ? (TEAM_SHORT[l.team] ?? l.team)
-                          : null;
-                      const band = l.benchmark ?? null;
-                      return (
-                        <li
-                          key={l.id}
-                          className="rounded-md border border-surface-border/50 bg-surface/30 px-2 py-1.5 text-xs"
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 sm:flex-nowrap">
-                            <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-slate-100 sm:flex-nowrap sm:overflow-hidden">
-                              <span className="shrink-0 font-medium text-white">
+
+                <div className="grid gap-2 md:grid-cols-3">
+                  {slot.cards.map((card) => {
+                    const isSelected = selected === card.style;
+                    return (
+                      <button
+                        key={card.style}
+                        type="button"
+                        disabled={busy || placed}
+                        onClick={() => void pickCard(slot.strategyKey, card.style)}
+                        className={`rounded-lg border px-2.5 py-2 text-left transition ${
+                          CARD_RING[card.colour]
+                        } ${
+                          isSelected
+                            ? "ring-2"
+                            : "opacity-80 hover:opacity-100"
+                        } disabled:cursor-not-allowed`}
+                      >
+                        <div className="flex items-baseline justify-between gap-2">
+                          <span
+                            className={`text-xs font-semibold uppercase tracking-wide ${CARD_TITLE[card.colour]}`}
+                          >
+                            {card.title}
+                          </span>
+                          {isSelected ? (
+                            <span className="text-[10px] font-semibold text-white">
+                              SELECTED
+                            </span>
+                          ) : null}
+                        </div>
+                        <p className="mt-0.5 text-[10px] leading-snug text-slate-400">
+                          {card.why}
+                        </p>
+                        <p className="mt-1.5 text-[11px] text-slate-300">
+                          model {pct(card.modelledChance)} · est{" "}
+                          {card.estOdds != null ? card.estOdds.toFixed(2) : "—"}
+                          {card.sharedNames.length > 0
+                            ? ` · shared: ${card.sharedNames.slice(0, 3).join(", ")}`
+                            : ""}
+                        </p>
+                        <ul className="mt-1.5 space-y-0.5">
+                          {card.legs.map((l) => (
+                            <li
+                              key={`${l.playerId}:${l.statType}:${l.line}`}
+                              className="flex flex-wrap items-center gap-x-1 text-[11px] text-slate-200"
+                            >
+                              <span className="font-medium text-white">
                                 {l.playerName}
                               </span>
-                              <span className="shrink-0 capitalize text-slate-400">
+                              <span className="capitalize text-slate-500">
                                 {l.statType}
                               </span>
-                              <span className="shrink-0 text-slate-600">·</span>
-                              <span className="shrink-0 text-slate-500">
-                                {l.position ?? "UNK"}
-                              </span>
-                              {club ? (
-                                <>
-                                  <span className="shrink-0 text-slate-600">
-                                    ·
-                                  </span>
-                                  <span className="shrink-0 text-slate-500">
-                                    {club}
-                                  </span>
-                                </>
-                              ) : null}
-                              {l.seasonAvg != null ? (
-                                <span
-                                  className={`shrink-0 rounded border px-1 py-px font-semibold tabular-nums ${
-                                    band
-                                      ? BAND_STAMP[band]
-                                      : "border-surface-border text-slate-400"
-                                  }`}
-                                  title="Season average (Leaders)"
-                                >
-                                  {l.seasonAvg}
-                                </span>
-                              ) : null}
-                              {band ? (
-                                <span
-                                  className={`shrink-0 rounded border px-1 py-px text-[10px] font-semibold uppercase tracking-wide ${BAND_STAMP[band]}`}
-                                >
-                                  {BAND_LABEL[band] ?? band}
-                                  {l.percentile != null ? (
-                                    <span className="ml-0.5 font-normal opacity-70">
-                                      p{Math.round(l.percentile)}
-                                    </span>
-                                  ) : null}
-                                </span>
-                              ) : null}
-                            </div>
-                            <span className="inline-flex shrink-0 items-center gap-1.5">
-                              <span className="inline-flex items-center gap-1">
-                                <button
-                                  type="button"
-                                  className="flex h-5 w-5 items-center justify-center rounded border border-surface-border text-slate-300 disabled:opacity-40"
-                                  disabled={
-                                    locked ||
-                                    nudgingLegId === l.id ||
-                                    target <= floor
-                                  }
-                                  onClick={() => void nudgeLeg(l.id, target - 1)}
-                                  aria-label={`Lower ${l.playerName} target`}
-                                >
-                                  −
-                                </button>
-                                <span className="min-w-[2.5ch] text-center text-sm font-semibold text-white">
-                                  {target}+
-                                </span>
-                                <button
-                                  type="button"
-                                  className="flex h-5 w-5 items-center justify-center rounded border border-surface-border text-slate-300 disabled:opacity-40"
-                                  disabled={locked || nudgingLegId === l.id}
-                                  onClick={() => void nudgeLeg(l.id, target + 1)}
-                                  aria-label={`Raise ${l.playerName} target`}
-                                >
-                                  +
-                                </button>
-                              </span>
                               <span className="tabular-nums text-slate-400">
-                                {Math.round(l.confidence * 100)}%
-                                {l.actualValue != null
-                                  ? ` · got ${l.actualValue}${l.hit ? " ✓" : " ✗"}`
-                                  : ""}
+                                {lineTarget(l.line)}+
                               </span>
-                              {!locked ? (
-                                <button
-                                  type="button"
-                                  disabled={excludingName != null || busy}
-                                  onClick={() =>
-                                    void excludePlayer(l.playerName, l.team)
+                              <span className="tabular-nums text-slate-500">
+                                {Math.round(l.confidence * 100)}%
+                              </span>
+                              {l.edge != null ? (
+                                <span
+                                  className={
+                                    l.edge >= 0
+                                      ? "text-emerald-400"
+                                      : "text-rose-400"
                                   }
-                                  className="rounded border border-amber-500/40 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-400 hover:bg-amber-500/10 disabled:opacity-40"
-                                  title="Mark as emergency and rebuild book"
                                 >
-                                  {excludingName === l.playerName
-                                    ? "…"
-                                    : "EMG"}
-                                </button>
+                                  {l.edge >= 0 ? "+" : ""}
+                                  {Math.round(l.edge * 1000) / 10}%
+                                </span>
                               ) : null}
-                            </span>
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                  <p className="text-[10px] text-slate-600">
-                    {placed
-                      ? "🔒 Locked ticket — lines and EMG are frozen (already at Sportsbet)."
-                      : "Use +/− for Sportsbet lines. Tap EMG on a leg if they’re an emergency / not playing — rebuilds the book without them."}
-                  </p>
+                              {l.leaderRank != null ? (
+                                <span className="text-orange-300">HOT</span>
+                              ) : null}
+                            </li>
+                          ))}
+                        </ul>
+                      </button>
+                    );
+                  })}
                 </div>
-              ) : null}
+
+                {persisted ? (
+                  <div className="rounded-lg border border-surface-border/70 bg-surface/30 px-3 py-2">
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-between gap-2 text-left"
+                      onClick={() =>
+                        setOpenId(open ? null : persisted.id)
+                      }
+                    >
+                      <span className="text-[11px] text-slate-400">
+                        Selected ticket — stake / lines / EMG
+                      </span>
+                      <span className="text-slate-500">{open ? "▴" : "▾"}</span>
+                    </button>
+                    {open ? (
+                      <div className="mt-2 space-y-2 border-t border-surface-border/50 pt-2">
+                        <PlacementForm
+                          ticket={persisted}
+                          placed={placed}
+                          saving={savingId === persisted.id}
+                          onSave={(stake, odds) =>
+                            void savePlacement(persisted.id, stake, odds)
+                          }
+                        />
+                        <TicketLegs
+                          ticket={persisted}
+                          placed={placed}
+                          busy={busy}
+                          excludingName={excludingName}
+                          nudgingLegId={nudgingLegId}
+                          onNudge={(id, target) => void nudgeLeg(id, target)}
+                          onExclude={(name, team) =>
+                            void excludePlayer(name, team)
+                          }
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <ul className="space-y-2">
+          {tickets.map((t) => {
+            const open = openId === t.id;
+            const placed = isPlacedTicket(t);
+            return (
+              <li
+                key={t.id}
+                className={`rounded-lg border bg-surface/40 ${
+                  placed
+                    ? "border-amber-500/35 bg-amber-500/[0.04]"
+                    : "border-surface-border"
+                }`}
+              >
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left"
+                  onClick={() => setOpenId(open ? null : t.id)}
+                >
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium text-white">
+                        {t.label}
+                      </span>
+                      <span
+                        className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide ${TIER_BADGE[t.tier] ?? TIER_BADGE.low}`}
+                      >
+                        {t.tier}
+                      </span>
+                      {placed ? (
+                        <span className="rounded-full border border-amber-500/45 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
+                          🔒 Locked
+                        </span>
+                      ) : (
+                        <span className="rounded-full border border-surface-border px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-500">
+                          Not placed
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-0.5 text-[11px] text-slate-500">
+                      {t.legsTotal} legs · model {pct(t.modelledChance)} · est{" "}
+                      {t.estOdds != null ? `${t.estOdds.toFixed(2)}` : "—"}
+                    </p>
+                  </div>
+                  <span className="text-slate-500">{open ? "▴" : "▾"}</span>
+                </button>
+                {open ? (
+                  <div className="space-y-2 border-t border-surface-border/60 px-3 py-2">
+                    <PlacementForm
+                      ticket={t}
+                      placed={placed}
+                      saving={savingId === t.id}
+                      onSave={(stake, odds) =>
+                        void savePlacement(t.id, stake, odds)
+                      }
+                    />
+                    <TicketLegs
+                      ticket={t}
+                      placed={placed}
+                      busy={busy}
+                      excludingName={excludingName}
+                      nudgingLegId={nudgingLegId}
+                      onNudge={(id, target) => void nudgeLeg(id, target)}
+                      onExclude={(name, team) => void excludePlayer(name, team)}
+                    />
+                  </div>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function TicketLegs({
+  ticket,
+  placed,
+  busy,
+  excludingName,
+  nudgingLegId,
+  onNudge,
+  onExclude,
+}: {
+  ticket: SystemTicketView;
+  placed: boolean;
+  busy: boolean;
+  excludingName: string | null;
+  nudgingLegId: number | null;
+  onNudge: (legId: number, target: number) => void;
+  onExclude: (playerName: string, team: string | null) => void;
+}) {
+  const locked = placed || ticket.slipHit != null || ticket.gradedAt != null;
+  return (
+    <>
+      <ul className="space-y-2">
+        {ticket.legs.map((l) => {
+          const target = lineTarget(l.line);
+          const floor = minLineTarget(l.statType);
+          const club =
+            l.team != null ? (TEAM_SHORT[l.team] ?? l.team) : null;
+          const band = l.benchmark ?? null;
+          return (
+            <li
+              key={l.id}
+              className="rounded-md border border-surface-border/50 bg-surface/30 px-2 py-1.5 text-xs"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 sm:flex-nowrap">
+                <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-slate-100">
+                  <span className="shrink-0 font-medium text-white">
+                    {l.playerName}
+                  </span>
+                  <span className="shrink-0 capitalize text-slate-400">
+                    {l.statType}
+                  </span>
+                  {club ? (
+                    <span className="shrink-0 text-slate-500">{club}</span>
+                  ) : null}
+                  {l.seasonAvg != null ? (
+                    <span
+                      className={`shrink-0 rounded border px-1 py-px font-semibold tabular-nums ${
+                        band
+                          ? BAND_STAMP[band]
+                          : "border-surface-border text-slate-400"
+                      }`}
+                    >
+                      {l.seasonAvg}
+                    </span>
+                  ) : null}
+                  {band ? (
+                    <span
+                      className={`shrink-0 rounded border px-1 py-px text-[10px] font-semibold uppercase tracking-wide ${BAND_STAMP[band]}`}
+                    >
+                      {BAND_LABEL[band] ?? band}
+                    </span>
+                  ) : null}
+                  {l.edgeBadge ? (
+                    <span
+                      className={`shrink-0 rounded border px-1 py-px text-[10px] font-semibold uppercase tracking-wide ${
+                        l.edgeBadge.edge >= 0
+                          ? "border-emerald-500/45 bg-emerald-500/15 text-emerald-200"
+                          : "border-rose-500/45 bg-rose-500/15 text-rose-200"
+                      }`}
+                      title={`Model ${Math.round(l.edgeBadge.modelPct * 100)}% vs implied ${Math.round(l.edgeBadge.impliedPct * 100)}%`}
+                    >
+                      EDGE{" "}
+                      {l.edgeBadge.edge >= 0 ? "+" : ""}
+                      {Math.round(l.edgeBadge.edge * 1000) / 10}%
+                    </span>
+                  ) : null}
+                  {l.hotBadge ? (
+                    <span
+                      className="shrink-0 rounded border border-orange-500/40 bg-orange-500/15 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-orange-200"
+                      title={l.hotBadge.label}
+                    >
+                      HOT · {l.hotBadge.label}
+                    </span>
+                  ) : null}
+                </div>
+                <span className="inline-flex shrink-0 items-center gap-1.5">
+                  <span className="inline-flex items-center gap-1">
+                    <button
+                      type="button"
+                      className="flex h-5 w-5 items-center justify-center rounded border border-surface-border text-slate-300 disabled:opacity-40"
+                      disabled={
+                        locked || nudgingLegId === l.id || target <= floor
+                      }
+                      onClick={() => onNudge(l.id, target - 1)}
+                      aria-label={`Lower ${l.playerName} target`}
+                    >
+                      −
+                    </button>
+                    <span className="min-w-[2.5ch] text-center text-sm font-semibold text-white">
+                      {target}+
+                    </span>
+                    <button
+                      type="button"
+                      className="flex h-5 w-5 items-center justify-center rounded border border-surface-border text-slate-300 disabled:opacity-40"
+                      disabled={locked || nudgingLegId === l.id}
+                      onClick={() => onNudge(l.id, target + 1)}
+                      aria-label={`Raise ${l.playerName} target`}
+                    >
+                      +
+                    </button>
+                  </span>
+                  <span className="tabular-nums text-slate-400">
+                    {Math.round(l.confidence * 100)}%
+                  </span>
+                  {!locked ? (
+                    <button
+                      type="button"
+                      disabled={excludingName != null || busy}
+                      onClick={() => onExclude(l.playerName, l.team)}
+                      className="rounded border border-amber-500/40 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-400 hover:bg-amber-500/10 disabled:opacity-40"
+                    >
+                      {excludingName === l.playerName ? "…" : "EMG"}
+                    </button>
+                  ) : null}
+                </span>
+              </div>
             </li>
           );
         })}
       </ul>
-    </section>
+      <p className="text-[10px] text-slate-600">
+        {locked
+          ? "🔒 Locked ticket — lines and EMG are frozen."
+          : "Use +/− for Sportsbet lines. Tap EMG if they’re an emergency."}
+      </p>
+    </>
   );
 }
 
@@ -547,10 +746,10 @@ function PlacementForm({
           min={0}
           step="0.01"
           value={stake}
-          disabled={inputsLocked}
+          disabled={inputsLocked || saving}
           onChange={(e) => setStake(e.target.value)}
           placeholder="e.g. 1.25"
-          className="mt-0.5 block w-24 rounded border border-surface-border bg-surface px-2 py-1 text-xs text-white disabled:opacity-60"
+          className="mt-0.5 block w-24 rounded border border-surface-border bg-surface px-2 py-1 text-sm text-white"
         />
       </label>
       <label className="text-[11px] text-slate-500">
@@ -558,36 +757,37 @@ function PlacementForm({
         <input
           type="number"
           inputMode="decimal"
-          min={1.01}
+          min={1}
           step="0.01"
           value={odds}
-          disabled={inputsLocked}
+          disabled={inputsLocked || saving}
           onChange={(e) => setOdds(e.target.value)}
-          placeholder={ticket.estOdds != null ? `est ${ticket.estOdds.toFixed(2)}` : "e.g. 4.50"}
-          className="mt-0.5 block w-24 rounded border border-surface-border bg-surface px-2 py-1 text-xs text-white disabled:opacity-60"
+          placeholder={
+            ticket.estOdds != null ? `est ${ticket.estOdds.toFixed(2)}` : "e.g. 4.50"
+          }
+          className="mt-0.5 block w-28 rounded border border-surface-border bg-surface px-2 py-1 text-sm text-white"
         />
       </label>
       {inputsLocked ? (
         <button
           type="button"
+          className="rounded border border-surface-border px-2 py-1 text-xs text-slate-300"
           onClick={() => setEditingLocked(true)}
-          className="rounded-md border border-amber-500/40 px-2.5 py-1 text-[11px] font-medium text-amber-200 hover:bg-amber-500/10"
         >
-          Correct entry
+          Edit
         </button>
       ) : (
         <button
           type="submit"
           disabled={saving}
-          className="rounded-md border border-surface-border px-2.5 py-1 text-[11px] font-medium text-slate-200 hover:border-accent hover:text-accent disabled:opacity-40"
+          className="rounded bg-accent px-2 py-1 text-xs font-semibold text-surface disabled:opacity-40"
         >
-          {saving ? "Saving…" : placed ? "Update locked" : "Save & lock"}
+          {saving ? "Saving…" : "Save & lock"}
         </button>
       )}
       <p className="basis-full text-[10px] text-slate-600">
-        {placed
-          ? "🔒 Already placed at Sportsbet — locked here too. Use Correct entry only for a typo."
-          : "Enter after you place at the bookie. That locks the ticket. Refresh portfolio keeps locked stake/odds."}
+        Enter after you place at the bookie. That locks the ticket. Refresh
+        portfolio keeps locked stake/odds.
       </p>
     </form>
   );

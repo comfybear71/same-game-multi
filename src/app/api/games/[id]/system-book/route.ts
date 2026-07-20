@@ -3,12 +3,16 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import {
   buildAndPersistSystemPortfolio,
+  buildSystemBookWithChooser,
   excludePlayerFromSystemBook,
   getSystemBookResponse,
   previewSystemPortfolio,
   updateSystemTicketLegTarget,
   updateSystemTicketPlacement,
+  type CardStyle,
 } from "@/lib/system/portfolio";
+import { isPortfolioEdgeScoreEnabled } from "@/lib/system/portfolioFill";
+import { voidSystemTicketAndReload } from "@/lib/system/voidTicket";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -39,6 +43,8 @@ export async function GET(
 
 /** Generate / refresh system portfolio for this game (needs predictions).
  *  Body `{ preview: true }` = dry-run (H2H playbook + legs, no DB write).
+ *  Body `{ chooser: true, selections? }` = 3-card edge/hot/spread (also auto when
+ *  PORTFOLIO_EDGE_SCORE=on).
  */
 export async function POST(
   request: Request,
@@ -54,11 +60,20 @@ export async function POST(
   }
 
   let preview = false;
+  let chooser = false;
+  let selections: Record<string, CardStyle> | undefined;
   try {
-    const body = (await request.json()) as { preview?: boolean };
+    const body = (await request.json()) as {
+      preview?: boolean;
+      chooser?: boolean;
+      selections?: Record<string, CardStyle>;
+    };
     preview = body?.preview === true;
+    chooser = body?.chooser === true || isPortfolioEdgeScoreEnabled();
+    selections = body?.selections;
   } catch {
     preview = false;
+    chooser = isPortfolioEdgeScoreEnabled();
   }
 
   try {
@@ -79,8 +94,28 @@ export async function POST(
     }
 
     const userId = Number((session.user as { id?: string }).id);
+    const uid = Number.isFinite(userId) ? userId : null;
+
+    if (chooser) {
+      const result = await buildSystemBookWithChooser(gameId, {
+        userId: uid,
+        selections,
+      });
+      if (result.tickets.length === 0) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error:
+              "No system tickets built — generate predictions (and upload a lineup) first, and refresh the AI policy from Strategy lab.",
+          },
+          { status: 400 },
+        );
+      }
+      return NextResponse.json({ ok: true, ...result });
+    }
+
     const tickets = await buildAndPersistSystemPortfolio(gameId, {
-      userId: Number.isFinite(userId) ? userId : null,
+      userId: uid,
     });
     if (tickets.length === 0) {
       return NextResponse.json(
@@ -103,11 +138,12 @@ export async function POST(
 }
 
 /**
- * Update stake / placed odds, nudge a leg, or exclude a mis-tagged emergency.
+ * Update stake / placed odds, void a ticket, nudge a leg, or exclude EMG.
  * Body either:
  *   { ticketId, stake?, placedOdds? }
+ *   { ticketId, voided: true|false, legId? } — stake returned when voided
  *   { legId, target }
- *   { excludePlayer: { playerName, team? } } — mark EMG + rebuild portfolio
+ *   { excludePlayer: { playerName, team? } }
  */
 export async function PATCH(
   request: Request,
@@ -126,6 +162,7 @@ export async function PATCH(
     ticketId?: number;
     stake?: number | null;
     placedOdds?: number | null;
+    voided?: boolean;
     legId?: number;
     target?: number;
     excludePlayer?: { playerName?: string; team?: string | null };
@@ -163,6 +200,16 @@ export async function PATCH(
         { error: "ticketId, legId+target, or excludePlayer required" },
         { status: 400 },
       );
+    }
+
+    if (typeof body.voided === "boolean") {
+      const ticket = await voidSystemTicketAndReload(ticketId, body.voided, {
+        legId: body.legId != null ? Number(body.legId) : undefined,
+      });
+      if (!ticket || ticket.gameId !== gameId) {
+        return NextResponse.json({ error: "ticket not found" }, { status: 404 });
+      }
+      return NextResponse.json({ ok: true, ticket });
     }
 
     const parseOpt = (v: unknown): number | null | undefined => {

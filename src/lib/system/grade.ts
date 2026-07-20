@@ -16,6 +16,7 @@ function actualForStat(
     marks: number | null;
     tackles: number | null;
     goals: number | null;
+    didPlay: boolean | null;
   },
   stat: StatType,
 ): number | null {
@@ -25,6 +26,7 @@ function actualForStat(
 
 /**
  * Grade system-book tickets for a game from player_game_stats actuals.
+ * DNP / injured (didPlay=false) → leg voided; any void → ticket voided (stake back).
  * Legs without a matched player/stat actual are left ungraded.
  */
 export async function gradeSystemBookForGame(gameId: number): Promise<{
@@ -87,15 +89,32 @@ export async function gradeSystemBookForGame(gameId: number): Promise<{
   for (const ticket of tickets) {
     const ticketLegs = legsByTicket.get(ticket.id) ?? [];
     let legsHit = 0;
+    let anyVoid = false;
     let allResolved = ticketLegs.length > 0;
 
     for (const leg of ticketLegs) {
       const pid = leg.playerId ?? idByName.get(leg.playerName) ?? null;
       const statRow = pid != null ? statsByPlayer.get(pid) : undefined;
-      if (!statRow) {
+      if (!statRow || !statRow.settled) {
         allResolved = false;
         continue;
       }
+
+      if (statRow.didPlay === false) {
+        anyVoid = true;
+        await db
+          .update(systemTicketLegs)
+          .set({
+            playerId: pid,
+            actualValue: null,
+            hit: null,
+            voided: true,
+          })
+          .where(eq(systemTicketLegs.id, leg.id));
+        legsUpdated++;
+        continue;
+      }
+
       const actual = actualForStat(statRow, leg.statType);
       if (actual == null) {
         allResolved = false;
@@ -109,13 +128,13 @@ export async function gradeSystemBookForGame(gameId: number): Promise<{
           playerId: pid,
           actualValue: actual,
           hit,
+          voided: false,
         })
         .where(eq(systemTicketLegs.id, leg.id));
       legsUpdated++;
     }
 
     if (!allResolved) {
-      // Partial: store leg hits so far but leave slipHit null.
       await db
         .update(systemTickets)
         .set({
@@ -126,12 +145,18 @@ export async function gradeSystemBookForGame(gameId: number): Promise<{
       continue;
     }
 
-    const slipHit = legsHit === ticketLegs.length && ticketLegs.length > 0;
-    const flatReturn = slipHit && ticket.estOdds != null ? ticket.estOdds : 0;
+    // Same rule as personal bets: any void leg → stake returned.
+    const voided = anyVoid;
+    const slipHit = voided
+      ? null
+      : legsHit === ticketLegs.length && ticketLegs.length > 0;
+    const flatReturn =
+      !voided && slipHit && ticket.estOdds != null ? ticket.estOdds : 0;
     const cashReturn = computeCashReturn(
       slipHit,
       ticket.stake,
       ticket.placedOdds,
+      voided,
     );
     await db
       .update(systemTickets)
@@ -139,6 +164,7 @@ export async function gradeSystemBookForGame(gameId: number): Promise<{
         legsHit,
         legsTotal: ticketLegs.length,
         slipHit,
+        voided,
         flatReturn,
         cashReturn,
         gradedAt: new Date(),

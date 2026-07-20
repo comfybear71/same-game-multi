@@ -12,7 +12,8 @@ const DISPOSAL_RUNGS = [9.5, 14.5, 16.5, 19.5, 24.5, 29.5, 34.5, 39.5];
 const TACKLE_RUNGS = [1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5];
 const COUNT_RUNGS = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5];
 
-function rungsFor(statType: StatType): number[] {
+/** Standard Sportsbet-style half-lines for a market. */
+export function rungsFor(statType: StatType): number[] {
   if (statType === "disposals") return DISPOSAL_RUNGS;
   if (statType === "tackles") return TACKLE_RUNGS;
   return COUNT_RUNGS;

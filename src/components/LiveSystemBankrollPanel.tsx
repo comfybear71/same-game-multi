@@ -8,6 +8,7 @@ import type {
   LiveSystemBankroll,
   LiveSystemTicketRow,
 } from "@/lib/system/liveBankroll";
+import { formatSystemLegLine } from "@/lib/system/liveBankroll";
 import { formatAwst } from "@/lib/time";
 
 /** Recharts needs a real width — skip SSR so cold start / soft nav don't blank. */
@@ -32,9 +33,13 @@ function roiPct(net: number, settledStake: number): string {
 }
 
 /** Cumulative P&L / ROI after each graded ticket (kickoff order). */
+function ticketGraded(t: LiveSystemTicketRow): boolean {
+  return t.voided || t.slipHit != null || t.pnl != null;
+}
+
 function buildEquityCurve(tickets: LiveSystemTicketRow[]): EquityPoint[] {
   const graded = tickets
-    .filter((t) => t.pnl != null)
+    .filter((t) => ticketGraded(t) && t.pnl != null)
     .sort((a, b) => {
       const at = new Date(a.commenceTime).getTime();
       const bt = new Date(b.commenceTime).getTime();
@@ -70,6 +75,7 @@ interface GameGroup {
   pending: number;
   graded: number;
   hits: number;
+  voids: number;
 }
 
 interface RoundGroup {
@@ -101,19 +107,21 @@ function groupByRoundThenGame(tickets: LiveSystemTicketRow[]): RoundGroup[] {
         pending: 0,
         graded: 0,
         hits: 0,
+        voids: 0,
       };
       games.set(t.gameId, g);
     }
     g.tickets.push(t);
     if (t.stake != null && t.stake > 0) {
-      if (t.slipHit == null) {
+      if (!ticketGraded(t)) {
         g.openStake += t.stake;
         g.pending++;
       } else {
         g.settledStake += t.stake;
         g.returned += t.cashReturn;
         g.graded++;
-        if (t.slipHit) g.hits++;
+        if (t.voided) g.voids++;
+        else if (t.slipHit) g.hits++;
       }
     }
   }
@@ -175,6 +183,7 @@ export function LiveSystemBankrollPanel({
         ticketsTracked: json.ticketsTracked,
         ticketsGraded: json.ticketsGraded,
         ticketsHit: json.ticketsHit,
+        ticketsVoided: json.ticketsVoided ?? 0,
         ticketsPending: json.ticketsPending,
         totalStaked: json.totalStaked,
         openStake: json.openStake,
@@ -190,15 +199,12 @@ export function LiveSystemBankrollPanel({
     }
   }
 
-  // Cold start / soft nav backup — always re-fetch once mounted.
-  useEffect(() => {
-    void refresh(initial.season);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount / season only
-  }, [initial.season]);
+  // Server `initial` is enough on nav; use "Refresh tally" when you need a pull.
 
+  const decided = data.ticketsGraded - (data.ticketsVoided ?? 0);
   const hitPct =
-    data.ticketsGraded > 0
-      ? `${Math.round((data.ticketsHit / data.ticketsGraded) * 1000) / 10}%`
+    decided > 0
+      ? `${Math.round((data.ticketsHit / decided) * 1000) / 10}%`
       : "—";
 
   return (
@@ -210,7 +216,8 @@ export function LiveSystemBankrollPanel({
           </p>
           <p className="mt-1 text-xs text-slate-500">
             Enter stake + bookie odds on each game&apos;s System book after you
-            place. Separate from personal Multis ROI and from the historical sim.
+            place. Tap RESULT (MISS/HIT) to VOID an injured ticket — stake comes
+            back and this tally updates. Separate from personal Multis.
           </p>
         </div>
         <button
@@ -254,8 +261,11 @@ export function LiveSystemBankrollPanel({
             <Stat label="Open stake" value={money(data.openStake)} />
           </div>
           <p className="text-xs text-slate-500">
-            {data.ticketsHit}/{data.ticketsGraded} graded hit ({hitPct}) ·{" "}
-            {data.ticketsPending} pending · {data.ticketsTracked} tickets
+            {data.ticketsHit}/{decided} graded hit ({hitPct})
+            {(data.ticketsVoided ?? 0) > 0
+              ? ` · ${data.ticketsVoided} void (stake back)`
+              : ""}{" "}
+            · {data.ticketsPending} pending · {data.ticketsTracked} tickets
             tracked · total staked {money(data.totalStaked)}
           </p>
 
@@ -285,7 +295,11 @@ export function LiveSystemBankrollPanel({
                   Round {round.round ?? "—"}
                 </h3>
                 {round.games.map((game) => (
-                  <GameTicketGroup key={game.gameId} game={game} />
+                  <GameTicketGroup
+                    key={game.gameId}
+                    game={game}
+                    onChanged={() => void refresh()}
+                  />
                 ))}
               </section>
             ))}
@@ -296,7 +310,13 @@ export function LiveSystemBankrollPanel({
   );
 }
 
-function GameTicketGroup({ game }: { game: GameGroup }) {
+function GameTicketGroup({
+  game,
+  onChanged,
+}: {
+  game: GameGroup;
+  onChanged: () => void;
+}) {
   const gamePnl = game.graded > 0 ? game.returned - game.settledStake : null;
   const [open, setOpen] = useState(false);
 
@@ -326,7 +346,8 @@ function GameTicketGroup({ game }: { game: GameGroup }) {
           {game.pending > 0 ? <span>open {money(game.openStake)}</span> : null}
           {game.graded > 0 ? (
             <span>
-              {game.hits}/{game.graded} hit
+              {game.hits}/{game.graded - game.voids} hit
+              {game.voids > 0 ? ` · ${game.voids} void` : ""}
               {gamePnl != null ? (
                 <span
                   className={
@@ -344,58 +365,220 @@ function GameTicketGroup({ game }: { game: GameGroup }) {
         </span>
       </summary>
       <div className="overflow-x-auto border-t border-surface-border/60 px-3 pb-2 pt-1">
-        <table className="w-full min-w-[520px] text-left text-xs">
+        <table className="w-full min-w-[580px] text-left text-xs">
           <thead className="text-[11px] uppercase tracking-wide text-slate-500">
             <tr>
               <th className="py-1 pr-2 font-medium">Strategy</th>
               <th className="py-1 pr-2 font-medium">Stake</th>
               <th className="py-1 pr-2 font-medium">Odds</th>
               <th className="py-1 pr-2 font-medium">Result</th>
+              <th className="py-1 pr-2 font-medium">Legs</th>
               <th className="py-1 font-medium">P&amp;L</th>
             </tr>
           </thead>
           <tbody>
             {game.tickets.map((t) => (
-              <tr
-                key={t.id}
-                className="border-t border-surface-border/40 text-slate-300"
-              >
-                <td className="py-1.5 pr-2 text-white">
-                  {t.label}
-                  <span className="ml-1.5 text-[10px] uppercase text-slate-600">
-                    {t.tier}
-                  </span>
-                </td>
-                <td className="py-1.5 pr-2 tabular-nums">{money(t.stake)}</td>
-                <td className="py-1.5 pr-2 tabular-nums">
-                  {t.placedOdds != null ? t.placedOdds.toFixed(2) : "—"}
-                </td>
-                <td className="py-1.5 pr-2">
-                  {t.slipHit === true ? (
-                    <span className="text-accent-win">HIT</span>
-                  ) : t.slipHit === false ? (
-                    <span className="text-accent-loss">MISS</span>
-                  ) : (
-                    <span className="text-slate-500">open</span>
-                  )}
-                </td>
-                <td
-                  className={`py-1.5 tabular-nums ${
-                    t.pnl == null
-                      ? "text-slate-500"
-                      : t.pnl >= 0
-                        ? "text-accent-win"
-                        : "text-accent-loss"
-                  }`}
-                >
-                  {t.pnl == null ? "—" : money(t.pnl)}
-                </td>
-              </tr>
+              <TicketRows key={t.id} ticket={t} onChanged={onChanged} />
             ))}
           </tbody>
         </table>
       </div>
     </details>
+  );
+}
+
+/** Legs cleared vs ticket size + how far short (miss %) on the multi. */
+function ticketLegScore(legs: LiveSystemTicketRow["legs"]) {
+  if (legs.length === 0) return null;
+  const active = legs.filter((l) => !l.voided);
+  const pool = active.length > 0 ? active : legs;
+  const hits = pool.filter((l) => l.hit === true).length;
+  const total = pool.length;
+  const hitPct = total > 0 ? Math.round((hits / total) * 100) : 0;
+  const missPct = total > 0 ? Math.round(((total - hits) / total) * 100) : 0;
+  return { hits, total, hitPct, missPct };
+}
+
+function TicketRows({
+  ticket: t,
+  onChanged,
+}: {
+  ticket: LiveSystemTicketRow;
+  onChanged: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const hasLegs = t.legs.length > 0;
+  const score = ticketLegScore(t.legs);
+
+  async function setVoided(voided: boolean, legId?: number) {
+    const msg = voided
+      ? legId != null
+        ? "Void this ticket (injured leg)? Stake returned — tally updates."
+        : "Mark ticket VOID? Stake returned — tally updates."
+      : "Undo void? Ticket will show as open until re-settled.";
+    if (!window.confirm(msg)) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/games/${t.gameId}/system-book`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ticketId: t.id, voided, legId }),
+      });
+      const json = (await res.json()) as { ok?: boolean; error?: string };
+      if (!res.ok || json.ok === false) {
+        throw new Error(json.error ?? `Failed (${res.status})`);
+      }
+      onChanged();
+    } catch (err) {
+      window.alert((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <tr className="border-t border-surface-border/40 text-slate-300">
+        <td className="py-1.5 pr-2 text-white">
+          <button
+            type="button"
+            disabled={!hasLegs}
+            onClick={() => setOpen((v) => !v)}
+            className={`text-left ${hasLegs ? "hover:text-accent" : ""}`}
+          >
+            {hasLegs ? (
+              <span className="mr-1 inline-block w-3 text-slate-600">
+                {open ? "▾" : "▸"}
+              </span>
+            ) : null}
+            {t.label}
+            <span className="ml-1.5 text-[10px] uppercase text-slate-600">
+              {t.tier}
+            </span>
+          </button>
+        </td>
+        <td className="py-1.5 pr-2 tabular-nums">{money(t.stake)}</td>
+        <td className="py-1.5 pr-2 tabular-nums">
+          {t.placedOdds != null ? t.placedOdds.toFixed(2) : "—"}
+        </td>
+        <td className="py-1.5 pr-2">
+          {t.voided ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void setVoided(false)}
+              className="text-slate-400 underline decoration-slate-600 underline-offset-2 hover:text-white disabled:opacity-40"
+              title="Undo void"
+            >
+              VOID
+            </button>
+          ) : t.slipHit === true ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void setVoided(true)}
+              className="text-accent-win hover:underline disabled:opacity-40"
+              title="Tap to void (stake back) — tally updates"
+            >
+              HIT
+            </button>
+          ) : t.slipHit === false ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void setVoided(true)}
+              className="text-accent-loss hover:underline disabled:opacity-40"
+              title="Tap to VOID (stake back) — injured / bookie void. Tally updates."
+            >
+              MISS
+            </button>
+          ) : (
+            <span className="text-slate-500">open</span>
+          )}
+        </td>
+        <td
+          className="py-1.5 pr-2 tabular-nums text-slate-400"
+          title={
+            score
+              ? `${score.hits} of ${score.total} legs hit · missed by ${score.missPct}% of legs`
+              : undefined
+          }
+        >
+          {score ? (
+            <>
+              <span className="text-slate-300">
+                {score.hits}/{score.total}
+              </span>
+              <span className="ml-1.5 text-[10px] text-slate-500">
+                {score.hitPct}%
+                {score.missPct > 0 && score.hitPct < 100 ? (
+                  <span className="text-accent-loss/80">
+                    {" "}
+                    · −{score.missPct}%
+                  </span>
+                ) : null}
+              </span>
+            </>
+          ) : (
+            "—"
+          )}
+        </td>
+        <td
+          className={`py-1.5 tabular-nums ${
+            t.pnl == null
+              ? "text-slate-500"
+              : t.voided
+                ? "text-slate-400"
+                : t.pnl >= 0
+                  ? "text-accent-win"
+                  : "text-accent-loss"
+          }`}
+        >
+          {t.pnl == null ? "—" : t.voided ? "$0.00" : money(t.pnl)}
+        </td>
+      </tr>
+      {open && hasLegs
+        ? t.legs.map((leg) => (
+            <tr
+              key={leg.id}
+              className="border-t border-surface-border/20 bg-surface/40 text-[11px] text-slate-400"
+            >
+              <td className="py-1 pl-6 pr-2" colSpan={3}>
+                {formatSystemLegLine(leg)}
+                {leg.voided ? (
+                  <span className="ml-2 text-slate-500">(voided)</span>
+                ) : leg.actualValue != null ? (
+                  <span className="ml-2 tabular-nums text-slate-500">
+                    got {leg.actualValue}
+                  </span>
+                ) : null}
+              </td>
+              <td className="py-1 pr-2">
+                {leg.voided ? (
+                  <span className="text-slate-500">void</span>
+                ) : leg.hit === true ? (
+                  <span className="text-accent-win">hit</span>
+                ) : leg.hit === false ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void setVoided(true, leg.id)}
+                    className="text-accent-loss hover:underline disabled:opacity-40"
+                    title="Void ticket only if bookie voided this leg"
+                  >
+                    miss
+                  </button>
+                ) : (
+                  <span className="text-slate-600">—</span>
+                )}
+              </td>
+              <td className="py-1 pr-2 text-slate-600">—</td>
+              <td className="py-1" />
+            </tr>
+          ))
+        : null}
+    </>
   );
 }
 

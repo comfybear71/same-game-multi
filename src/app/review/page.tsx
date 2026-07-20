@@ -1,5 +1,5 @@
 import { CollapsibleSection } from "@/components/CollapsibleSection";
-import { MultiStatsPanel } from "@/components/MultiStatsPanel";
+import { CrystalBallPanel } from "@/components/CrystalBallPanel";
 import { PlayerRecordPanel } from "@/components/PlayerRecordPanel";
 import { RoundRosterPanel } from "@/components/RoundRosterPanel";
 import { auth } from "@/lib/auth";
@@ -15,6 +15,11 @@ import {
   type PlayerBetRecord,
   type PlayerHistorySummary,
 } from "@/lib/data/bets";
+import {
+  buildCrystalBallReport,
+  latestCompletedRound,
+  type CrystalBallReport,
+} from "@/lib/data/crystalBall";
 import { currentSeason } from "@/lib/cron";
 import {
   getRoundRoster,
@@ -44,27 +49,51 @@ export default async function ReviewPage() {
   };
   let dbError: string | null = null;
   let roundRoster: RoundRoster | null = null;
+  let crystalBall: CrystalBallReport | null = null;
+  let crystalRound: number | null = null;
 
   try {
-    board = await getLeaderboard(season);
-    const currentRound = await inferCurrentRound(season);
-    if (currentRound != null) {
-      roundRoster = await getRoundRoster(season, currentRound);
-    }
     const email = session?.user?.email;
-    if (email) {
-      const userId = await userIdForEmail(email);
-      if (userId) {
-        const slips = await getBetsForUser(userId);
-        const summary = summarise(slips);
-        multiStats = analyseMultis(slips);
-        roi = summary.roi == null ? "—" : `${(summary.roi * 100).toFixed(0)}%`;
-        const settled = summary.won + summary.lost;
-        strike =
-          settled === 0 ? "—" : `${Math.round((summary.won / settled) * 100)}%`;
-        playerRecord = (await getPlayerBettingRecord(userId)).list;
-        playerHistory = indexPlayerHistoryByName(playerRecord);
-      }
+
+    const [boardResult, roundResult, userId, completedRound] = await Promise.all([
+      getLeaderboard(season),
+      inferCurrentRound(season),
+      email ? userIdForEmail(email) : Promise.resolve(null),
+      latestCompletedRound(season),
+    ]);
+    board = boardResult;
+    crystalRound = completedRound;
+
+    const userWork =
+      userId != null
+        ? Promise.all([
+            getBetsForUser(userId),
+            getPlayerBettingRecord(userId),
+          ])
+        : Promise.resolve(null);
+
+    const [roster, userBundle, crystal] = await Promise.all([
+      roundResult != null
+        ? getRoundRoster(season, roundResult)
+        : Promise.resolve(null),
+      userWork,
+      completedRound != null
+        ? buildCrystalBallReport(season, completedRound).catch(() => null)
+        : Promise.resolve(null),
+    ]);
+    roundRoster = roster;
+    crystalBall = crystal;
+
+    if (userBundle) {
+      const [slips, record] = userBundle;
+      const summary = summarise(slips);
+      multiStats = analyseMultis(slips);
+      roi = summary.roi == null ? "—" : `${(summary.roi * 100).toFixed(0)}%`;
+      const settled = summary.won + summary.lost;
+      strike =
+        settled === 0 ? "—" : `${Math.round((summary.won / settled) * 100)}%`;
+      playerRecord = record.list;
+      playerHistory = indexPlayerHistoryByName(playerRecord);
     }
   } catch (err) {
     dbError = (err as Error).message;
@@ -75,8 +104,8 @@ export default async function ReviewPage() {
       <header>
         <h1 className="text-2xl font-bold text-white">Review</h1>
         <p className="text-sm text-slate-400">
-          Season {season} · your personal Multis, round lineups, and player
-          record. Helm dollars live on System; backtests on Lab.
+          Season {season} · round lineups and player record. Multis by ticket
+          size live on Bets; helm dollars on System; backtests on Lab.
         </p>
       </header>
 
@@ -107,21 +136,31 @@ export default async function ReviewPage() {
         <RoundRosterPanel roster={roundRoster} playerHistory={playerHistory} />
       </CollapsibleSection>
 
-      <section className="card">
-        <h2 className="mb-1 text-lg font-semibold text-white">Your player record</h2>
-        <p className="mb-3 text-sm text-slate-400">
-          Split by stat — tap a summary card to filter. Most backed players and
-          your strongest markets show up first. Sort the list to find who&apos;s
-          been burning you.
-        </p>
-        <PlayerRecordPanel records={playerRecord} />
-      </section>
+      <CollapsibleSection
+        title="Crystal ball"
+        description={
+          crystalRound != null
+            ? `Round ${crystalRound} — per game: ANY 5 / 10 / 15 leg multis with hindsight. Toggle longest vs shortest odds; ★ = on our System book.`
+            : "After a round settles — ANY 5 / 10 / 15 leg crystal-ball multis per game."
+        }
+        defaultOpen
+      >
+        {crystalBall ? (
+          <CrystalBallPanel report={crystalBall} />
+        ) : (
+          <p className="text-sm text-slate-500">
+            Crystal ball needs a completed round with settled stats
+            {crystalRound != null ? ` (Round ${crystalRound})` : ""}.
+          </p>
+        )}
+      </CollapsibleSection>
 
       <CollapsibleSection
-        title="Your multis"
-        description="Slip performance by ticket size — filter chips, compact table."
+        title="Your player record"
+        description="Split by stat — tap a summary card to filter. Most backed players and your strongest markets show up first. Sort the list to find who&apos;s been burning you."
+        defaultOpen={false}
       >
-        <MultiStatsPanel analytics={multiStats} />
+        <PlayerRecordPanel records={playerRecord} />
       </CollapsibleSection>
     </div>
   );
