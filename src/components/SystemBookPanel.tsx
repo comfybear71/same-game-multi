@@ -266,16 +266,16 @@ export function SystemBookPanel({
       <div className="flex flex-wrap items-start justify-between gap-3">
         {embedded ? (
           <p className="text-sm text-slate-400">
-            Pick a card per multi (green edge / orange hot / sky spread), nudge
-            lines, then save stake + odds —{" "}
-            <span className="text-slate-300">🔒 locks</span> that ticket.
+            Advanced helm portfolio — build personal multis on{" "}
+            <span className="text-slate-300">Top 10 boards</span> above first. Generate
+            here when you want the Lab-driven System book; 3-card chooser is optional.
           </p>
         ) : (
           <div>
             <h2 className="text-lg font-semibold text-white">System book</h2>
             <p className="text-sm text-slate-400">
-              Three cards per multi — green = best edge, orange = last-week hot,
-              sky = spread. Tap a card to select it, then place and lock.
+              Lab portfolio builder — optional 3-card chooser (edge / hot / spread). Prefer
+              Top 10 boards for personal tickets.
             </p>
           </div>
         )}
