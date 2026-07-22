@@ -43,7 +43,11 @@ export default async function SystemPage() {
         <h1 className="text-2xl font-bold text-white">System book</h1>
         <p className="text-sm text-slate-400">
           Season {season} · live dollars on placed System book tickets — separate
-          from your personal Multis. Styles from{" "}
+          from your personal Multis. Build personal tickets on each game&apos;s{" "}
+          <Link href="/" className="text-accent hover:underline">
+            Top 10 boards
+          </Link>{" "}
+          first; styles from{" "}
           <Link href="/lab" className="text-accent hover:underline">
             Lab
           </Link>
@@ -51,7 +55,7 @@ export default async function SystemPage() {
           <Link href="/leaders" className="text-accent hover:underline">
             Leaders
           </Link>
-          ; place on each game, track P&amp;L here.
+          ; place System portfolio on the game page when ready.
         </p>
       </header>
 

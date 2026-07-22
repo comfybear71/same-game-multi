@@ -312,7 +312,34 @@ from single misses · FUN under full portfolio rules.
 - **Goals rung cap:** max target = floor(seasonAvg)+1 (stops Stringer 4+ on a 2.1 avg).
 - **3-card chooser (localhost sketch):** when edge flag on, Refresh builds
   edge (green) / hot (orange) / spread (sky) cards per multi; tap to select.
-  `chooser.ts` + `SystemBookPanel` grid. Not production-polished yet.
+  `chooser.ts` + `SystemBookPanel` grid. **De-emphasised** — Top 10 DIY boards
+  are the primary personal build path (see below).
+
+### Top 10 DIY boards (Jul 2026 — primary personal build path)
+
+**Intent:** Transparent punter boards on each game page — not opaque 3-card AI
+choosers. Mobile-first tap-to-build multis logged via existing personal bets flow.
+
+**Where it lives:**
+- **Game page** (`Top10BoardPanel`): primary section when predictions exist.
+  Top 10 × 2 clubs × 4 markets (D/M/T/G). Interactive ticket builder + Log this multi.
+- **System page** (`/system`): P&amp;L tracker only; header links punters back to
+  fixture Top 10 boards. System book chooser remains on game page (collapsed) for
+  helm portfolio when needed.
+
+**Line pick rule (LOCKED):** `pickBoardLine()` in `top10Board.ts` — default rung
+sits **near season average / middle of ladder**, never the highest clearable rung
+(unlike `suggest.chooseRung`). `clearProbability()` is display-only on the ticket,
+**must not** drive rung selection. Goals capped via `capGoalsLine`.
+
+**Data:** predictions + features + Leaders bands + personal tape + odds_snapshots
+(primary) / bookmaker_lines (fallback). Empty odds → honest "—", no invented prices.
+
+**API:** `GET /api/games/[id]/top10` (auth'd allowlist user).
+
+**Debug:** `npm run dump:top10` or `npx tsx scripts/dump-top10.ts --match=Adelaide,Collingwood`.
+
+**Tests:** `src/lib/predictions/top10Board.test.ts` (ranking + line pick).
 
 ---
 

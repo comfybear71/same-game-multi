@@ -11,6 +11,7 @@ import { LiveScoreboard } from "@/components/LiveScoreboard";
 import { StatBoardView } from "@/components/StatBoardView";
 import { SuggestedMultis } from "@/components/SuggestedMultis";
 import { SystemBookPanel } from "@/components/SystemBookPanel";
+import { Top10BoardPanel } from "@/components/Top10BoardPanel";
 import { TeamFormAndRanks, teamNameClass } from "@/components/TeamFormAndRanks";
 import type { StatType } from "@/db/schema";
 import { auth } from "@/lib/auth";
@@ -274,21 +275,18 @@ export default async function GamePage({ params }: { params: { id: string } }) {
         <GeneratePredictionsButton gameId={game.id} />
       </div>
 
-      {/* System book is independent of predictions — saved stake/odds must
-          still show on cold start even if the board was cleared. */}
-      <CollapsibleSection
-        title="System book"
-        description="Helm portfolio — place 100%, nudge lines to Sportsbet, log stake + odds."
-        defaultOpen
-      >
-        <SystemBookPanel gameId={game.id} embedded />
-      </CollapsibleSection>
-
       {hasData && board ? (
         <>
           <CollapsibleSection
+            title="Top 10 boards"
+            description="Ranked shortlists per club and market — tap to build your multi."
+            defaultOpen
+          >
+            <Top10BoardPanel gameId={game.id} round={game.round} embedded />
+          </CollapsibleSection>
+          <CollapsibleSection
             title="Suggested multi"
-            description="Build a personal ticket across markets — not the System book."
+            description="AI-ranked picks — optional; Top 10 boards above are the DIY path."
           >
             <SuggestedMultis gameId={game.id} round={game.round} embedded />
           </CollapsibleSection>
@@ -299,7 +297,18 @@ export default async function GamePage({ params }: { params: { id: string } }) {
             <StatBoardView board={board} record={playerRecord} />
           </CollapsibleSection>
         </>
-      ) : (
+      ) : null}
+
+      {/* System book is independent of predictions — saved stake/odds must
+          still show on cold start even if the board was cleared. */}
+      <CollapsibleSection
+        title="System book"
+        description="Helm portfolio (advanced) — build personal multis on Top 10 boards first."
+      >
+        <SystemBookPanel gameId={game.id} embedded />
+      </CollapsibleSection>
+
+      {!hasData || !board ? (
         <div className="card text-sm text-slate-400">
           {upcoming ? (
             <>
@@ -333,7 +342,7 @@ export default async function GamePage({ params }: { params: { id: string } }) {
             </p>
           )}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
