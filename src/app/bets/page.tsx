@@ -364,6 +364,10 @@ function BetSlip({
                     >
                       {leg.jumper ?? "–"}
                     </span>
+                  ) : leg.jumper != null ? (
+                    <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded bg-surface text-[10px] font-bold text-slate-300">
+                      {leg.jumper}
+                    </span>
                   ) : null}
                   <span className="min-w-0 text-slate-300">
                     {leg.playerName ? (
