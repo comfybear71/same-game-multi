@@ -111,27 +111,57 @@ block). **Cursor does not auto-sync your PC** — step 5 is required after merge
 - Work on a **feature branch** (not `master`).
 - Run `typecheck`, `lint`, `build` when changes are non-trivial.
 - Commit, push, open PR with `gh pr create`.
-- Reply with this **handoff block** (fill in all fields):
+- Reply with the **handoff layout** below (same structure every time).
 
+**Compare URL**
+```
+https://github.com/comfybear71/same-game-multi/compare/master...your-branch
+```
+
+**PR Title**
+```
+Short imperative title
+```
+
+**PR Description**
 ```markdown
-## PR
-**URL:** https://github.com/comfybear71/same-game-multi/pull/NNN
-**Title:** Short imperative title
+## Summary
+…
 
-### Description
-- Bullet: what changed
-- Bullet: why
-- Bullet: how verified
+## Changes
+- src/… — …
 
 ## Test plan
-- [ ] …
+- [x] npm run typecheck && npm run lint && npm run build
+- [ ] Vercel / manual …
 
-## Release (create on GitHub after squash merge)
-**Tag:** v0.2.4-2026-07-23
-**Release title:** v0.2.4 — One-line summary
-**Release description:**
-- User-facing change 1
-- User-facing change 2
+PR: #NNN
+```
+
+**Merge instructions**
+1. Open Compare URL (or PR #NNN)
+2. Squash and merge
+3. Delete branch
+4. Sync PC: `git checkout master && git pull origin master && git fetch --prune`
+
+**Release tag**
+
+| Field | Value |
+| --- | --- |
+| Tag name | `v0.2.N-YYYY-MM-DD` |
+| Target | `master` |
+| Title | `v0.2.N — …` |
+| Create via | `https://github.com/comfybear71/same-game-multi/releases/new?tag=…&target=master` |
+
+**Release description**
+```markdown
+## v0.2.N
+
+### Fixed
+- …
+
+### New
+- …
 ```
 
 **Tag format:** `v{major}.{minor}.{patch}-YYYY-MM-DD` (AWST calendar date).

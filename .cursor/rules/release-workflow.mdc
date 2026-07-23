@@ -11,27 +11,57 @@ When code is ready to ship, follow `docs/LOCAL-DEV.md` § **Release workflow**.
 
 1. Feature branch only — never commit directly to `master` unless asked.
 2. Before PR: `npm run typecheck && npm run lint && npm run build` for non-trivial TS changes.
-3. Push branch, `gh pr create --base master`, return the **handoff block**:
+3. Push branch, `gh pr create --base master`, reply with this **exact handoff layout**:
 
 ```markdown
-## PR
-**URL:** …
-**Title:** …
+**Compare URL**
+https://github.com/comfybear71/same-game-multi/compare/master...BRANCH
 
-### Description
+**PR Title**
+Short imperative title
+
+**PR Description**
+
+## Summary
+One paragraph — goal and why.
+
+## Changes
+- path/to/file.ts — what changed
 - …
 
 ## Test plan
-- [ ] …
+- [x] npm run typecheck
+- [ ] Vercel: manual step …
 
-## Release (after squash merge)
-**Tag:** v0.2.N-YYYY-MM-DD
-**Release title:** v0.2.N — …
-**Release description:**
-- …
+PR: #NNN
+
+**Merge instructions**
+1. Open Compare URL above (or PR #NNN)
+2. Squash and merge
+3. Delete branch
+4. Sync PC: `git checkout master && git pull origin master && git fetch --prune`
+
+**Release tag**
+
+| Field | Value |
+| --- | --- |
+| Tag name | `v0.2.N-YYYY-MM-DD` |
+| Target | `master` |
+| Title | `v0.2.N — One-line summary` |
+| Create via | https://github.com/comfybear71/same-game-multi/releases/new?tag=TAG&target=master |
+
+**Release description**
+
+## v0.2.N
+
+### Fixed
+- User-facing bullet
+
+### New
+- User-facing bullet (if any)
 ```
 
-- Tag format: `v{major}.{minor}.{patch}-YYYY-MM-DD`. Bump patch from latest tag (`git tag -l --sort=-creatordate`).
+- Tag format: `v{major}.{minor}.{patch}-YYYY-MM-DD` (AWST date). Bump patch from latest tag.
 - Do **not** push tags or merge PRs unless the user explicitly asks.
 
 ## Maintainer (Stuart) on GitHub
