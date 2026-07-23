@@ -1,6 +1,6 @@
 # HANDOFF.md — Matty's got big balls multi tracker
 
-**Last updated:** July 2026 (System book v2 edge package behind flag — review backtest).
+**Last updated:** July 2026 (Top 10 hub = DIY + Helm Suggest + System portfolio).
 
 State of the build, what's done, what's next. Pair with **`CLAUDE.md`**
 (conventions/architecture) and **`README.md`** / **`docs/LOCAL-DEV.md`** (setup).
@@ -17,6 +17,11 @@ State of the build, what's done, what's next. Pair with **`CLAUDE.md`**
   Mates log their own multis.
 - **Local dev:** feature branches, test locally, PR → merge `master`. GitHub CLI
   available on maintainer PC (`gh`).
+- **Game page hub:** **Top 10 hub** is DIY boards + Helm Suggest (thinking) +
+  System portfolio (Any / focus / FUN). No separate Suggested multi or System
+  book sections. Helm Suggest: `GET /api/games/[id]/top10/suggest`. System
+  legs show why + Swap from Top 10. Fill soft-boosts Top 10 shortlist + board
+  lines (`TOP10_SOFT_BONUS` in `portfolioFillBridge.ts`).
 
 Verify before merge:
 

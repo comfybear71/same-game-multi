@@ -105,6 +105,46 @@ async function main() {
     }
     console.log("");
   }
+
+  // Assert: elite / high-avg disposal names land on Top 10 when predicted.
+  // Catches board-side misses (predict/lineup gaps) — not System diversification.
+  if (process.argv.includes("--assert-elite")) {
+    let checked = 0;
+    let misses = 0;
+    for (const m of board.markets) {
+      if (m.statType !== "disposals") continue;
+      for (const side of [m.home, m.away]) {
+        const elites = side.rows.filter(
+          (r) =>
+            r.benchmark === "elite" ||
+            (r.seasonAvg != null && r.seasonAvg >= 25),
+        );
+        for (const e of elites) {
+          checked += 1;
+          if (e.rank > 10) {
+            misses += 1;
+            console.error(
+              `ASSERT FAIL: ${e.playerName} (${side.team}) elite/volume Disp not in Top 10`,
+            );
+          }
+        }
+        // High season avg among predicted players for this club should be present
+        // if they have a Model C row — already filtered into board build.
+        const volume = side.rows.filter(
+          (r) => r.seasonAvg != null && r.seasonAvg >= 24,
+        );
+        if (volume.length === 0 && side.rows.length > 0) {
+          console.warn(
+            `WARN: ${side.team} Disp Top 10 has no 24+ avg — check predictions/features`,
+          );
+        }
+      }
+    }
+    console.log(
+      `\n--assert-elite: ${checked} elite/volume Disp rows on boards, ${misses} misses`,
+    );
+    if (misses > 0) process.exit(1);
+  }
 }
 
 main().catch((err) => {

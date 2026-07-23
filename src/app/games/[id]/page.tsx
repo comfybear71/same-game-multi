@@ -9,8 +9,6 @@ import { GameLineupPanel } from "@/components/RoundRosterPanel";
 import { LiveBetTracker } from "@/components/LiveBetTracker";
 import { LiveScoreboard } from "@/components/LiveScoreboard";
 import { StatBoardView } from "@/components/StatBoardView";
-import { SuggestedMultis } from "@/components/SuggestedMultis";
-import { SystemBookPanel } from "@/components/SystemBookPanel";
 import { Top10BoardPanel } from "@/components/Top10BoardPanel";
 import { TeamFormAndRanks, teamNameClass } from "@/components/TeamFormAndRanks";
 import type { StatType } from "@/db/schema";
@@ -275,40 +273,23 @@ export default async function GamePage({ params }: { params: { id: string } }) {
         <GeneratePredictionsButton gameId={game.id} />
       </div>
 
-      {hasData && board ? (
-        <>
-          <CollapsibleSection
-            title="Top 10 boards"
-            description="Ranked shortlists per club and market — tap to build your multi."
-            defaultOpen
-          >
-            <Top10BoardPanel gameId={game.id} round={game.round} embedded />
-          </CollapsibleSection>
-          <CollapsibleSection
-            title="Suggested multi"
-            description="AI-ranked picks — optional; Top 10 boards above are the DIY path."
-          >
-            <SuggestedMultis gameId={game.id} round={game.round} embedded />
-          </CollapsibleSection>
-          <CollapsibleSection
-            title="Player boards"
-            description="Per-stat projections, form and fantasy for the named squad."
-          >
-            <StatBoardView board={board} record={playerRecord} />
-          </CollapsibleSection>
-        </>
-      ) : null}
-
-      {/* System book is independent of predictions — saved stake/odds must
-          still show on cold start even if the board was cleared. */}
+      {/* One hub: DIY Top 10 + Helm Suggest + System portfolio */}
       <CollapsibleSection
-        title="System book"
-        description="Helm portfolio (advanced) — build personal multis on Top 10 boards first."
+        title="Top 10 hub"
+        description="DIY boards, Helm Suggest (with thinking), and System portfolio — question and edit before you log or lock."
+        defaultOpen
       >
-        <SystemBookPanel gameId={game.id} embedded />
+        <Top10BoardPanel gameId={game.id} round={game.round} embedded />
       </CollapsibleSection>
 
-      {!hasData || !board ? (
+      {hasData && board ? (
+        <CollapsibleSection
+          title="Player boards"
+          description="Per-stat projections, form and fantasy for the named squad."
+        >
+          <StatBoardView board={board} record={playerRecord} />
+        </CollapsibleSection>
+      ) : (
         <div className="card text-sm text-slate-400">
           {upcoming ? (
             <>
@@ -330,8 +311,8 @@ export default async function GamePage({ params }: { params: { id: string } }) {
                   <span className="font-medium text-slate-200">
                     &ldquo;Generate predictions&rdquo;
                   </span>{" "}
-                  above — pulls stats from AFL Tables for everyone in the lineup.
-                  System book stakes above stay put either way.
+                  above — unlocks Top 10 boards and Helm Suggest. System stakes in the
+                  hub stay put either way.
                 </li>
               </ol>
             </>
@@ -342,7 +323,7 @@ export default async function GamePage({ params }: { params: { id: string } }) {
             </p>
           )}
         </div>
-      ) : null}
+      )}
     </div>
   );
 }

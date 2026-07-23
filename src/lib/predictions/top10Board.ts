@@ -372,3 +372,33 @@ export async function buildTop10Board(
     oddsSource,
   };
 }
+
+/** playerId:statType → Top 10 rank (1–10) within that club×market board. */
+export async function top10RankMap(
+  gameId: number,
+): Promise<Map<string, { rank: number; team: string; line: number; seasonAvg: number | null }>> {
+  const board = await buildTop10Board(gameId, null);
+  const map = new Map<
+    string,
+    { rank: number; team: string; line: number; seasonAvg: number | null }
+  >();
+  for (const m of board.markets) {
+    for (const side of [m.home, m.away]) {
+      for (const row of side.rows) {
+        map.set(`${row.playerId}:${row.statType}`, {
+          rank: row.rank,
+          team: row.team,
+          line: row.line,
+          seasonAvg: row.seasonAvg,
+        });
+      }
+    }
+  }
+  return map;
+}
+
+/** Set of playerId:statType keys on any Top 10 board for this game. */
+export async function top10KeySet(gameId: number): Promise<Set<string>> {
+  const map = await top10RankMap(gameId);
+  return new Set(map.keys());
+}

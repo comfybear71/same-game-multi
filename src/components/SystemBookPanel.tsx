@@ -1,15 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { lineTarget } from "@/lib/format";
+import { lineTarget, targetLabel } from "@/lib/format";
 import { minLineTarget } from "@/lib/predictions/modelLine";
+import type { Top10BoardResponse, Top10Row } from "@/lib/predictions/top10Board";
 import type {
   CardStyle,
   ChooserBook,
   PortfolioMetrics,
   SystemTicketView,
 } from "@/lib/system/portfolio";
+import type { StatType } from "@/db/schema";
+import { clearProbability } from "@/lib/predictions/probability";
 
 function pct(n: number | null | undefined): string {
   if (n == null || Number.isNaN(n)) return "—";
@@ -78,10 +81,13 @@ const CARD_TITLE: Record<string, string> = {
 export function SystemBookPanel({
   gameId,
   embedded = false,
+  top10Board = null,
 }: {
   gameId: number;
   /** When wrapped in CollapsibleSection — drop outer card + title block. */
   embedded?: boolean;
+  /** Optional Top 10 boards for in-hub swap picker. */
+  top10Board?: Top10BoardResponse | null;
 }) {
   const [tickets, setTickets] = useState<SystemTicketView[]>([]);
   const [metrics, setMetrics] = useState<PortfolioMetrics | null>(null);
@@ -94,6 +100,10 @@ export function SystemBookPanel({
   const [savingId, setSavingId] = useState<number | null>(null);
   const [nudgingLegId, setNudgingLegId] = useState<number | null>(null);
   const [excludingName, setExcludingName] = useState<string | null>(null);
+  const [swapLegId, setSwapLegId] = useState<number | null>(null);
+  const [swapStat, setSwapStat] = useState<StatType | null>(null);
+  const [swapWarnings, setSwapWarnings] = useState<string[]>([]);
+  const [swapping, setSwapping] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -256,6 +266,63 @@ export function SystemBookPanel({
     }
   }
 
+  async function swapLeg(legId: number, row: Top10Row) {
+    setSwapping(true);
+    setError(null);
+    setSwapWarnings([]);
+    try {
+      const confidence = clearProbability({
+        prediction: row.prediction,
+        line: row.line,
+        form: row.recentForm ?? [],
+      });
+      const res = await fetch(`/api/games/${gameId}/system-book`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          legId,
+          swap: {
+            playerId: row.playerId,
+            playerName: row.playerName,
+            team: row.team,
+            statType: row.statType,
+            line: row.line,
+            prediction: row.prediction,
+            confidence,
+          },
+        }),
+      });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        ticket?: SystemTicketView;
+        warnings?: string[];
+        error?: string;
+      };
+      if (!res.ok || !json.ok || !json.ticket) {
+        throw new Error(json.error ?? `Failed (${res.status})`);
+      }
+      setTickets((prev) =>
+        prev.map((t) => (t.id === json.ticket!.id ? json.ticket! : t)),
+      );
+      setSwapWarnings(json.warnings ?? []);
+      setSwapLegId(null);
+      setSwapStat(null);
+      // Refresh metrics
+      void load();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSwapping(false);
+    }
+  }
+
+  const swapOptions = useMemo(() => {
+    if (!top10Board || !swapStat) return [] as Top10Row[];
+    const m = top10Board.markets.find((x) => x.statType === swapStat);
+    if (!m) return [];
+    return [...m.home.rows, ...m.away.rows];
+  }, [top10Board, swapStat]);
+
   const graded = tickets.filter((t) => t.slipHit != null);
   const hits = graded.filter((t) => t.slipHit).length;
   const gameStake = tickets.reduce((s, t) => s + (t.stake ?? 0), 0);
@@ -266,16 +333,15 @@ export function SystemBookPanel({
       <div className="flex flex-wrap items-start justify-between gap-3">
         {embedded ? (
           <p className="text-sm text-slate-400">
-            Advanced helm portfolio — build personal multis on{" "}
-            <span className="text-slate-300">Top 10 boards</span> above first. Generate
-            here when you want the Lab-driven System book; 3-card chooser is optional.
+            Lab-driven Any / focus / FUN tickets. Expand a ticket to see why each
+            leg was picked, swap from Top 10, then lock stake + odds.
           </p>
         ) : (
           <div>
             <h2 className="text-lg font-semibold text-white">System book</h2>
             <p className="text-sm text-slate-400">
-              Lab portfolio builder — optional 3-card chooser (edge / hot / spread). Prefer
-              Top 10 boards for personal tickets.
+              Lab portfolio — Any / focus / FUN. Prefer the Top 10 hub for personal
+              tickets and System edits.
             </p>
           </div>
         )}
@@ -288,6 +354,14 @@ export function SystemBookPanel({
           {busy ? "Building…" : tickets.length || chooser ? "Refresh portfolio" : "Generate portfolio"}
         </button>
       </div>
+
+      {swapWarnings.length > 0 ? (
+        <ul className="space-y-0.5 text-xs text-amber-300/90">
+          {swapWarnings.map((w) => (
+            <li key={w}>⚠ {w}</li>
+          ))}
+        </ul>
+      ) : null}
 
       {loading ? <p className="text-sm text-slate-400">Loading…</p> : null}
       {error ? <p className="text-sm text-accent-loss">{error}</p> : null}
@@ -474,6 +548,12 @@ export function SystemBookPanel({
                           onExclude={(name, team) =>
                             void excludePlayer(name, team)
                           }
+                          onSwap={(legId, statType) => {
+                            setSwapLegId(legId);
+                            setSwapStat(statType);
+                            setSwapWarnings([]);
+                          }}
+                          canSwap={!!top10Board}
                         />
                       </div>
                     ) : null}
@@ -547,6 +627,12 @@ export function SystemBookPanel({
                       nudgingLegId={nudgingLegId}
                       onNudge={(id, target) => void nudgeLeg(id, target)}
                       onExclude={(name, team) => void excludePlayer(name, team)}
+                      onSwap={(legId, statType) => {
+                        setSwapLegId(legId);
+                        setSwapStat(statType);
+                        setSwapWarnings([]);
+                      }}
+                      canSwap={!!top10Board}
                     />
                   </div>
                 ) : null}
@@ -555,6 +641,63 @@ export function SystemBookPanel({
           })}
         </ul>
       )}
+
+      {swapLegId != null && swapStat ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-3 sm:items-center">
+          <div className="max-h-[80vh] w-full max-w-lg overflow-hidden rounded-xl border border-surface-border bg-surface-card shadow-xl">
+            <div className="flex items-center justify-between border-b border-surface-border px-3 py-2">
+              <div className="text-sm font-semibold text-white">
+                Swap from Top 10 · {swapStat}
+              </div>
+              <button
+                type="button"
+                className="text-slate-400 hover:text-white"
+                onClick={() => {
+                  setSwapLegId(null);
+                  setSwapStat(null);
+                }}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="max-h-[60vh] overflow-y-auto p-2">
+              {swapOptions.length === 0 ? (
+                <p className="p-3 text-sm text-slate-400">
+                  No Top 10 rows for this market yet.
+                </p>
+              ) : (
+                <ul className="divide-y divide-surface-border">
+                  {swapOptions.map((row) => (
+                    <li key={`${row.playerId}:${row.statType}`}>
+                      <button
+                        type="button"
+                        disabled={swapping}
+                        onClick={() => void swapLeg(swapLegId, row)}
+                        className="flex w-full items-center gap-2 px-2 py-2 text-left hover:bg-surface/60 disabled:opacity-40"
+                      >
+                        <span className="w-5 text-center text-[10px] text-slate-500">
+                          #{row.rank}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm text-white">
+                            {row.playerName}
+                          </div>
+                          <div className="text-[11px] text-slate-500">
+                            {targetLabel(row.line)}
+                            {row.odds != null ? ` · $${row.odds.toFixed(2)}` : ""}
+                            {" · "}
+                            {row.reason}
+                          </div>
+                        </div>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -567,6 +710,8 @@ function TicketLegs({
   nudgingLegId,
   onNudge,
   onExclude,
+  onSwap,
+  canSwap,
 }: {
   ticket: SystemTicketView;
   placed: boolean;
@@ -575,10 +720,18 @@ function TicketLegs({
   nudgingLegId: number | null;
   onNudge: (legId: number, target: number) => void;
   onExclude: (playerName: string, team: string | null) => void;
+  onSwap: (legId: number, statType: StatType) => void;
+  canSwap: boolean;
 }) {
   const locked = placed || ticket.slipHit != null || ticket.gradedAt != null;
   return (
     <>
+      {ticket.why ? (
+        <p className="rounded-md border border-emerald-500/20 bg-emerald-500/[0.05] px-2 py-1.5 text-[11px] leading-snug text-slate-300">
+          <span className="font-semibold text-emerald-300">Why this ticket · </span>
+          {ticket.why}
+        </p>
+      ) : null}
       <ul className="space-y-2">
         {ticket.legs.map((l) => {
           const target = lineTarget(l.line);
@@ -672,6 +825,16 @@ function TicketLegs({
                   <span className="tabular-nums text-slate-400">
                     {Math.round(l.confidence * 100)}%
                   </span>
+                  {!locked && canSwap ? (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => onSwap(l.id, l.statType)}
+                      className="rounded border border-sky-500/40 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-sky-300 hover:bg-sky-500/10 disabled:opacity-40"
+                    >
+                      Swap
+                    </button>
+                  ) : null}
                   {!locked ? (
                     <button
                       type="button"
@@ -684,6 +847,11 @@ function TicketLegs({
                   ) : null}
                 </span>
               </div>
+              {l.legWhy ? (
+                <p className="mt-1 text-[10px] leading-snug text-slate-500">
+                  {l.legWhy}
+                </p>
+              ) : null}
             </li>
           );
         })}
@@ -691,7 +859,7 @@ function TicketLegs({
       <p className="text-[10px] text-slate-600">
         {locked
           ? "🔒 Locked ticket — lines and EMG are frozen."
-          : "Use +/− for Sportsbet lines. Tap EMG if they’re an emergency."}
+          : "Use +/− for Sportsbet lines. Swap pulls from Top 10. EMG if they’re an emergency."}
       </p>
     </>
   );

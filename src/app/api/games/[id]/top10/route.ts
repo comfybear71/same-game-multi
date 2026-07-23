@@ -5,8 +5,12 @@ import { userIdForEmail } from "@/lib/data/bets";
 import { buildTop10Board } from "@/lib/predictions/top10Board";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
-export async function GET(_req: Request, { params }: { params: { id: string } }) {
+export async function GET(
+  _req: Request,
+  { params }: { params: { id: string } },
+) {
   const session = await auth();
   const email = session?.user?.email;
   if (!email) {
