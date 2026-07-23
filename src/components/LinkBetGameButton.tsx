@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 export type LinkGameOption = {
   id: number;
@@ -19,8 +19,26 @@ export function LinkBetGameButton({
 }) {
   const router = useRouter();
   const [gameId, setGameId] = useState("");
+  const [filter, setFilter] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const filtered = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    if (!q) return games;
+    const tokens = q.split(/\s+/).filter(Boolean);
+    return games.filter((g) => {
+      const hay = g.label.toLowerCase();
+      // Also match common nicknames not in the canonical label.
+      const aliases = hay
+        .replace("greater western sydney", "gws giants")
+        .replace("adelaide", "adelaide crows")
+        .replace("west coast", "eagles")
+        .replace("north melbourne", "kangaroos");
+      const blob = `${hay} ${aliases}`;
+      return tokens.every((t) => blob.includes(t));
+    });
+  }, [games, filter]);
 
   async function link() {
     const id = Number(gameId);
@@ -50,14 +68,28 @@ export function LinkBetGameButton({
       <p className="text-[11px] font-medium text-amber-200">
         Link round &amp; match
       </p>
+      <input
+        className="input text-xs"
+        placeholder="Filter e.g. 14 st kilda giants"
+        value={filter}
+        onChange={(e) => {
+          setFilter(e.target.value);
+          setGameId("");
+        }}
+        disabled={busy}
+      />
       <select
         className="input text-xs"
         value={gameId}
         onChange={(e) => setGameId(e.target.value)}
-        disabled={busy || games.length === 0}
+        disabled={busy || filtered.length === 0}
       >
-        <option value="">— who vs who —</option>
-        {games.map((g) => (
+        <option value="">
+          {filtered.length === 0
+            ? "— no matches —"
+            : `— who vs who (${filtered.length}) —`}
+        </option>
+        {filtered.map((g) => (
           <option key={g.id} value={g.id}>
             {g.label}
           </option>
