@@ -93,10 +93,13 @@ export function Top10BoardPanel({
   gameId,
   round = null,
   embedded = false,
+  /** Bumps when server-side predictions change (e.g. after Generate predictions). */
+  refreshKey = 0,
 }: {
   gameId: number;
   round?: number | null;
   embedded?: boolean;
+  refreshKey?: number;
 }) {
   const router = useRouter();
   const [market, setMarket] = useState<StatType>("disposals");
@@ -142,7 +145,17 @@ export function Top10BoardPanel({
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, refreshKey]);
+
+  useEffect(() => {
+    function onPredictionsGenerated(e: Event) {
+      const detail = (e as CustomEvent<{ gameId: number }>).detail;
+      if (detail?.gameId === gameId) void load();
+    }
+    window.addEventListener("sgm:predictions-generated", onPredictionsGenerated);
+    return () =>
+      window.removeEventListener("sgm:predictions-generated", onPredictionsGenerated);
+  }, [gameId, load]);
 
   const marketBoard = useMemo(
     () => board?.markets.find((m) => m.statType === market) ?? null,

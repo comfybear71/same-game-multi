@@ -16,6 +16,9 @@ export function GeneratePredictionsButton({ gameId }: { gameId: number }) {
       const json = await res.json();
       if (!res.ok || !json.ok) throw new Error(json.error || "Failed");
       setMsg(`${json.gen.playersProcessed} players, ${json.gen.predictionsWritten} predictions`);
+      window.dispatchEvent(
+        new CustomEvent("sgm:predictions-generated", { detail: { gameId } }),
+      );
       router.refresh();
     } catch (err) {
       setMsg((err as Error).message);

@@ -9,6 +9,7 @@
 import { and, eq } from "drizzle-orm";
 
 import { db } from "@/db";
+import { canonicalTeam } from "@/lib/afl/teams";
 import {
   bookmakerLines,
   games,
@@ -252,6 +253,9 @@ export async function buildTop10Board(
     };
   }
 
+  const homeC = canonicalTeam(game.home) ?? game.home;
+  const awayC = canonicalTeam(game.away) ?? game.away;
+
   const emergencies = await getEmergencyMatcher(gameId);
   const historyByKey =
     userId != null ? (await getPlayerBettingRecord(userId)).byKey : {};
@@ -325,11 +329,12 @@ export async function buildTop10Board(
     if (news?.status === "out") continue;
 
     const key = `${p.playerId}:${p.statType}`;
+    const team = canonicalTeam(p.team) ?? p.team;
     const raw: RawPlayerStat = {
       playerId: p.playerId,
       playerName: p.name,
       jumper: p.jumper,
-      team: p.team,
+      team,
       statType: p.statType,
       prediction: p.value,
       seasonAvg: seasonAvgByKey.get(key) ?? null,
@@ -341,24 +346,24 @@ export async function buildTop10Board(
       rungs: rungsByKey.get(key) ?? [],
     };
 
-    const teamKey = `${p.statType}:${p.team}`;
+    const teamKey = `${p.statType}:${team}`;
     const list = rawByStatTeam.get(teamKey) ?? [];
     list.push(raw);
     rawByStatTeam.set(teamKey, list);
   }
 
   const markets: Top10MarketBoard[] = STAT_TYPES.map((statType) => {
-    const homeRaw = (rawByStatTeam.get(`${statType}:${game.home}`) ?? []).sort(sortTop10);
-    const awayRaw = (rawByStatTeam.get(`${statType}:${game.away}`) ?? []).sort(sortTop10);
+    const homeRaw = (rawByStatTeam.get(`${statType}:${homeC}`) ?? []).sort(sortTop10);
+    const awayRaw = (rawByStatTeam.get(`${statType}:${awayC}`) ?? []).sort(sortTop10);
 
     return {
       statType,
       home: {
-        team: game.home,
+        team: homeC,
         rows: homeRaw.slice(0, TOP10_LIMIT).map((r, i) => toTop10Row(r, i + 1, prices)),
       },
       away: {
-        team: game.away,
+        team: awayC,
         rows: awayRaw.slice(0, TOP10_LIMIT).map((r, i) => toTop10Row(r, i + 1, prices)),
       },
     };
@@ -366,8 +371,8 @@ export async function buildTop10Board(
 
   return {
     gameId,
-    home: game.home,
-    away: game.away,
+    home: homeC,
+    away: awayC,
     markets,
     oddsSource,
   };

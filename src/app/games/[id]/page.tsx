@@ -127,6 +127,9 @@ export default async function GamePage({ params }: { params: { id: string } }) {
   }
 
   const hasData = board ? STAT_TYPES.some((s) => board!.byStat[s].length > 0) : false;
+  const top10RefreshKey = board
+    ? STAT_TYPES.reduce((sum, st) => sum + board!.byStat[st].length, 0)
+    : 0;
   const upcoming = game.commenceTime.getTime() > Date.now();
   const kickedOff = !upcoming && game.status !== "complete";
   const lineupNamed = lineupPlayers.filter((p) => p.lineupStatus !== "emergency").length;
@@ -279,7 +282,12 @@ export default async function GamePage({ params }: { params: { id: string } }) {
         description="DIY boards, Helm Suggest (with thinking), and System portfolio — question and edit before you log or lock."
         defaultOpen
       >
-        <Top10BoardPanel gameId={game.id} round={game.round} embedded />
+        <Top10BoardPanel
+          gameId={game.id}
+          round={game.round}
+          embedded
+          refreshKey={top10RefreshKey}
+        />
       </CollapsibleSection>
 
       {hasData && board ? (
