@@ -21,7 +21,7 @@ import {
   userIdForEmail,
   type EnrichedBetSlip,
 } from "@/lib/data/bets";
-import { getRecentResults, getUpcomingGames } from "@/lib/data/games";
+import { getLinkableGames } from "@/lib/data/games";
 import { deriveSlipStatus } from "@/lib/betTypes";
 import { rollUpSlips } from "@/lib/settle";
 import { marginVsTarget, signed, targetLabel } from "@/lib/format";
@@ -48,11 +48,8 @@ export default async function BetsPage({
     }
   }
   try {
-    const [upcoming, recent] = await Promise.all([
-      getUpcomingGames(30),
-      getRecentResults(12),
-    ]);
-    linkGames = [...upcoming, ...recent].map((g) => ({
+    const games = await getLinkableGames();
+    linkGames = games.map((g) => ({
       id: g.id,
       round: g.round ?? null,
       label: `R${g.round ?? "?"} · ${g.home} v ${g.away}`,

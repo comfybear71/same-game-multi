@@ -64,6 +64,34 @@ export async function getRecentResults(limit = 9): Promise<Game[]> {
     .limit(limit);
 }
 
+/**
+ * Fixtures for linking a bet slip (No-round picker / New bet game select).
+ * Includes upcoming, in-play (started but not complete), and a deep recent
+ * history — the old upcoming+12-results list stopped around R18 and dropped
+ * tonight's game once it kicked off.
+ */
+export async function getLinkableGames(opts?: {
+  upcomingLimit?: number;
+  recentLimit?: number;
+}): Promise<Game[]> {
+  const upcomingLimit = opts?.upcomingLimit ?? 40;
+  const recentLimit = opts?.recentLimit ?? 120;
+  const [upcoming, inPlay, recent] = await Promise.all([
+    getUpcomingGames(upcomingLimit),
+    getInPlayGames(),
+    getRecentResults(recentLimit),
+  ]);
+  const seen = new Set<number>();
+  const out: Game[] = [];
+  // Prefer soonest / in-play first, then deeper history.
+  for (const g of [...inPlay, ...upcoming, ...recent]) {
+    if (seen.has(g.id)) continue;
+    seen.add(g.id);
+    out.push(g);
+  }
+  return out;
+}
+
 export async function getGameById(id: number): Promise<Game | null> {
   const rows = await db.select().from(games).where(eq(games.id, id)).limit(1);
   return rows[0] ?? null;
