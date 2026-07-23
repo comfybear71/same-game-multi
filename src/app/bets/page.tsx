@@ -23,7 +23,11 @@ import { marginVsTarget, signed, targetLabel } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
-export default async function BetsPage() {
+export default async function BetsPage({
+  searchParams,
+}: {
+  searchParams?: { saved?: string; bet?: string; round?: string; noround?: string };
+}) {
   const session = await auth();
   const email = session?.user?.email;
 
@@ -56,6 +60,13 @@ export default async function BetsPage() {
 
   const summary = summarise(slips);
   const multiStats = analyseMultis(slips);
+  const justSaved = searchParams?.saved === "1";
+  const savedBetId = searchParams?.bet ? Number(searchParams.bet) : null;
+  const savedNoRound = searchParams?.noround === "1";
+  const savedSlip =
+    savedBetId != null && Number.isFinite(savedBetId)
+      ? slips.find((s) => s.id === savedBetId) ?? null
+      : null;
 
   return (
     <div className="space-y-6">
@@ -68,6 +79,34 @@ export default async function BetsPage() {
           + New bet
         </Link>
       </header>
+
+      {justSaved ? (
+        <div
+          className={`rounded-lg border px-3 py-2 text-sm ${
+            savedNoRound || (savedSlip && savedSlip.round == null)
+              ? "border-amber-500/40 bg-amber-500/10 text-amber-100"
+              : "border-accent-win/40 bg-accent-win/10 text-emerald-100"
+          }`}
+        >
+          {savedSlip ? (
+            <>
+              Saved slip #{savedSlip.id} · {savedSlip.legs.length} legs
+              {savedSlip.totalOdds != null ? ` · odds ${savedSlip.totalOdds}` : ""}
+              {savedSlip.round != null
+                ? ` · Round ${savedSlip.round}`
+                : " · under No round (expand below)"}
+              .
+            </>
+          ) : (
+            <>
+              Bet saved
+              {savedNoRound
+                ? " — check the No round section below if you don’t see it in Round 20."
+                : "."}
+            </>
+          )}
+        </div>
+      ) : null}
 
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label="Slips" value={String(summary.total)} />
@@ -154,17 +193,31 @@ function RoundSection({
   defaultOpen: boolean;
 }) {
   const s = summarise(group.slips);
+  const noRound = group.round == null;
   return (
-    <details open={defaultOpen} className="space-y-3">
+    <details open={defaultOpen || noRound} className="space-y-3">
       <summary className="flex cursor-pointer list-none items-center justify-between rounded-lg bg-surface-card px-3 py-2">
         <span className="text-sm font-semibold text-white">
-          {group.round != null ? `Round ${group.round}` : "No round"}
+          {noRound ? (
+            <span className="text-amber-300">
+              No round — link a game on these slips
+            </span>
+          ) : (
+            `Round ${group.round}`
+          )}
         </span>
         <span className="text-xs text-slate-400">
           {s.total} slip{s.total === 1 ? "" : "s"} · {s.won}W {s.lost}L
           {s.pending > 0 ? ` · ${s.pending} pending` : ""}
         </span>
       </summary>
+      {noRound ? (
+        <p className="px-1 text-xs text-amber-200/90">
+          Usually from an AI slip read that couldn&apos;t see the match header.
+          Slips still count for your record — open one and fix the fixture if needed,
+          or re-read with Adelaide v Collingwood visible in the screenshot.
+        </p>
+      ) : null}
       {/* Slips scroll horizontally within the round — scrollbar sits under the heading. */}
       <BetSlipScrollRow>
           {group.slips.map((slip) => (

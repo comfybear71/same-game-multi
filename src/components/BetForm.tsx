@@ -92,7 +92,13 @@ export function BetForm({ games }: { games: GameOption[] }) {
       });
       const json = await res.json();
       if (!res.ok || !json.ok) throw new Error(json.error || "save failed");
-      router.push("/bets");
+      const betId = typeof json.betId === "number" ? json.betId : null;
+      const q = new URLSearchParams();
+      q.set("saved", "1");
+      if (betId != null) q.set("bet", String(betId));
+      if (payload.round != null) q.set("round", String(payload.round));
+      else q.set("noround", "1");
+      router.push(`/bets?${q.toString()}`);
       router.refresh();
       return true;
     } catch (err) {
