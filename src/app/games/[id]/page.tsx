@@ -133,6 +133,7 @@ export default async function GamePage({ params }: { params: { id: string } }) {
   const upcoming = game.commenceTime.getTime() > Date.now();
   const kickedOff = !upcoming && game.status !== "complete";
   const lineupNamed = lineupPlayers.filter((p) => p.lineupStatus !== "emergency").length;
+  const needsPredictions = lineupNamed > 0 && top10RefreshKey === 0 && upcoming;
   const lineupEmg = lineupPlayers.length - lineupNamed;
   const lineupTitle =
     lineupPlayers.length === 0
@@ -273,7 +274,7 @@ export default async function GamePage({ params }: { params: { id: string } }) {
         <p className="text-sm text-slate-400">
           AFL Tables form — season average, last game, fantasy and projections.
         </p>
-        <GeneratePredictionsButton gameId={game.id} />
+        <GeneratePredictionsButton gameId={game.id} autoRun={needsPredictions} />
       </div>
 
       {/* One hub: DIY Top 10 + Helm Suggest + System portfolio */}

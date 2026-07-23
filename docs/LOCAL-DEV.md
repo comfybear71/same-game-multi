@@ -83,6 +83,9 @@ gh pr create --base master --title "Your title" --body "..."
 Describe what changed, why, and how you verified it (typecheck/lint/build,
 manual steps).
 
+See **[Release workflow](#release-workflow-pr--merge--tag--sync)** below for the
+full maintainer handoff (PR template, tag, Vercel, sync PC).
+
 ### 6. Merge safely
 
 - Wait for CI / review (if configured).
@@ -96,7 +99,114 @@ git pull origin master
 git branch -d feature/short-description
 ```
 
-## Troubleshooting auth
+---
+
+## Release workflow (PR → merge → tag → sync)
+
+Standard procedure for Stuart (merge on GitHub) + Cursor (prepare PR + release
+block). **Cursor does not auto-sync your PC** — step 5 is required after merge.
+
+### 1. Cursor / agent (after code is ready)
+
+- Work on a **feature branch** (not `master`).
+- Run `typecheck`, `lint`, `build` when changes are non-trivial.
+- Commit, push, open PR with `gh pr create`.
+- Reply with the **handoff layout** below (same structure every time).
+
+**Compare URL**
+```
+https://github.com/comfybear71/same-game-multi/compare/master...your-branch
+```
+
+**PR Title**
+```
+Short imperative title
+```
+
+**PR Description**
+```markdown
+## Summary
+…
+
+## Changes
+- src/… — …
+
+## Test plan
+- [x] npm run typecheck && npm run lint && npm run build
+- [ ] Vercel / manual …
+
+PR: #NNN
+```
+
+**Merge instructions**
+1. Open Compare URL (or PR #NNN)
+2. Squash and merge
+3. Delete branch
+4. Sync PC: `git checkout master && git pull origin master && git fetch --prune`
+
+**Release tag**
+
+| Field | Value |
+| --- | --- |
+| Tag name | `v0.2.N-YYYY-MM-DD` |
+| Target | `master` |
+| Title | `v0.2.N — …` |
+| Create via | `https://github.com/comfybear71/same-game-multi/releases/new?tag=…&target=master` |
+
+**Release description**
+```markdown
+## v0.2.N
+
+### Fixed
+- …
+
+### New
+- …
+```
+
+**Tag format:** `v{major}.{minor}.{patch}-YYYY-MM-DD` (AWST calendar date).
+Bump **patch** for fixes/small features; **minor** for larger features. Check
+latest tag: `git tag -l --sort=-creatordate | head -1`.
+
+### 2. Stuart on GitHub
+
+1. Review PR → **Squash and merge** into `master`.
+2. **Delete branch** (optional cleanup — does not trigger deploy).
+3. **Releases → New release** → choose tag from handoff block (create tag on
+   `master` if it does not exist) → paste title + description → Publish.
+
+### 3. Vercel
+
+- Deploys automatically when **`master` updates** (the squash merge push).
+- Deleting the feature branch is unrelated to deploy timing.
+- Check the Vercel dashboard if production looks stale (~1–2 min after merge).
+
+### 4. Sync PC with GitHub (required)
+
+GitHub and your PC are **not** mirrored until you pull (or ask Cursor to sync):
+
+```bash
+git checkout master
+git pull origin master
+git branch -d feature/your-branch    # if merged locally
+git fetch --prune                    # drop deleted remote branches
+```
+
+After this, local `master` matches GitHub `master` and matches what Vercel
+deployed.
+
+### Quick checklist
+
+| Step | Who | Done when |
+| --- | --- | --- |
+| PR opened + handoff block | Cursor | URL in chat |
+| Squash merge | Stuart | PR closed, merged |
+| Delete branch | Stuart | Branch gone on GitHub |
+| GitHub Release + tag | Stuart | Tag visible under Releases |
+| Vercel production | Automatic | Latest deploy from `master` |
+| `git pull` on PC | Stuart or Cursor | `git status` on `master`, clean vs origin |
+
+---
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |

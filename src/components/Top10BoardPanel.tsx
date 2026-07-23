@@ -16,6 +16,10 @@ import {
   MIN_LEGS,
 } from "@/lib/predictions/suggestLimits";
 import type { Top10BoardResponse, Top10Row } from "@/lib/predictions/top10Board";
+import {
+  PREDICTIONS_GENERATED,
+  type PredictionsGeneratedDetail,
+} from "@/components/predictionsGenerated";
 
 const MARKETS: { key: StatType; label: string; short: string }[] = [
   { key: "disposals", label: "Disposals", short: "Disp" },
@@ -132,10 +136,14 @@ export function Top10BoardPanel({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/games/${gameId}/top10`);
-      const json = await res.json();
+      const res = await fetch(`/api/games/${gameId}/top10`, {
+        cache: "no-store",
+        headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
+      });
+      const json = (await res.json()) as { ok?: boolean; error?: string } & Top10BoardResponse;
       if (!res.ok || !json.ok) throw new Error(json.error || "Failed to load boards");
-      setBoard(json as Top10BoardResponse);
+      const { ok: _ok, error: _err, ...boardData } = json;
+      setBoard(boardData as Top10BoardResponse);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -149,12 +157,18 @@ export function Top10BoardPanel({
 
   useEffect(() => {
     function onPredictionsGenerated(e: Event) {
-      const detail = (e as CustomEvent<{ gameId: number }>).detail;
-      if (detail?.gameId === gameId) void load();
+      const detail = (e as CustomEvent<PredictionsGeneratedDetail>).detail;
+      if (detail?.gameId !== gameId) return;
+      if (detail.top10) {
+        setBoard(detail.top10);
+        setLoading(false);
+        setError(null);
+        return;
+      }
+      void load();
     }
-    window.addEventListener("sgm:predictions-generated", onPredictionsGenerated);
-    return () =>
-      window.removeEventListener("sgm:predictions-generated", onPredictionsGenerated);
+    window.addEventListener(PREDICTIONS_GENERATED, onPredictionsGenerated);
+    return () => window.removeEventListener(PREDICTIONS_GENERATED, onPredictionsGenerated);
   }, [gameId, load]);
 
   const marketBoard = useMemo(

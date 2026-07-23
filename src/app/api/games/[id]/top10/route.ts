@@ -2,9 +2,11 @@ import { NextResponse } from "next/server";
 
 import { auth } from "@/lib/auth";
 import { userIdForEmail } from "@/lib/data/bets";
+import { NO_STORE_HEADERS } from "@/lib/http/noStoreHeaders";
 import { buildTop10Board } from "@/lib/predictions/top10Board";
 
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
 export const maxDuration = 60;
 
 export async function GET(
@@ -26,7 +28,7 @@ export async function GET(
 
   try {
     const board = await buildTop10Board(gameId, userId);
-    return NextResponse.json({ ok: true, ...board });
+    return NextResponse.json({ ok: true, ...board }, { headers: NO_STORE_HEADERS });
   } catch (err) {
     return NextResponse.json(
       { ok: false, error: (err as Error).message },

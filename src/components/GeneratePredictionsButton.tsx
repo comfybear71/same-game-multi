@@ -1,38 +1,70 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-export function GeneratePredictionsButton({ gameId }: { gameId: number }) {
+import { dispatchPredictionsGenerated } from "@/components/predictionsGenerated";
+import type { Top10BoardResponse } from "@/lib/predictions/top10Board";
+
+export function GeneratePredictionsButton({
+  gameId,
+  /** When true, run once on mount if lineup exists but predictions are missing. */
+  autoRun = false,
+}: {
+  gameId: number;
+  autoRun?: boolean;
+}) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const autoRan = useRef(false);
 
-  async function run() {
+  const run = useCallback(async () => {
     setLoading(true);
     setMsg(null);
     try {
-      const res = await fetch(`/api/games/${gameId}/predict`, { method: "POST" });
-      const json = await res.json();
-      if (!res.ok || !json.ok) throw new Error(json.error || "Failed");
+      const res = await fetch(`/api/games/${gameId}/predict`, {
+        method: "POST",
+        cache: "no-store",
+      });
+      const json = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        gen?: { playersProcessed: number; predictionsWritten: number };
+        top10?: Top10BoardResponse;
+      };
+      if (!res.ok || !json.ok || !json.gen) throw new Error(json.error || "Failed");
       setMsg(`${json.gen.playersProcessed} players, ${json.gen.predictionsWritten} predictions`);
-      window.dispatchEvent(
-        new CustomEvent("sgm:predictions-generated", { detail: { gameId } }),
-      );
+      dispatchPredictionsGenerated({ gameId, top10: json.top10 });
       router.refresh();
     } catch (err) {
       setMsg((err as Error).message);
     } finally {
       setLoading(false);
     }
-  }
+  }, [gameId, router]);
+
+  useEffect(() => {
+    if (!autoRun || autoRan.current) return;
+    autoRan.current = true;
+    void run();
+  }, [autoRun, run]);
+
+  const label = loading
+    ? "Generating…"
+    : autoRun
+      ? "Regenerate predictions"
+      : "Generate predictions";
 
   return (
     <div className="flex flex-wrap items-center gap-3">
-      <button className="btn" onClick={run} disabled={loading}>
-        {loading ? "Generating…" : "Generate predictions"}
+      {loading ? (
+        <span className="text-sm text-slate-400">Generating predictions…</span>
+      ) : null}
+      <button className="btn" onClick={() => void run()} disabled={loading}>
+        {label}
       </button>
-      {msg ? <span className="text-sm text-slate-400">{msg}</span> : null}
+      {!loading && msg ? <span className="text-sm text-slate-400">{msg}</span> : null}
     </div>
   );
 }
