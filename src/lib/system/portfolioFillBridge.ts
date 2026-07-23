@@ -5,10 +5,12 @@
 
 import { getPlayerBettingRecord, playerRecordKey } from "@/lib/data/bets";
 import type { BenchmarkBand, GameBenchmarkMap } from "@/lib/data/leaders";
+import { clearProbability } from "@/lib/predictions/probability";
 import {
   listModelCandidateLegs,
   type SuggestedLeg,
 } from "@/lib/predictions/suggest";
+import { top10RankMap } from "@/lib/predictions/top10Board";
 import {
   computeEdgeModifiers,
   type EdgeScoreWeights,
@@ -35,6 +37,9 @@ import {
   type PortfolioMetrics,
   type TicketSlot,
 } from "@/lib/system/portfolioFill";
+
+/** Soft-score boost when the leg appears on that market's Top 10 board. */
+export const TOP10_SOFT_BONUS = 18;
 
 export function suggestedLegToFillCandidate(
   leg: SuggestedLeg,
@@ -129,19 +134,47 @@ export async function loadFillPool(
   const historyByKey =
     userId != null ? (await getPlayerBettingRecord(userId)).byKey : {};
 
+  let ranks = new Map<
+    string,
+    { rank: number; team: string; line: number; seasonAvg: number | null }
+  >();
+  try {
+    ranks = await top10RankMap(gameId);
+  } catch {
+    ranks = new Map();
+  }
+
   let pool = legs.map((leg) => {
     const band = bands.get(`${leg.playerId}:${leg.statType}`) ?? "unknown";
     const history =
       historyByKey[playerRecordKey(leg.playerName, leg.statType)] ?? null;
-    return suggestedLegToFillCandidate(
-      { ...leg, benchmark: band },
-      band,
-      history,
-    );
+    const top = ranks.get(`${leg.playerId}:${leg.statType}`);
+
+    // Prefer Top 10 board line (near season avg / market) over highest clearable rung.
+    let aligned: SuggestedLeg = { ...leg, benchmark: band };
+    if (top && Number.isFinite(top.line)) {
+      const confidence = clearProbability({
+        prediction: leg.prediction,
+        line: top.line,
+        form: leg.recentForm ?? [],
+      });
+      aligned = {
+        ...aligned,
+        line: top.line,
+        confidence,
+        edge: leg.prediction - top.line,
+      };
+    }
+
+    const candidate = suggestedLegToFillCandidate(aligned, band, history);
+    if (!top) return candidate;
+    return {
+      ...candidate,
+      softScore: candidate.softScore + TOP10_SOFT_BONUS,
+    };
   });
 
-  const useEdge =
-    opts?.edgePackage ?? isPortfolioEdgeScoreEnabled();
+  const useEdge = opts?.edgePackage ?? isPortfolioEdgeScoreEnabled();
   if (!useEdge) return pool;
 
   const [prices, leaders] = await Promise.all([

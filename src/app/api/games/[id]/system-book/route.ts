@@ -7,12 +7,15 @@ import {
   excludePlayerFromSystemBook,
   getSystemBookResponse,
   previewSystemPortfolio,
+  swapSystemTicketLeg,
   updateSystemTicketLegTarget,
   updateSystemTicketPlacement,
   type CardStyle,
+  type SwapLegInput,
 } from "@/lib/system/portfolio";
 import { isPortfolioEdgeScoreEnabled } from "@/lib/system/portfolioFill";
 import { voidSystemTicketAndReload } from "@/lib/system/voidTicket";
+import type { StatType } from "@/db/schema";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -138,11 +141,12 @@ export async function POST(
 }
 
 /**
- * Update stake / placed odds, void a ticket, nudge a leg, or exclude EMG.
+ * Update stake / placed odds, void a ticket, nudge a leg, swap a leg, or exclude EMG.
  * Body either:
  *   { ticketId, stake?, placedOdds? }
  *   { ticketId, voided: true|false, legId? } — stake returned when voided
  *   { legId, target }
+ *   { legId, swap: { playerId, playerName, team?, statType, line, prediction, confidence? } }
  *   { excludePlayer: { playerName, team? } }
  */
 export async function PATCH(
@@ -165,6 +169,7 @@ export async function PATCH(
     voided?: boolean;
     legId?: number;
     target?: number;
+    swap?: SwapLegInput & { team?: string | null };
     excludePlayer?: { playerName?: string; team?: string | null };
   };
   try {
@@ -183,6 +188,40 @@ export async function PATCH(
       return NextResponse.json({ ok: true, tickets });
     }
 
+    if (body.legId != null && body.swap != null) {
+      const swap = body.swap;
+      if (
+        !Number.isFinite(swap.playerId) ||
+        !swap.playerName ||
+        !swap.statType ||
+        !Number.isFinite(swap.line) ||
+        !Number.isFinite(swap.prediction)
+      ) {
+        return NextResponse.json(
+          { error: "swap requires playerId, playerName, statType, line, prediction" },
+          { status: 400 },
+        );
+      }
+      const result = await swapSystemTicketLeg(Number(body.legId), {
+        playerId: Number(swap.playerId),
+        playerName: String(swap.playerName),
+        team: swap.team ?? null,
+        statType: swap.statType as StatType,
+        line: Number(swap.line),
+        prediction: Number(swap.prediction),
+        confidence:
+          swap.confidence != null ? Number(swap.confidence) : undefined,
+      });
+      if (!result || result.ticket.gameId !== gameId) {
+        return NextResponse.json({ error: "leg not found" }, { status: 404 });
+      }
+      return NextResponse.json({
+        ok: true,
+        ticket: result.ticket,
+        warnings: result.warnings,
+      });
+    }
+
     if (body.legId != null && body.target != null) {
       const ticket = await updateSystemTicketLegTarget(
         Number(body.legId),
@@ -191,13 +230,15 @@ export async function PATCH(
       if (!ticket || ticket.gameId !== gameId) {
         return NextResponse.json({ error: "leg not found" }, { status: 404 });
       }
-      return NextResponse.json({ ok: true, ticket });
+      const book = await getSystemBookResponse(gameId);
+      const withWhy = book.tickets.find((t) => t.id === ticket.id) ?? ticket;
+      return NextResponse.json({ ok: true, ticket: withWhy });
     }
 
     const ticketId = Number(body.ticketId);
     if (!Number.isFinite(ticketId)) {
       return NextResponse.json(
-        { error: "ticketId, legId+target, or excludePlayer required" },
+        { error: "ticketId, legId+target, legId+swap, or excludePlayer required" },
         { status: 400 },
       );
     }

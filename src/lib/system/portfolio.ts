@@ -42,6 +42,7 @@ import { loadBookPricesForGame, pickPrice } from "@/lib/system/oddsPrices";
 import {
   isPortfolioDraftFillEnabled,
   isPortfolioEdgeScoreEnabled,
+  resolveStatFamily,
   type PortfolioMetrics,
 } from "@/lib/system/portfolioFill";
 import {
@@ -56,6 +57,7 @@ import {
   runPortfolioFill,
   strategiesToSlots,
 } from "@/lib/system/portfolioFillBridge";
+import { top10RankMap } from "@/lib/predictions/top10Board";
 
 export { computeCashReturn };
 export type { PortfolioMetrics };
@@ -103,6 +105,8 @@ export interface SystemTicketView {
   legCount: number;
   tier: string;
   label: string;
+  /** Plain-English ticket story (playbook / FUN / Any). */
+  why?: string | null;
   modelledChance: number | null;
   estOdds: number | null;
   placedOdds: number | null;
@@ -135,6 +139,8 @@ export interface SystemTicketView {
     edgeBadge?: LegEdgeBadge | null;
     /** Present when PORTFOLIO_EDGE_SCORE on and player was top-3 last game. */
     hotBadge?: LegHotBadge | null;
+    /** Why this leg made the System cut (Top10 rank, appearances, etc.). */
+    legWhy?: string | null;
   }[];
 }
 
@@ -210,13 +216,113 @@ export async function getSystemBookResponse(
   gameId: number,
 ): Promise<SystemBookResponse> {
   const base = await getSystemBook(gameId);
-  const tickets = await attachEdgeHotBadges(gameId, base);
+  const withBadges = await attachEdgeHotBadges(gameId, base);
+  const tickets = await attachSystemWhy(gameId, withBadges);
   return {
     tickets,
     metrics: bookMetricsFromViews(tickets),
     draftFillEnabled: isPortfolioDraftFillEnabled(),
     edgeScoreEnabled: isPortfolioEdgeScoreEnabled(),
   };
+}
+
+function shortStat(s: StatType): string {
+  switch (s) {
+    case "disposals":
+      return "Disp";
+    case "marks":
+      return "Marks";
+    case "tackles":
+      return "Tck";
+    case "goals":
+      return "Goals";
+    default:
+      return s;
+  }
+}
+
+function ticketWhyBlurb(t: SystemTicketView): string {
+  if (t.tier === "fun") {
+    return "FUN flutter — long Any lottery (≥10 legs), core-free leftovers the draft passed. Hedge against the book being wrong.";
+  }
+  if (t.focus === "any") {
+    return "Any banker — mixed markets from the Lab/H2H playbook. Snake-drafted with appearance caps so elites aren't cloned across every ticket.";
+  }
+  const focus = t.focus.charAt(0).toUpperCase() + t.focus.slice(1);
+  return `${focus} · ${t.legCount} legs — Lab recipe slot. Prefer Top 10 shortlist names; diversify via draft penalties / satellite rules.`;
+}
+
+/** Attach ticket + per-leg why from Top 10 ranks and book appearance counts. */
+export async function attachSystemWhy(
+  gameId: number,
+  tickets: SystemTicketView[],
+): Promise<SystemTicketView[]> {
+  if (tickets.length === 0) return tickets;
+
+  let ranks = new Map<
+    string,
+    { rank: number; team: string; line: number; seasonAvg: number | null }
+  >();
+  try {
+    ranks = await top10RankMap(gameId);
+  } catch {
+    ranks = new Map();
+  }
+
+  const apps = new Map<string, number>();
+  for (const t of tickets) {
+    if (t.tier === "fun") continue;
+    for (const l of t.legs) {
+      if (l.playerId == null) continue;
+      const family = resolveStatFamily(l.statType);
+      const k = `${l.playerId}:${family}`;
+      apps.set(k, (apps.get(k) ?? 0) + 1);
+    }
+  }
+
+  return tickets.map((t) => ({
+    ...t,
+    why: t.why ?? ticketWhyBlurb(t),
+    legs: t.legs.map((l) => {
+      const parts: string[] = [];
+      if (l.playerId != null) {
+        const top = ranks.get(`${l.playerId}:${l.statType}`);
+        if (top) {
+          parts.push(`Top10 #${top.rank} ${shortStat(l.statType)}`);
+        } else {
+          parts.push(`Outside Top 10 ${shortStat(l.statType)}`);
+        }
+        const family = resolveStatFamily(l.statType);
+        const n = apps.get(`${l.playerId}:${family}`) ?? 0;
+        if (n > 1 && t.tier !== "fun") {
+          parts.push(`${n}× in book`);
+        } else if (n === 1 && t.tier !== "fun") {
+          parts.push("1st in book");
+        }
+      }
+      if (l.benchmark && l.benchmark !== "unknown") {
+        parts.push(
+          l.benchmark === "elite"
+            ? "Elite"
+            : l.benchmark === "above"
+              ? "Above"
+              : l.benchmark === "below"
+                ? "Below"
+                : "Avg",
+        );
+      }
+      if (l.seasonAvg != null) {
+        parts.push(`avg ${Math.round(l.seasonAvg * 10) / 10}`);
+      }
+      parts.push(`${Math.round(l.confidence * 100)}% model`);
+      if (l.edgeBadge) {
+        const e = Math.round(l.edgeBadge.edge * 1000) / 10;
+        parts.push(e >= 0 ? `edge +${e}%` : `taxed ${e}%`);
+      }
+      if (l.hotBadge) parts.push(`HOT ${l.hotBadge.label}`);
+      return { ...l, legWhy: parts.join(" · ") };
+    }),
+  }));
 }
 
 /** Label from strategy key; prefer actual filled leg count when known. */
@@ -590,8 +696,8 @@ export async function updateSystemTicketPlacement(
     .set({ stake, placedOdds, cashReturn })
     .where(eq(systemTickets.id, ticketId));
 
-  const book = await getSystemBook(existing.gameId);
-  return book.find((t) => t.id === ticketId) ?? null;
+  const book = await getSystemBookResponse(existing.gameId);
+  return book.tickets.find((t) => t.id === ticketId) ?? null;
 }
 
 /**
@@ -686,8 +792,160 @@ export async function updateSystemTicketLegTarget(
     })
     .where(eq(systemTickets.id, ticket.id));
 
-  const book = await getSystemBook(ticket.gameId);
-  return book.find((t) => t.id === ticket.id) ?? null;
+  const book = await getSystemBookResponse(ticket.gameId);
+  return book.tickets.find((t) => t.id === ticket.id) ?? null;
+}
+
+export type SwapLegInput = {
+  playerId: number;
+  playerName: string;
+  team: string | null;
+  statType: StatType;
+  line: number;
+  prediction: number;
+  confidence?: number;
+};
+
+export type SwapLegResult = {
+  ticket: SystemTicketView;
+  warnings: string[];
+};
+
+/**
+ * Replace a System book leg with another player×market before lock/grade.
+ * Warns on clone / team-cap pressure; does not hard-block (punter can override).
+ */
+export async function swapSystemTicketLeg(
+  legId: number,
+  next: SwapLegInput,
+): Promise<SwapLegResult | null> {
+  const [leg] = await db
+    .select()
+    .from(systemTicketLegs)
+    .where(eq(systemTicketLegs.id, legId))
+    .limit(1);
+  if (!leg) return null;
+
+  const [ticket] = await db
+    .select()
+    .from(systemTickets)
+    .where(eq(systemTickets.id, leg.ticketId))
+    .limit(1);
+  if (!ticket) return null;
+  if (ticket.gradedAt != null || ticket.slipHit != null) {
+    throw new Error("Can't swap legs after the ticket is graded");
+  }
+  if (ticket.stake != null && ticket.placedOdds != null) {
+    throw new Error("Unlock stake/odds first — ticket is locked");
+  }
+
+  const warnings: string[] = [];
+  const siblings = await db
+    .select()
+    .from(systemTicketLegs)
+    .where(eq(systemTicketLegs.ticketId, ticket.id));
+
+  const sameOnTicket = siblings.some(
+    (s) =>
+      s.id !== legId &&
+      s.playerId === next.playerId &&
+      s.statType === next.statType,
+  );
+  if (sameOnTicket) {
+    warnings.push("Same player×market already on this ticket");
+  }
+
+  const team = next.team ?? "?";
+  const otherTeams = siblings
+    .filter((s) => s.id !== legId)
+    .map((s) => s.team ?? "?");
+  const teamCount = otherTeams.filter((t) => t === team).length + 1;
+  const cap = Math.ceil(siblings.length * 0.5);
+  if (teamCount > cap) {
+    warnings.push(
+      `Team lean warning: ${teamCount}/${siblings.length} legs from ${team} (soft cap ~${cap})`,
+    );
+  }
+
+  // Book-wide clone warning (non-FUN)
+  if (ticket.tier !== "fun") {
+    const book = await getSystemBook(ticket.gameId);
+    let apps = 0;
+    for (const t of book) {
+      if (t.tier === "fun" || t.id === ticket.id) continue;
+      for (const l of t.legs) {
+        if (l.playerId === next.playerId && l.statType === next.statType) {
+          apps += 1;
+        }
+      }
+    }
+    if (apps >= 1) {
+      warnings.push(
+        `Already on ${apps} other non-FUN ticket(s) — anti-clone diversification`,
+      );
+    }
+  }
+
+  let form: number[] = [];
+  const [feat] = await db
+    .select({ recentForm: playerGameFeatures.recentForm })
+    .from(playerGameFeatures)
+    .where(
+      and(
+        eq(playerGameFeatures.playerId, next.playerId),
+        eq(playerGameFeatures.gameId, ticket.gameId),
+        eq(playerGameFeatures.statType, next.statType),
+      ),
+    )
+    .limit(1);
+  form = feat?.recentForm ?? [];
+
+  const confidence =
+    next.confidence != null && Number.isFinite(next.confidence)
+      ? next.confidence
+      : clearProbability({
+          prediction: next.prediction,
+          line: next.line,
+          form,
+        });
+
+  await db
+    .update(systemTicketLegs)
+    .set({
+      playerId: next.playerId,
+      playerName: next.playerName,
+      team: next.team,
+      statType: next.statType,
+      line: next.line,
+      prediction: next.prediction,
+      confidence,
+    })
+    .where(eq(systemTicketLegs.id, legId));
+
+  const legs = await db
+    .select()
+    .from(systemTicketLegs)
+    .where(eq(systemTicketLegs.ticketId, ticket.id));
+
+  const combinedChance =
+    legs.length > 0 ? legs.reduce((p, l) => p * l.confidence, 1) : null;
+  const estOdds =
+    legs.length > 0
+      ? Math.round(
+          legs.reduce((p, l) => p * (1 / Math.max(l.confidence, 0.05)), 1) *
+            100,
+        ) / 100
+      : null;
+
+  await db
+    .update(systemTickets)
+    .set({ modelledChance: combinedChance, estOdds })
+    .where(eq(systemTickets.id, ticket.id));
+
+  const refreshed = await getSystemBookResponse(ticket.gameId);
+  const view = refreshed.tickets.find((t) => t.id === ticket.id);
+  if (!view) return null;
+  return { ticket: view, warnings };
 }
 
 function modelStatsFromLegs(
