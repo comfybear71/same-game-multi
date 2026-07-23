@@ -1,11 +1,15 @@
 import { NextResponse } from "next/server";
 
 import { auth } from "@/lib/auth";
+import { userIdForEmail } from "@/lib/data/bets";
+import { NO_STORE_HEADERS } from "@/lib/http/noStoreHeaders";
 import { getLineupNames } from "@/lib/ingest/lineup";
 import { generatePredictions } from "@/lib/predictions/generate";
+import { buildTop10Board } from "@/lib/predictions/top10Board";
 
 // Generate Models A/B/C from the uploaded lineup (AFL Tables stats).
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
 export const maxDuration = 60;
 
 export async function POST(_req: Request, { params }: { params: { id: string } }) {
@@ -27,7 +31,10 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
           : "Couldn't resolve players from AFL Tables — check names in the lineup.";
       return NextResponse.json({ ok: false, error: hint }, { status: 400 });
     }
-    return NextResponse.json({ ok: true, gen });
+    const email = session.user.email;
+    const userId = email ? await userIdForEmail(email) : null;
+    const top10 = await buildTop10Board(gameId, userId);
+    return NextResponse.json({ ok: true, gen, top10 }, { headers: NO_STORE_HEADERS });
   } catch (err) {
     return NextResponse.json(
       { ok: false, error: (err as Error).message },

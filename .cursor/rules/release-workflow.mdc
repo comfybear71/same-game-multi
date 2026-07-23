@@ -1,0 +1,51 @@
+---
+description: PR handoff, release tag, and post-merge PC sync procedure
+alwaysApply: true
+---
+
+# Release workflow
+
+When code is ready to ship, follow `docs/LOCAL-DEV.md` § **Release workflow**.
+
+## Agent responsibilities
+
+1. Feature branch only — never commit directly to `master` unless asked.
+2. Before PR: `npm run typecheck && npm run lint && npm run build` for non-trivial TS changes.
+3. Push branch, `gh pr create --base master`, return the **handoff block**:
+
+```markdown
+## PR
+**URL:** …
+**Title:** …
+
+### Description
+- …
+
+## Test plan
+- [ ] …
+
+## Release (after squash merge)
+**Tag:** v0.2.N-YYYY-MM-DD
+**Release title:** v0.2.N — …
+**Release description:**
+- …
+```
+
+- Tag format: `v{major}.{minor}.{patch}-YYYY-MM-DD`. Bump patch from latest tag (`git tag -l --sort=-creatordate`).
+- Do **not** push tags or merge PRs unless the user explicitly asks.
+
+## Maintainer (Stuart) on GitHub
+
+Squash merge → delete branch → create Release from handoff tag/title/description.
+
+## After merge — sync PC (not automatic)
+
+Vercel deploys when `master` updates. Deleting the branch does not trigger deploy.
+
+Tell the user to run (or run if asked):
+
+```bash
+git checkout master && git pull origin master && git fetch --prune
+```
+
+PC matches GitHub only after `git pull`.

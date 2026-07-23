@@ -40,7 +40,10 @@ secrets** — see Security below.
 - **Commits:** clear, descriptive, imperative subject lines. Keep related
   changes together. Complete files only — no partial snippets.
 - **PRs:** describe what changed, why, how verified (`typecheck` / `lint` /
-  `build`), and any new env vars.
+  `build`), and any new env vars. After opening a PR, include the **handoff block**
+  (PR URL + proposed tag/release) — see `docs/LOCAL-DEV.md` § Release workflow.
+- **After maintainer merges on GitHub:** run `git checkout master && git pull`
+  (or ask the user to sync) — Cursor does **not** auto-mirror the PC.
 - **Secrets in code:** never hardcode. Every secret comes from an env var listed
   in `.env.example`.
 
