@@ -5,6 +5,10 @@ import { CollapsibleSection } from "@/components/CollapsibleSection";
 import { DeleteBetButton } from "@/components/DeleteBetButton";
 import { EditLegMarket } from "@/components/EditLegMarket";
 import { LegResultControls } from "@/components/LegResultControls";
+import {
+  LinkBetGameButton,
+  type LinkGameOption,
+} from "@/components/LinkBetGameButton";
 import { MultiStatsPanel } from "@/components/MultiStatsPanel";
 import { RunMigrationsButton } from "@/components/RunMigrationsButton";
 import { UploadResultButton } from "@/components/UploadResultButton";
@@ -17,18 +21,24 @@ import {
   userIdForEmail,
   type EnrichedBetSlip,
 } from "@/lib/data/bets";
+import { getLinkableGames } from "@/lib/data/games";
 import { deriveSlipStatus } from "@/lib/betTypes";
 import { rollUpSlips } from "@/lib/settle";
 import { marginVsTarget, signed, targetLabel } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
-export default async function BetsPage() {
+export default async function BetsPage({
+  searchParams,
+}: {
+  searchParams?: { saved?: string; bet?: string; round?: string; noround?: string };
+}) {
   const session = await auth();
   const email = session?.user?.email;
 
   let slips: EnrichedBetSlip[] = [];
   let dbError: string | null = null;
+  let linkGames: LinkGameOption[] = [];
   if (email) {
     try {
       const userId = await userIdForEmail(email);
@@ -36,6 +46,16 @@ export default async function BetsPage() {
     } catch (err) {
       dbError = (err as Error).message;
     }
+  }
+  try {
+    const games = await getLinkableGames();
+    linkGames = games.map((g) => ({
+      id: g.id,
+      round: g.round ?? null,
+      label: `R${g.round ?? "?"} · ${g.home} v ${g.away}`,
+    }));
+  } catch {
+    linkGames = [];
   }
 
   // Fix slips still marked lost/won when leg results say void (stake returned).
@@ -56,6 +76,13 @@ export default async function BetsPage() {
 
   const summary = summarise(slips);
   const multiStats = analyseMultis(slips);
+  const justSaved = searchParams?.saved === "1";
+  const savedBetId = searchParams?.bet ? Number(searchParams.bet) : null;
+  const savedNoRound = searchParams?.noround === "1";
+  const savedSlip =
+    savedBetId != null && Number.isFinite(savedBetId)
+      ? slips.find((s) => s.id === savedBetId) ?? null
+      : null;
 
   return (
     <div className="space-y-6">
@@ -68,6 +95,34 @@ export default async function BetsPage() {
           + New bet
         </Link>
       </header>
+
+      {justSaved ? (
+        <div
+          className={`rounded-lg border px-3 py-2 text-sm ${
+            savedNoRound || (savedSlip && savedSlip.round == null)
+              ? "border-amber-500/40 bg-amber-500/10 text-amber-100"
+              : "border-accent-win/40 bg-accent-win/10 text-emerald-100"
+          }`}
+        >
+          {savedSlip ? (
+            <>
+              Saved slip #{savedSlip.id} · {savedSlip.legs.length} legs
+              {savedSlip.totalOdds != null ? ` · odds ${savedSlip.totalOdds}` : ""}
+              {savedSlip.round != null
+                ? ` · Round ${savedSlip.round}`
+                : " · under No round (expand below)"}
+              .
+            </>
+          ) : (
+            <>
+              Bet saved
+              {savedNoRound
+                ? " — check the No round section below if you don’t see it in Round 20."
+                : "."}
+            </>
+          )}
+        </div>
+      ) : null}
 
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label="Slips" value={String(summary.total)} />
@@ -104,7 +159,12 @@ export default async function BetsPage() {
       ) : (
         <div className="space-y-3">
           {groupByRound(slips).map((group, i) => (
-            <RoundSection key={group.key} group={group} defaultOpen={i === 0} />
+            <RoundSection
+              key={group.key}
+              group={group}
+              defaultOpen={i === 0}
+              linkGames={linkGames}
+            />
           ))}
         </div>
       )}
@@ -149,22 +209,38 @@ function groupByRound(slips: EnrichedBetSlip[]): RoundGroup[] {
 function RoundSection({
   group,
   defaultOpen,
+  linkGames,
 }: {
   group: RoundGroup;
   defaultOpen: boolean;
+  linkGames: LinkGameOption[];
 }) {
   const s = summarise(group.slips);
+  const noRound = group.round == null;
   return (
-    <details open={defaultOpen} className="space-y-3">
+    <details open={defaultOpen || noRound} className="space-y-3">
       <summary className="flex cursor-pointer list-none items-center justify-between rounded-lg bg-surface-card px-3 py-2">
         <span className="text-sm font-semibold text-white">
-          {group.round != null ? `Round ${group.round}` : "No round"}
+          {noRound ? (
+            <span className="text-amber-300">
+              No round — link a game on these slips
+            </span>
+          ) : (
+            `Round ${group.round}`
+          )}
         </span>
         <span className="text-xs text-slate-400">
           {s.total} slip{s.total === 1 ? "" : "s"} · {s.won}W {s.lost}L
           {s.pending > 0 ? ` · ${s.pending} pending` : ""}
         </span>
       </summary>
+      {noRound ? (
+        <p className="px-1 text-xs text-amber-200/90">
+          Usually from an AI slip read that couldn&apos;t see the match header.
+          Pick who vs who on each slip to move it into the right round for live
+          tracking and auto-settle.
+        </p>
+      ) : null}
       {/* Slips scroll horizontally within the round — scrollbar sits under the heading. */}
       <BetSlipScrollRow>
           {group.slips.map((slip) => (
@@ -172,7 +248,7 @@ function RoundSection({
               key={slip.id}
               className="w-[85vw] max-w-sm shrink-0 snap-start sm:w-80"
             >
-              <BetSlip slip={slip} />
+              <BetSlip slip={slip} linkGames={linkGames} />
             </div>
           ))}
       </BetSlipScrollRow>
@@ -189,7 +265,13 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function BetSlip({ slip }: { slip: EnrichedBetSlip }) {
+function BetSlip({
+  slip,
+  linkGames,
+}: {
+  slip: EnrichedBetSlip;
+  linkGames: LinkGameOption[];
+}) {
   const statusColor: Record<string, string> = {
     pending: "bg-accent-pending/15 text-accent-pending",
     won: "bg-accent-win/15 text-accent-win",
@@ -204,6 +286,7 @@ function BetSlip({ slip }: { slip: EnrichedBetSlip }) {
   const hits = settledLegs.filter((l) => l.result === "hit").length;
   const misses = settledLegs.length - hits;
   const displayStatus = deriveSlipStatus(slip.legs);
+  const needsLink = slip.round == null || slip.fixture == null;
 
   return (
     <div className="card">
@@ -223,6 +306,7 @@ function BetSlip({ slip }: { slip: EnrichedBetSlip }) {
         </span>
         <span className={`pill ${statusColor[displayStatus]}`}>{displayStatus}</span>
       </div>
+      {needsLink ? <LinkBetGameButton betId={slip.id} games={linkGames} /> : null}
       <div className="mt-2 flex gap-4 text-sm text-slate-300">
         <span>Stake ${slip.totalStake?.toFixed(2) ?? "—"}</span>
         <span>Odds {slip.totalOdds?.toFixed(2) ?? "—"}</span>
@@ -276,6 +360,10 @@ function BetSlip({ slip }: { slip: EnrichedBetSlip }) {
                       style={{ background: colors.bg, color: colors.fg }}
                     >
                       {leg.jumper ?? "–"}
+                    </span>
+                  ) : leg.jumper != null ? (
+                    <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded bg-surface text-[10px] font-bold text-slate-300">
+                      {leg.jumper}
                     </span>
                   ) : null}
                   <span className="min-w-0 text-slate-300">

@@ -37,14 +37,16 @@ Extract the bet into JSON. Respond with ONLY a JSON object — no prose, no code
 {"totalOdds": number|null, "totalStake": number|null, "homeTeam": string|null, "awayTeam": string|null, "legs": [{"player": string, "statType": "disposals"|"marks"|"tackles"|"goals"|null, "line": number|null, "odds": number|null, "selection": "over"|"under"|null}]}
 
 Rules:
-- "homeTeam"/"awayTeam": the two clubs in the match (e.g. "St Kilda" and "Greater Western Sydney"), if shown.
-- One entry in "legs" per player selection on the slip.
+- "homeTeam"/"awayTeam": the two clubs in the match (e.g. "Adelaide" and "Collingwood"), if shown in a header OR inferable from jumper colours / club names on the slip. Prefer full club names Sportsbet uses (Adelaide, Collingwood, not "Crows" alone). If truly unknown, null.
+- One entry in "legs" per player selection on the slip. Same player can appear twice with different markets (e.g. disposals AND goals) — emit two legs.
+- Long slips (10–25 legs) are common — include EVERY visible leg; do not summarise or drop names.
 - "player" is the player's full name as shown.
-- "statType": map the market to one of disposals, marks, tackles, goals. If it's a different market (e.g. goal scorer, fantasy points), use null.
+- "statType": map the market to one of disposals, marks, tackles, goals. "N+ Disposals" → disposals; "N+ Marks" → marks; "N+ Tackles" → tackles; "N+ Goals" / "Anytime goalscorer" style → goals. If it's a different market (e.g. fantasy points), use null.
 - "line": the numeric threshold. For an "N+" market (e.g. "25+ Disposals"), use N minus 0.5 (so 25+ -> 24.5). For "Over/Under N.5", use that number.
 - "selection": "over" for "N+" or "Over" markets, "under" for "Under" markets, else null.
 - "odds": decimal odds for that leg if shown, else null.
-- "totalOdds" and "totalStake": the multi's combined odds and the stake/wager amount if shown, else null.
+- "totalOdds": the multi's combined odds if shown. Sportsbet often shows "Bet Again @ 101.00" — that number IS totalOdds.
+- "totalStake": the cash wager amount if shown. Prefer "Total Stake" / stake line; ignore "Bonus Bet Stake" unless no other stake is shown.
 Numbers must be plain numbers (no "$" or "x").`;
 
 function extractJson(text: string): string {
@@ -78,7 +80,8 @@ export async function readBetSlip(imageUrl: string): Promise<ExtractedSlip> {
     },
     body: JSON.stringify({
       model: MODEL,
-      max_tokens: 1500,
+      // Long SGMs (15–25 legs) need room for a full JSON object; 1500 truncated.
+      max_tokens: 8192,
       messages: [
         {
           role: "user",

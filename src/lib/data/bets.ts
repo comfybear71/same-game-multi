@@ -67,50 +67,122 @@ export async function getEnrichedBetsForUser(userId: number): Promise<EnrichedBe
 
   const playersById = new Map<number, { jumper: number | null; team: string }>();
   const playersByName = new Map<string, { jumper: number | null; team: string }>();
-  if (playerIds.size > 0) {
-    const rows = await db
-      .select({ id: players.id, name: players.name, jumper: players.jumper, team: players.team })
-      .from(players)
-      .where(inArray(players.id, [...playerIds]));
-    for (const p of rows) {
-      playersById.set(p.id, { jumper: p.jumper, team: p.team });
-      playersByName.set(normaliseName(p.name), { jumper: p.jumper, team: p.team });
-    }
-  }
+  const playersByLast = new Map<string, { jumper: number | null; team: string }[]>();
 
-  const rosterByGame = new Map<number, Map<string, { jumper: number | null; team: string }>>();
-  if (gameIds.size > 0) {
-    const rosterRows = await db
+  // Always load the full players table for name→jumper (AFL squad is small).
+  // No-round AI slips have null playerId, so id-only lookup left most jumpers blank.
+  {
+    const rows = await db
       .select({
-        gameId: predictions.gameId,
+        id: players.id,
         name: players.name,
         jumper: players.jumper,
         team: players.team,
       })
-      .from(predictions)
-      .innerJoin(players, eq(predictions.playerId, players.id))
-      .where(inArray(predictions.gameId, [...gameIds]));
-    for (const row of rosterRows) {
-      const byName =
-        rosterByGame.get(row.gameId) ??
-        rosterByGame.set(row.gameId, new Map()).get(row.gameId)!;
-      byName.set(normaliseName(row.name), { jumper: row.jumper, team: row.team });
+      .from(players);
+    for (const p of rows) {
+      const meta = { jumper: p.jumper, team: p.team };
+      playersById.set(p.id, meta);
+      const n = normaliseName(p.name);
+      // Prefer non-null jumper when duplicate names exist.
+      const prev = playersByName.get(n);
+      if (!prev || (prev.jumper == null && p.jumper != null)) {
+        playersByName.set(n, meta);
+      }
+      const last = n.split(" ").slice(-1)[0];
+      if (last) {
+        const list = playersByLast.get(last) ?? [];
+        list.push(meta);
+        playersByLast.set(last, list);
+      }
     }
   }
 
+  const rosterByGame = new Map<
+    number,
+    Map<string, { jumper: number | null; team: string }>
+  >();
+  if (gameIds.size > 0) {
+    const ids = [...gameIds];
+    const [predRows, lineupRows] = await Promise.all([
+      db
+        .select({
+          gameId: predictions.gameId,
+          name: players.name,
+          jumper: players.jumper,
+          team: players.team,
+        })
+        .from(predictions)
+        .innerJoin(players, eq(predictions.playerId, players.id))
+        .where(inArray(predictions.gameId, ids)),
+      db
+        .select({
+          gameId: lineupPlayers.gameId,
+          name: lineupPlayers.playerName,
+          jumper: lineupPlayers.jumper,
+          team: lineupPlayers.team,
+        })
+        .from(lineupPlayers)
+        .where(inArray(lineupPlayers.gameId, ids)),
+    ]);
+    for (const row of predRows) {
+      const byName =
+        rosterByGame.get(row.gameId) ??
+        rosterByGame.set(row.gameId, new Map()).get(row.gameId)!;
+      byName.set(normaliseName(row.name), {
+        jumper: row.jumper,
+        team: row.team,
+      });
+    }
+    for (const row of lineupRows) {
+      const byName =
+        rosterByGame.get(row.gameId) ??
+        rosterByGame.set(row.gameId, new Map()).get(row.gameId)!;
+      const n = normaliseName(row.name);
+      const prev = byName.get(n);
+      // Lineup jumper often fresher than stale players.jumper.
+      if (!prev || (row.jumper != null && prev.jumper == null)) {
+        byName.set(n, { jumper: row.jumper, team: row.team });
+      } else if (row.jumper != null) {
+        byName.set(n, { jumper: row.jumper, team: row.team || prev.team });
+      }
+    }
+  }
+
+  function resolveMeta(
+    leg: BetLeg,
+    slipGameId: number | null,
+  ): { jumper: number | null; team: string } | undefined {
+    if (leg.playerId != null) {
+      const byId = playersById.get(leg.playerId);
+      if (byId) return byId;
+    }
+    if (!leg.playerName) return undefined;
+    const n = normaliseName(leg.playerName);
+    const gid = leg.gameId ?? slipGameId;
+    if (gid != null) {
+      const fromRoster = rosterByGame.get(gid)?.get(n);
+      if (fromRoster) return fromRoster;
+    }
+    const byName = playersByName.get(n);
+    if (byName) return byName;
+    // Unique last-name fallback (e.g. "Daicos" only if one player).
+    const last = n.split(" ").slice(-1)[0];
+    if (last) {
+      const hits = playersByLast.get(last);
+      if (hits && hits.length === 1) return hits[0];
+    }
+    return undefined;
+  }
+
   return slips.map((slip) => {
-    const gameId = slip.legs.find((l) => l.gameId != null)?.gameId ?? null;
-    const fixture = gameId != null ? gamesById.get(gameId) ?? null : null;
+    const slipGameId =
+      slip.legs.find((l) => l.gameId != null)?.gameId ?? null;
+    const fixture =
+      slipGameId != null ? gamesById.get(slipGameId) ?? null : null;
 
     const legs: EnrichedBetLeg[] = slip.legs.map((leg) => {
-      let meta = leg.playerId != null ? playersById.get(leg.playerId) : undefined;
-      if (!meta && leg.playerName) {
-        const n = normaliseName(leg.playerName);
-        meta = playersByName.get(n);
-        if (!meta && leg.gameId != null) {
-          meta = rosterByGame.get(leg.gameId)?.get(n);
-        }
-      }
+      const meta = resolveMeta(leg, slipGameId);
       return {
         ...leg,
         jumper: meta?.jumper ?? null,

@@ -92,7 +92,13 @@ export function BetForm({ games }: { games: GameOption[] }) {
       });
       const json = await res.json();
       if (!res.ok || !json.ok) throw new Error(json.error || "save failed");
-      router.push("/bets");
+      const betId = typeof json.betId === "number" ? json.betId : null;
+      const q = new URLSearchParams();
+      q.set("saved", "1");
+      if (betId != null) q.set("bet", String(betId));
+      if (payload.round != null) q.set("round", String(payload.round));
+      else q.set("noround", "1");
+      router.push(`/bets?${q.toString()}`);
       router.refresh();
       return true;
     } catch (err) {
@@ -117,6 +123,8 @@ export function BetForm({ games }: { games: GameOption[] }) {
       const s = json.slip as {
         totalOdds: number | null;
         totalStake: number | null;
+        homeTeam: string | null;
+        awayTeam: string | null;
         legs: { player: string; statType: StatType | null; line: number | null; odds: number | null }[];
       };
       const matchedGameId: number | null = json.matchedGameId ?? null;
@@ -129,35 +137,48 @@ export function BetForm({ games }: { games: GameOption[] }) {
         (l): l is typeof l & { statType: StatType; line: number } =>
           !!l.statType && l.line != null,
       );
+      const skipped = s.legs.length - valid.length;
       setLegs(
-        valid.map((l) => ({
-          playerName: l.player,
-          statType: l.statType,
-          line: String(l.line),
-          odds: l.odds != null ? String(l.odds) : "",
-          confidence: "",
-          notes: "",
-        })),
+        valid.length > 0
+          ? valid.map((l) => ({
+              playerName: l.player,
+              statType: l.statType,
+              line: String(l.line),
+              odds: l.odds != null ? String(l.odds) : "",
+              confidence: "",
+              notes: "",
+            }))
+          : [emptyLeg()],
       );
       if (valid.length === 0) {
-        setError("Read the slip but found no disposals/marks/tackles/goals legs.");
+        setError(
+          "Read the slip but found no disposals/marks/tackles/goals legs. Pick the game below and enter legs manually, or try a clearer screenshot.",
+        );
         return;
       }
 
-      // The bet is already placed in Sportsbet, so there's nothing to edit —
-      // save what the AI read straight away. The form below stays populated as
-      // a fallback if the save fails.
+      // No fixture match → stay on the form so the punter can pick the game.
+      // Auto-saving into "No round" made long off-platform slips look "missing".
+      if (!matchedGameId) {
+        const teams =
+          s.homeTeam || s.awayTeam
+            ? ` (saw ${[s.homeTeam, s.awayTeam].filter(Boolean).join(" v ")})`
+            : "";
+        setError(
+          `Read ${valid.length} leg${valid.length === 1 ? "" : "s"}${skipped > 0 ? ` (${skipped} skipped)` : ""}${teams}, but couldn't match a fixture. Select the game above, check stake/odds, then tap Save bet.`,
+        );
+        return;
+      }
+
       const matchedRound =
-        matchedGameId != null
-          ? games.find((g) => g.id === matchedGameId)?.round ?? undefined
-          : undefined;
-      await persist({
+        games.find((g) => g.id === matchedGameId)?.round ?? undefined;
+      const ok = await persist({
         round: matchedRound,
         totalOdds: s.totalOdds ?? undefined,
         totalStake: s.totalStake ?? undefined,
         status: "pending",
         screenshotUrl: screenshotUrl || undefined,
-        gameId: matchedGameId ?? undefined,
+        gameId: matchedGameId,
         legs: valid.map((l) => ({
           playerName: l.player || undefined,
           statType: l.statType,
@@ -165,6 +186,12 @@ export function BetForm({ games }: { games: GameOption[] }) {
           odds: l.odds ?? undefined,
         })),
       });
+      if (!ok) {
+        setError((prev) =>
+          prev ??
+            `Read ${valid.length} legs but save failed — check the form and tap Save bet.`,
+        );
+      }
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -224,9 +251,10 @@ export function BetForm({ games }: { games: GameOption[] }) {
               {reading ? "Reading slip…" : saving ? "Saving…" : "Read slip & save"}
             </button>
             <p className="text-xs text-slate-500">
-              AI reads the slip and logs the bet automatically — the bet&apos;s
-              already placed in Sportsbet, so there&apos;s nothing to edit. If the
-              read misses a leg, fix it below and tap Save bet.
+              AI reads the slip and logs it when it can match the fixture. Include the
+              match header in the screenshot when you can (Adelaide v Collingwood).
+              Long multis (15+ legs) are fine. If the game isn&apos;t matched, pick it
+              below and tap Save bet. Prefer Total Stake over Bonus Bet Stake.
             </p>
           </div>
         ) : null}

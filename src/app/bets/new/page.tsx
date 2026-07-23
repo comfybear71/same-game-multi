@@ -2,18 +2,14 @@ import Link from "next/link";
 
 import { BetForm } from "@/components/BetForm";
 import type { Game } from "@/db/schema";
-import { getRecentResults, getUpcomingGames } from "@/lib/data/games";
+import { getLinkableGames } from "@/lib/data/games";
 
 export const dynamic = "force-dynamic";
 
 export default async function NewBetPage() {
   let games: Game[] = [];
   try {
-    const [upcoming, recent] = await Promise.all([
-      getUpcomingGames(30),
-      getRecentResults(12),
-    ]);
-    games = [...upcoming, ...recent];
+    games = await getLinkableGames();
   } catch {
     games = [];
   }

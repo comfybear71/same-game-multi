@@ -64,6 +64,63 @@ export async function getRecentResults(limit = 9): Promise<Game[]> {
     .limit(limit);
 }
 
+/**
+ * Fixtures for linking a bet slip (No-round picker / New bet game select).
+ * Upcoming + in-play + **full current season** completes (so R14 St Kilda v GWS
+ * still appears when we're in R20+). Falls back to a deep recent window if
+ * season isn't set on rows.
+ */
+export async function getLinkableGames(opts?: {
+  upcomingLimit?: number;
+  /** Extra seasons back (0 = current only). */
+  seasonsBack?: number;
+}): Promise<Game[]> {
+  const upcomingLimit = opts?.upcomingLimit ?? 40;
+  const seasonsBack = opts?.seasonsBack ?? 0;
+
+  const [upcoming, inPlay, seasonRow] = await Promise.all([
+    getUpcomingGames(upcomingLimit),
+    getInPlayGames(),
+    db
+      .select({ season: games.season })
+      .from(games)
+      .where(sql`${games.season} is not null`)
+      .orderBy(desc(games.season))
+      .limit(1),
+  ]);
+
+  const currentSeason = seasonRow[0]?.season ?? new Date().getFullYear();
+  const minSeason = currentSeason - Math.max(0, seasonsBack);
+
+  let history: Game[] = [];
+  try {
+    history = await db
+      .select()
+      .from(games)
+      .where(
+        and(
+          gte(games.season, minSeason),
+          lte(games.season, currentSeason),
+          // Include complete + any leftover scheduled/in-season rows.
+          sql`${games.season} is not null`,
+        ),
+      )
+      .orderBy(desc(games.commenceTime));
+  } catch {
+    history = await getRecentResults(200);
+  }
+
+  const seen = new Set<number>();
+  const out: Game[] = [];
+  // Prefer in-play / upcoming first, then season history (newest first).
+  for (const g of [...inPlay, ...upcoming, ...history]) {
+    if (seen.has(g.id)) continue;
+    seen.add(g.id);
+    out.push(g);
+  }
+  return out;
+}
+
 export async function getGameById(id: number): Promise<Game | null> {
   const rows = await db.select().from(games).where(eq(games.id, id)).limit(1);
   return rows[0] ?? null;

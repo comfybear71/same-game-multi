@@ -7,7 +7,8 @@ import { findGameByTeams } from "@/lib/data/games";
 // Read a bet-slip image (already uploaded to Blob) with Claude vision and
 // return structured legs to pre-fill the form.
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+// Long slip screenshots + Claude vision can exceed the default serverless budget.
+export const maxDuration = 120;
 
 export async function POST(req: Request) {
   const session = await auth();
