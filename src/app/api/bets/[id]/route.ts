@@ -160,7 +160,7 @@ export async function PATCH(
   });
 }
 
-/** Remove a pending slip and its legs (cascade). */
+/** Remove a slip and its legs (tracker only — does not affect the bookmaker). */
 export async function DELETE(
   _req: Request,
   { params }: { params: { id: string } },
@@ -179,7 +179,7 @@ export async function DELETE(
   const userId = await userIdForEmail(email);
   const row = (
     await db
-      .select({ id: bets.id, userId: bets.userId, status: bets.status })
+      .select({ id: bets.id, userId: bets.userId })
       .from(bets)
       .where(eq(bets.id, betId))
       .limit(1)
@@ -187,12 +187,6 @@ export async function DELETE(
 
   if (!row || row.userId !== userId) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
-  }
-  if (row.status !== "pending") {
-    return NextResponse.json(
-      { error: "only pending slips can be deleted" },
-      { status: 400 },
-    );
   }
 
   await db.delete(bets).where(eq(bets.id, betId));

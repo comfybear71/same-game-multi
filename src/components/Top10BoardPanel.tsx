@@ -3,6 +3,9 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { LineupCompletenessPanel } from "@/components/LineupCompletenessPanel";
+import { PaperBetToggle } from "@/components/PaperBetToggle";
+import { PAPER_BET_NOTE } from "@/lib/betTypes";
 import { SystemBookPanel } from "@/components/SystemBookPanel";
 import type { StatType } from "@/db/schema";
 import { teamColors } from "@/lib/afl/teamColors";
@@ -15,6 +18,7 @@ import {
   MAX_LEGS,
   MIN_LEGS,
 } from "@/lib/predictions/suggestLimits";
+import { lineupPositionLabel } from "@/lib/ingest/lineupPosition";
 import type { Top10BoardResponse, Top10Row } from "@/lib/predictions/top10Board";
 import {
   PREDICTIONS_GENERATED,
@@ -88,6 +92,11 @@ function suggestedToTicketLeg(
     availableRungs: row?.availableRungs ?? [],
     history: leg.history,
     news: leg.news,
+    position: row?.position ?? null,
+    missingPrediction: row?.missingPrediction ?? false,
+    missingOdds: row?.missingOdds ?? false,
+    missingPlayerLink: row?.missingPlayerLink ?? false,
+    missingPosition: row?.missingPosition ?? false,
     target: lineTarget(leg.line),
     helmWhy: why,
   };
@@ -116,6 +125,7 @@ export function Top10BoardPanel({
   const [logSuccess, setLogSuccess] = useState<string | null>(null);
   const [totalOdds, setTotalOdds] = useState("");
   const [totalStake, setTotalStake] = useState("");
+  const [paperOnly, setPaperOnly] = useState(false);
 
   // Helm Suggest
   const [helmFocus, setHelmFocus] = useState<StatType | "any">("any");
@@ -289,6 +299,7 @@ export function Top10BoardPanel({
           round: round ?? undefined,
           totalOdds: totalOdds ? Number(totalOdds) : undefined,
           totalStake: totalStake ? Number(totalStake) : undefined,
+          notes: paperOnly ? PAPER_BET_NOTE : undefined,
           status: "pending",
           legs: ticket.map((l) => ({
             playerName: l.playerName,
@@ -301,6 +312,7 @@ export function Top10BoardPanel({
       if (!res.ok || !json.ok) throw new Error(json.error || "save failed");
       setTicket([]);
       setTotalOdds("");
+      setPaperOnly(false);
       setThinking(null);
       setLogSuccess(`Saved ${json.legs ?? ticket.length} legs — build another or open Bets.`);
       router.refresh();
@@ -313,10 +325,12 @@ export function Top10BoardPanel({
 
   const oddsHint =
     board?.oddsSource === "none"
-      ? "No harvested odds for this fixture — lines show, prices are — until harvest:odds runs."
+      ? "No harvested odds — lines show, prices are — until harvest:odds runs (snapshot before API ends)."
       : board?.oddsSource === "snapshots"
         ? "Prices from latest odds snapshot."
-        : "Prices from bookmaker_lines fallback.";
+        : board?.oddsSource === "mixed"
+          ? "Prices from snapshots + bookmaker_lines fallback."
+          : "Prices from bookmaker_lines fallback.";
 
   const filteredCandidates = useMemo(() => {
     const focus = swapLegKey
@@ -333,9 +347,9 @@ export function Top10BoardPanel({
     <section className={`${embedded ? "" : "card "}space-y-5`}>
       {!embedded ? (
         <div>
-          <h2 className="text-lg font-semibold text-white">Top 10 hub</h2>
+          <h2 className="text-lg font-semibold text-white">Squad board hub</h2>
           <p className="text-sm text-slate-400">
-            DIY boards, Helm Suggest, and System portfolio — one place to build and
+            Full lineup boards, Helm Suggest, and System portfolio — one place to build and
             question picks.
           </p>
         </div>
@@ -366,11 +380,12 @@ export function Top10BoardPanel({
           <p className="text-sm text-accent-loss">{error}</p>
         ) : !marketBoard ? (
           <p className="text-sm text-slate-400">
-            No predictions yet — generate predictions to unlock Top 10 boards and Helm
+            No predictions yet — generate predictions to unlock squad boards and Helm
             Suggest. System portfolio below still works for locked stakes.
           </p>
         ) : (
           <>
+            <LineupCompletenessPanel report={board?.completeness} />
             <p className="text-[11px] text-slate-500">{oddsHint}</p>
             <div className="grid gap-4 lg:grid-cols-2">
               <TeamBoard
@@ -608,6 +623,7 @@ export function Top10BoardPanel({
             />
           </label>
         </div>
+        <PaperBetToggle checked={paperOnly} onChange={setPaperOnly} />
 
         {logError ? <p className="text-sm text-accent-loss">{logError}</p> : null}
         {logSuccess ? <p className="text-sm text-accent-win">{logSuccess}</p> : null}
@@ -630,7 +646,7 @@ export function Top10BoardPanel({
             onClick={() => void logMulti()}
             disabled={logging || ticket.length === 0}
           >
-            {logging ? "Logging…" : "Log this multi"}
+            {logging ? "Logging…" : paperOnly ? "Save paper multi" : "Log this multi"}
           </button>
         </div>
       </div>
@@ -735,7 +751,15 @@ function TeamBoard({
         className="px-3 py-2 text-sm font-semibold text-white"
         style={{ background: `${c.bg}33`, borderBottom: `2px solid ${c.bg}` }}
       >
-        {side.team} · Top 10 {label}
+        {side.team} · {label} · full squad
+      </div>
+      <div
+        className="grid grid-cols-[1.5rem_1.75rem_1fr] gap-x-2 px-3 py-1.5 text-[10px] font-medium uppercase tracking-wide text-slate-500"
+        style={{ borderBottom: `1px solid ${c.bg}44` }}
+      >
+        <span>Rk</span>
+        <span>#</span>
+        <span>Player · line · odds</span>
       </div>
       {side.rows.length === 0 ? (
         <p className="p-3 text-sm text-slate-500">No {statType} projections yet.</p>
@@ -744,14 +768,16 @@ function TeamBoard({
           {side.rows.map((row) => {
             const key = legKey(row.playerId, row.statType);
             const selected = selectedKeys.has(key);
-            const disabled = !selected && atMax;
+            const disabled =
+              !selected &&
+              (atMax || row.playerId <= 0 || row.missingPrediction);
             return (
-              <li key={key}>
+              <li key={`${side.team}-${row.playerId}-${row.statType}-${row.playerName}`}>
                 <button
                   type="button"
                   disabled={disabled}
                   onClick={() => onToggle(row)}
-                  className={`flex w-full items-start gap-2 px-3 py-2.5 text-left transition ${
+                  className={`grid w-full grid-cols-[1.5rem_1.75rem_1fr] items-start gap-x-2 px-3 py-2.5 text-left transition ${
                     selected
                       ? "bg-accent/10 ring-1 ring-inset ring-accent/40"
                       : disabled
@@ -772,9 +798,10 @@ function TeamBoard({
                   >
                     {row.jumper ?? "–"}
                   </span>
-                  <div className="min-w-0 flex-1">
+                  <div className="min-w-0">
                     <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
                       <span className="truncate text-sm font-medium text-white">
+                        {row.jumper != null ? `#${row.jumper} ` : ""}
                         {row.playerName}
                       </span>
                       <span className="shrink-0 text-sm font-bold tabular-nums text-slate-200">
@@ -785,8 +812,29 @@ function TeamBoard({
                       </span>
                     </div>
                     <p className="mt-0.5 text-[11px] leading-snug text-slate-500">
+                      {row.position?.trim() ? (
+                        <span
+                          className="text-slate-400"
+                          title={lineupPositionLabel(row.position) ?? undefined}
+                        >
+                          {row.position} ·{" "}
+                        </span>
+                      ) : row.missingPosition ? (
+                        <span className="text-accent-pending">Position unknown · </span>
+                      ) : null}
                       {row.reason}
                     </p>
+                    {row.missingOdds || row.missingPrediction || row.missingPlayerLink ? (
+                      <p className="mt-0.5 text-[10px] font-medium text-accent-pending">
+                        {[
+                          row.missingPlayerLink ? "link" : null,
+                          row.missingPrediction ? "no projection" : null,
+                          row.missingOdds ? "no odds" : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </p>
+                    ) : null}
                     {row.news &&
                     (row.news.status === "test" || row.news.status === "managed") ? (
                       <span className="text-[10px] font-semibold uppercase text-accent-pending">

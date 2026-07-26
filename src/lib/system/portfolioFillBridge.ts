@@ -3,6 +3,12 @@
  * Pure fill maths stay in portfolioFill.ts.
  */
 
+import { eq } from "drizzle-orm";
+
+import { db } from "@/db";
+import { games, lineupPlayers } from "@/db/schema";
+import { canonicalTeam } from "@/lib/afl/teams";
+import { getMatchBriefing } from "@/lib/data/matchBriefing";
 import { getPlayerBettingRecord, playerRecordKey } from "@/lib/data/bets";
 import type { BenchmarkBand, GameBenchmarkMap } from "@/lib/data/leaders";
 import { clearProbability } from "@/lib/predictions/probability";
@@ -20,6 +26,8 @@ import {
   loadBookPricesForGame,
   pickPrice,
 } from "@/lib/system/oddsPrices";
+import { getTeamSeasonStats } from "@/lib/ingest/wheelo";
+import { teamRatios } from "@/lib/predictions/teamMatchup";
 import {
   assembleSoftScore,
   bandSoftBonus,
@@ -37,8 +45,11 @@ import {
   type PortfolioMetrics,
   type TicketSlot,
 } from "@/lib/system/portfolioFill";
+import { roleMarketSoftPoints } from "@/lib/system/roleMarket";
+import { matchupScriptSoftPoints } from "@/lib/system/scriptBoost";
+import type { StatType } from "@/db/schema";
 
-/** Soft-score boost when the leg appears on that market's Top 10 board. */
+/** Soft-score boost when the leg appears on that market's squad board. */
 export const TOP10_SOFT_BONUS = 18;
 
 export function suggestedLegToFillCandidate(
@@ -175,31 +186,115 @@ export async function loadFillPool(
   });
 
   const useEdge = opts?.edgePackage ?? isPortfolioEdgeScoreEnabled();
-  if (!useEdge) return pool;
+  if (useEdge) {
+    const [prices, leaders] = await Promise.all([
+      loadBookPricesForGame(gameId),
+      loadLastGameLeadersMap(gameId),
+    ]);
 
-  const [prices, leaders] = await Promise.all([
-    loadBookPricesForGame(gameId),
-    loadLastGameLeadersMap(gameId),
+    pool = pool.map((c) => {
+      const bookOdds =
+        c.statType === "any"
+          ? null
+          : pickPrice(prices, c.playerId, c.statType, c.line);
+      const leader =
+        c.statType === "any"
+          ? undefined
+          : leaders.get(`${c.playerId}:${c.statType}`);
+      return applyEdgePackageToCandidate(c, {
+        bookOdds,
+        leaderRank: leader?.rank ?? null,
+        leaderLastValue: leader?.lastValue ?? null,
+        weights: opts?.edgeWeights,
+      });
+    });
+  }
+
+  return applyLineupRoleAndScriptBoosts(gameId, pool);
+}
+
+async function loadLineupPositionByPlayerId(
+  gameId: number,
+): Promise<Map<number, string>> {
+  const rows = await db
+    .select({
+      playerId: lineupPlayers.playerId,
+      position: lineupPlayers.position,
+    })
+    .from(lineupPlayers)
+    .where(eq(lineupPlayers.gameId, gameId));
+  const out = new Map<number, string>();
+  for (const r of rows) {
+    if (r.playerId != null && r.position?.trim()) {
+      out.set(r.playerId, r.position.trim());
+    }
+  }
+  return out;
+}
+
+/** Position × ladder × team-stat matchup tilts on the fill pool. */
+export async function applyLineupRoleAndScriptBoosts(
+  gameId: number,
+  pool: FillCandidate[],
+): Promise<FillCandidate[]> {
+  if (pool.length === 0) return pool;
+
+  const [gameRow] = await db
+    .select({
+      home: games.home,
+      away: games.away,
+      season: games.season,
+    })
+    .from(games)
+    .where(eq(games.id, gameId))
+    .limit(1);
+  if (!gameRow) return pool;
+
+  const homeC = canonicalTeam(gameRow.home) ?? gameRow.home;
+  const awayC = canonicalTeam(gameRow.away) ?? gameRow.away;
+
+  const [positions, briefing, teamBoard] = await Promise.all([
+    loadLineupPositionByPlayerId(gameId),
+    getMatchBriefing(gameRow.home, gameRow.away, gameRow.season).catch(
+      () => null,
+    ),
+    gameRow.season != null
+      ? getTeamSeasonStats(gameRow.season).catch(() => null)
+      : Promise.resolve(null),
   ]);
 
-  pool = pool.map((c) => {
-    const bookOdds =
-      c.statType === "any"
-        ? null
-        : pickPrice(prices, c.playerId, c.statType, c.line);
-    const leader =
-      c.statType === "any"
-        ? undefined
-        : leaders.get(`${c.playerId}:${c.statType}`);
-    return applyEdgePackageToCandidate(c, {
-      bookOdds,
-      leaderRank: leader?.rank ?? null,
-      leaderLastValue: leader?.lastValue ?? null,
-      weights: opts?.edgeWeights,
-    });
-  });
+  const ratios = teamBoard ? teamRatios(teamBoard) : null;
+  const homeRank = briefing?.homeLadder?.rank ?? null;
+  const awayRank = briefing?.awayLadder?.rank ?? null;
 
-  return pool;
+  return pool.map((c) => {
+    if (c.statType === "any") return c;
+    const stat = c.statType as StatType;
+    const pos = positions.get(c.playerId) ?? null;
+    const teamC = canonicalTeam(c.team) ?? c.team;
+    const opponent = teamC === homeC ? awayC : homeC;
+
+    const rolePts = roleMarketSoftPoints(pos, stat);
+    const scriptPts = matchupScriptSoftPoints({
+      team: c.team,
+      opponent,
+      stat,
+      position: pos,
+      ratios,
+      homeTeam: gameRow.home,
+      awayTeam: gameRow.away,
+      homeLadderRank: homeRank,
+      awayLadderRank: awayRank,
+    });
+    const bonus = rolePts + scriptPts;
+    if (bonus === 0 && !pos) return c;
+    return {
+      ...c,
+      lineupPosition: pos,
+      roleScriptPts: bonus,
+      softScore: c.softScore + bonus,
+    };
+  });
 }
 
 export function strategiesToSlots(

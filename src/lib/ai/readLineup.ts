@@ -1,4 +1,5 @@
 import { env } from "@/lib/env";
+import { normalizeLineupPosition } from "@/lib/ingest/lineupPosition";
 
 // Read an AFL team-sheet / Line-Ups screenshot (AFL app or afl.com.au Match
 // Centre) with Claude vision and return the named squad per club. This is the
@@ -59,10 +60,11 @@ Extract EVERY named player into JSON. Respond with ONLY a JSON object — no pro
 
 Rules:
 - "team": the club name, matching one of the two clubs in the match.
-- One entry per player on the team sheet, for BOTH clubs.
+- One entry per player on the team sheet, for BOTH clubs. Each club's selected side (named + interchange) should be about 23 players — if you have fewer than 20 for either club, re-scan the entire screenshot and find the missing rows before responding.
+- Scan the ENTIRE image including bottom rows, interchange benches, and both clubs in list view. JPEG crops often hide one half of the sheet — do not stop early.
 - "name": expand the initial+surname to the player's FULL name (first + last) using the guernsey number, club, and your knowledge of current AFL squads — e.g. for St Kilda "44 C. Wilkie" -> "Callum Wilkie". If you are not confident of the first name, return the surname exactly as shown (do NOT invent a first name).
 - "jumper": the guernsey number as an integer, or null if unreadable.
-- "position": the on-field position group heading (e.g. "Backs", "Half Back", "Followers", "FB"). Use null for interchange and emergency players.
+- "position": use ONLY these on-field codes when the player is in a position row: "FB" (Full Backs), "HB" (Half Backs), "C" (Centres), "HF" (Half Forwards), "FF" (Full Forwards), "FOL" (Followers). Use null for interchange and emergency players.
 - "status": "named" for any on-field / starting position row, "interchange" for Interchange/Interchanges only, "emergency" for Emergencies only.
 - CRITICAL — Emergencies: ANY player in the Emergencies / Emergency / EMG row or section MUST be status "emergency", never "named" or "interchange". Example: if Adelaide lists "9 Nick Murray" under Emergencies, he is emergency even if he is a regular senior player. Emergencies are NOT in the selected 22/23 and usually will not play.
 - Do NOT promote an emergency into "named" because you recognise the name.
@@ -121,7 +123,7 @@ export async function readLineup(
     },
     body: JSON.stringify({
       model: MODEL,
-      max_tokens: 4000,
+      max_tokens: 8192,
       messages: [{ role: "user", content }],
     }),
   });
@@ -144,10 +146,9 @@ export async function readLineup(
             .map((p) => ({
               name: String(p.name ?? "").trim(),
               jumper: typeof p.jumper === "number" ? p.jumper : null,
-              position:
-                typeof p.position === "string" && p.position.trim()
-                  ? p.position.trim()
-                  : null,
+              position: normalizeLineupPosition(
+                typeof p.position === "string" ? p.position : null,
+              ),
               status: normaliseStatus(p.status),
             }))
             .filter((p) => p.name.length > 0)

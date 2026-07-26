@@ -55,6 +55,10 @@ export type FillCandidate = {
   leaderRank?: number | null;
   leaderLastValue?: number | null;
   leaderPts?: number;
+  /** Field position from uploaded lineup (FB/HB/C/…). */
+  lineupPosition?: string | null;
+  /** Role × script soft-score bump (for UI/debug). */
+  roleScriptPts?: number;
 };
 
 /**

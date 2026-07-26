@@ -578,7 +578,7 @@ function GameOverSection({
   async function gameOver() {
     const pendingLegs = trackerLegs.filter((l) => l.result === "pending");
     const missingCounts = pendingLegs.filter((l) => l.actualValue == null);
-    if (missingCounts.length > 0) {
+    if (missingCounts.length > 0 && live) {
       setMsg(
         `Enter final stats for ${missingCounts.length} leg${missingCounts.length === 1 ? "" : "s"} using + above, then tap Game over again.`,
       );
@@ -589,6 +589,20 @@ function GameOverSection({
     setMsg(null);
     setSlips(null);
     try {
+      if (missingCounts.length > 0 && !live) {
+        for (const leg of missingCounts) {
+          const res = await fetch(`/api/bets/legs/${leg.legId}`, {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ actualValue: 0 }),
+          });
+          const json = await res.json();
+          if (!res.ok || !json.ok) {
+            throw new Error(json.error || "could not save 0 for unset leg");
+          }
+        }
+      }
+
       const res = await fetch(`/api/games/${gameId}/game-over`, { method: "POST" });
       const text = await res.text();
       let json: {
@@ -687,8 +701,9 @@ function GameOverSection({
           </p>
         ) : (
           <p className="mt-1.5 text-[11px] text-slate-500">
-            Tap + to enter each player&apos;s final stat, then Game over locks
-            every leg and updates the Bets page — no manual entry needed.
+            After full time, Game over saves <strong className="font-medium text-slate-400">0</strong>{" "}
+            for legs you didn&apos;t tap — void legs (stake back) don&apos;t need counts. AFL
+            Tables fills learning stats when published.
           </p>
         )}
       </div>
@@ -924,8 +939,8 @@ export function LiveBetTracker({
 
       {voidsMissingStats > 0 ? (
         <p className="mt-2 text-xs text-slate-500">
-          {voidsMissingStats} void leg{voidsMissingStats === 1 ? "" : "s"} — tap +/− to
-          record pre-injury stats.
+          {voidsMissingStats} void leg{voidsMissingStats === 1 ? "" : "s"} — optional +/− for
+          pre-injury stats (learning only; stake already returned).
         </p>
       ) : null}
 

@@ -13,6 +13,7 @@ interface SaveResult {
   stored: number;
   teams: string[];
   dropped: string[];
+  warnings: string[];
 }
 
 interface LineupRow {
@@ -25,10 +26,13 @@ interface LineupRow {
 export function LineupUploadButton({
   gameId,
   initialCount = 0,
+  onUploaded,
 }: {
   gameId: number;
   // Lineup players already stored for this game (0 = none uploaded yet).
   initialCount?: number;
+  /** Called after JPEG or paste save succeeds (for squad review refresh). */
+  onUploaded?: () => void;
 }) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -39,6 +43,9 @@ export function LineupUploadButton({
   const [reviewRows, setReviewRows] = useState<LineupRow[] | null>(null);
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteText, setPasteText] = useState("");
+  const [pasteBusy, setPasteBusy] = useState(false);
 
   // Already uploaded (this load) once a fresh result lands or we started with one.
   const storedCount = result?.stored ?? initialCount;
@@ -82,13 +89,51 @@ export function LineupUploadButton({
       });
       const json = await res.json();
       if (!res.ok || !json.ok) throw new Error(json.error || "couldn't read lineup");
-      setResult({ stored: json.stored, teams: json.teams, dropped: json.dropped });
+      setResult({
+        stored: json.stored,
+        teams: json.teams,
+        dropped: json.dropped,
+        warnings: json.warnings ?? [],
+      });
+      onUploaded?.();
       router.refresh();
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setBusy(false);
       if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  async function onPasteSave() {
+    const text = pasteText.trim();
+    if (!text) return;
+    setPasteBusy(true);
+    setError(null);
+    setResult(null);
+    setReviewRows(null);
+    setReviewOpen(false);
+    try {
+      const res = await fetch(`/api/games/${gameId}/lineup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) throw new Error(json.error || "couldn't save pasted lineup");
+      setResult({
+        stored: json.stored,
+        teams: json.teams,
+        dropped: json.dropped,
+        warnings: json.warnings ?? [],
+      });
+      setPasteText("");
+      onUploaded?.();
+      router.refresh();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setPasteBusy(false);
     }
   }
 
@@ -162,6 +207,51 @@ export function LineupUploadButton({
         className="hidden"
         onChange={onFiles}
       />
+      <button
+        type="button"
+        className="w-full text-xs text-slate-400 hover:text-accent"
+        onClick={() => setPasteOpen((v) => !v)}
+      >
+        {pasteOpen ? "Hide paste team sheet ▴" : "Paste team sheet text ▾"}
+      </button>
+      {pasteOpen ? (
+        <div className="space-y-1.5">
+          <textarea
+            value={pasteText}
+            onChange={(e) => setPasteText(e.target.value)}
+            rows={6}
+            placeholder="Copy all from AFL Match Centre line-ups (numbers + names + positions)…"
+            className="w-full rounded-lg border border-surface-border bg-surface px-2 py-1.5 text-xs text-slate-200"
+          />
+          <p className="text-[10px] leading-snug text-slate-500">
+            Include <strong className="font-medium text-slate-400">Interchanges</strong> (bench
+            for both teams). Match Centre <strong className="font-medium text-slate-400">column
+            copy</strong> (names above/below each position header) and{" "}
+            <strong className="font-medium text-slate-400">row-pair</strong> copy both work. For
+            bench rows, copy{" "}
+            <strong className="font-medium text-slate-400">Port then Brisbane</strong> on each
+            line when both appear. Stop before the IN/OUT panel.
+          </p>
+          <button
+            type="button"
+            className="btn w-full text-sm"
+            disabled={pasteBusy || !pasteText.trim()}
+            onClick={onPasteSave}
+          >
+            {pasteBusy ? "Saving…" : "Save pasted lineup"}
+          </button>
+        </div>
+      ) : null}
+      {result?.warnings?.length ? (
+        <div className="rounded-lg border border-accent-pending/40 bg-accent-pending/10 p-2 text-xs text-accent-pending">
+          <p className="font-semibold">Lineup looks incomplete — check before betting</p>
+          <ul className="mt-1 list-inside list-disc space-y-0.5">
+            {result.warnings.map((w) => (
+              <li key={w}>{w}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       {result ? (
         <p className="text-xs text-slate-400">
           Saved {result.stored} players
@@ -173,6 +263,8 @@ export function LineupUploadButton({
               ({result.dropped.length} unmatched skipped)
             </span>
           ) : null}
+          {" "}
+          Review the squad grid below, then Approve lineup.
         </p>
       ) : null}
       {error ? <p className="text-xs text-accent-loss">{error}</p> : null}

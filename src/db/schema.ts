@@ -126,6 +126,8 @@ export const games = pgTable(
     // Optional per-game preview / narrative (Sportsbet, AFL.com, etc.) —
     // pasted by the group so each fixture has its own story on the briefing.
     matchNotes: text("match_notes"),
+    /** Set when maintainer confirms the uploaded squad grid; cleared on re-upload. */
+    lineupApprovedAt: timestamp("lineup_approved_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

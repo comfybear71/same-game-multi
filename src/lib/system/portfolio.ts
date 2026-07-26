@@ -22,6 +22,10 @@ import {
   type SuggestedLeg,
 } from "@/lib/predictions/suggest";
 import { setLineupPlayerStatus } from "@/lib/ingest/lineup";
+import {
+  assertLineupReadyForSystem,
+  type LineupSystemGate,
+} from "@/lib/ingest/lineupCompleteness";
 import { computeCashReturn } from "@/lib/system/cash";
 import {
   loadMatchupPlaybook,
@@ -151,9 +155,34 @@ export type SystemBookResponse = {
   edgeScoreEnabled: boolean;
   chooser?: ChooserBook | null;
   selections?: Record<string, CardStyle>;
+  lineupGate?: LineupSystemGate | null;
 };
 
-export type { CardStyle, ChooserBook };
+export type { CardStyle, ChooserBook, LineupSystemGate };
+
+export class LineupNotReadyForSystemError extends Error {
+  gate: LineupSystemGate;
+
+  constructor(gate: LineupSystemGate) {
+    super(gate.blockReason ?? "Lineup not ready for System book");
+    this.name = "LineupNotReadyForSystemError";
+    this.gate = gate;
+  }
+}
+
+async function requireLineupReadyForSystem(
+  gameId: number,
+): Promise<LineupSystemGate> {
+  const [g] = await db
+    .select({ home: games.home, away: games.away })
+    .from(games)
+    .where(eq(games.id, gameId))
+    .limit(1);
+  if (!g) throw new Error("Game not found");
+  const gate = await assertLineupReadyForSystem(gameId, g.home, g.away);
+  if (!gate.ok) throw new LineupNotReadyForSystemError(gate);
+  return gate;
+}
 
 function hotLabel(statType: StatType, lastValue: number): string {
   const n = Number.isInteger(lastValue)
@@ -249,7 +278,7 @@ function ticketWhyBlurb(t: SystemTicketView): string {
     return "Any banker — mixed markets from the Lab/H2H playbook. Snake-drafted with appearance caps so elites aren't cloned across every ticket.";
   }
   const focus = t.focus.charAt(0).toUpperCase() + t.focus.slice(1);
-  return `${focus} · ${t.legCount} legs — Lab recipe slot. Prefer Top 10 shortlist names; diversify via draft penalties / satellite rules.`;
+  return `${focus} · ${t.legCount} legs — Lab recipe slot. Prefer squad-board names; diversify via draft penalties / satellite rules.`;
 }
 
 /** Attach ticket + per-leg why from Top 10 ranks and book appearance counts. */
@@ -290,7 +319,7 @@ export async function attachSystemWhy(
         if (top) {
           parts.push(`Top10 #${top.rank} ${shortStat(l.statType)}`);
         } else {
-          parts.push(`Outside Top 10 ${shortStat(l.statType)}`);
+          parts.push(`Outside squad top ranks (${shortStat(l.statType)})`);
         }
         const family = resolveStatFamily(l.statType);
         const n = apps.get(`${l.playerId}:${family}`) ?? 0;
@@ -1027,7 +1056,9 @@ export async function buildSystemBookWithChooser(
   selections: Record<string, CardStyle>;
   draftFillEnabled: boolean;
   edgeScoreEnabled: boolean;
+  lineupGate: LineupSystemGate;
 }> {
+  const lineupGate = await requireLineupReadyForSystem(gameId);
   const policy = opts?.policy ?? (await ensureActivePolicy());
   const k = opts?.k ?? PORTFOLIO_K;
   const { ranked } = await selectStrategiesForGame(gameId, policy, k);
@@ -1078,6 +1109,7 @@ export async function buildSystemBookWithChooser(
     selections,
     draftFillEnabled: isPortfolioDraftFillEnabled(),
     edgeScoreEnabled: isPortfolioEdgeScoreEnabled(),
+    lineupGate,
   };
 }
 
@@ -1092,6 +1124,7 @@ export async function buildAndPersistSystemPortfolio(
   gameId: number,
   opts?: { policy?: ActivePolicyView; k?: number; userId?: number | null },
 ): Promise<SystemTicketView[]> {
+  await requireLineupReadyForSystem(gameId);
   const policy = opts?.policy ?? (await ensureActivePolicy());
   const k = opts?.k ?? PORTFOLIO_K;
 

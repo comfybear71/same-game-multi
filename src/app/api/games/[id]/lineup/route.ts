@@ -13,6 +13,7 @@ import {
   saveLineup,
   setLineupPlayerStatus,
 } from "@/lib/ingest/lineup";
+import { pasteToExtractedLineup } from "@/lib/ingest/parseLineupPaste";
 import type { LineupStatus } from "@/db/schema";
 
 // Read a game's team sheet from one or more uploaded screenshots (AFL app /
@@ -46,17 +47,38 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   if (Number.isNaN(gameId)) {
     return NextResponse.json({ error: "bad game id" }, { status: 400 });
   }
-  if (!env.ANTHROPIC_API_KEY) {
-    return NextResponse.json(
-      { error: "ANTHROPIC_API_KEY is not set" },
-      { status: 500 },
-    );
-  }
+
+  const contentType = req.headers.get("content-type") ?? "";
 
   try {
     const game = (await db.select().from(games).where(eq(games.id, gameId)).limit(1))[0];
     if (!game) {
       return NextResponse.json({ error: "game not found" }, { status: 404 });
+    }
+    const homeC = canonicalTeam(game.home) ?? game.home;
+    const awayC = canonicalTeam(game.away) ?? game.away;
+
+    if (contentType.includes("application/json")) {
+      let body: { text?: string };
+      try {
+        body = (await req.json()) as typeof body;
+      } catch {
+        return NextResponse.json({ error: "invalid json" }, { status: 400 });
+      }
+      const text = body.text?.trim();
+      if (!text) {
+        return NextResponse.json({ error: "text required" }, { status: 400 });
+      }
+      const extracted = pasteToExtractedLineup(text, homeC, awayC);
+      const result = await saveLineup(gameId, extracted, "paste:afl-match-centre");
+      return NextResponse.json({ ok: true, ...result });
+    }
+
+    if (!env.ANTHROPIC_API_KEY) {
+      return NextResponse.json(
+        { error: "ANTHROPIC_API_KEY is not set" },
+        { status: 500 },
+      );
     }
 
     const form = await req.formData();
@@ -84,8 +106,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     }
 
     const extracted = await readLineup(images, {
-      homeTeam: canonicalTeam(game.home) ?? game.home,
-      awayTeam: canonicalTeam(game.away) ?? game.away,
+      homeTeam: homeC,
+      awayTeam: awayC,
     });
     const result = await saveLineup(gameId, extracted, sourceUrl);
 

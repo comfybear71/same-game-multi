@@ -25,6 +25,11 @@ function row(partial: Partial<Top10Row> & Pick<Top10Row, "playerName" | "predict
     availableRungs: [14.5, 19.5, 24.5, 29.5],
     history: { hits: 3, bets: 3 },
     news: null,
+    position: null,
+    missingPrediction: false,
+    missingOdds: false,
+    missingPlayerLink: false,
+    missingPosition: false,
     ...partial,
   };
 }

@@ -1,0 +1,112 @@
+37
+Michael Sellwood
+18
+James O'Donnell
+24
+Buku Khamis
+Full Backs
+35
+Nathan Broad
+41
+Kye Annand
+11
+Luke Trainor
+29
+Lachlan Bramble
+5
+Jedd Busslinger
+34
+Bailey Williams
+Half Backs
+1
+Nick Vlastuin
+30
+Tom Brown
+6
+Sam Banks
+8
+Matthew Kennedy
+4
+Marcus Bontempelli
+6
+Cooper Hynes
+Centres
+33
+Patrick Retschko
+14
+Tim Taranto
+40
+Tyler Sonsie
+21
+Tom Liberatore
+7
+Rory Lobb
+32
+Arthur Jones
+Half Forwards
+44
+Seth Campbell
+3
+Dion Prestia
+7
+Rhyan Mansell
+16
+Jordan Croft
+33
+Aaron Naughton
+3
+Cody Weightman
+Full Forwards
+10
+Taj Hotton
+19
+Tom Lynch
+42
+Mykelti Lefau
+44
+Tim English
+9
+Ryley Sanders
+20
+Ed Richards
+Followers
+25
+Toby Nankervis
+5
+Jack Ross
+4
+Sam Lalor
+17
+Nick Coffield
+42
+Sam Davidson
+27
+Joel Freijah
+26
+Josh Dolan
+14
+Rhylee West
+Interchanges
+15
+Jayden Short
+22
+Sam Cumming
+13
+Hugo Ralphsmith
+24
+Sam Grlj
+26
+Zane Peucker
+35
+Luke Kennedy
+28
+Will Lewis
+36
+Luke Cleary
+Emergencies
+36
+James Trezise
+28
+Kane McAuliffe
+32
+Samson Ryan

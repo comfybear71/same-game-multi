@@ -1,7 +1,7 @@
 import { and, eq, gte } from "drizzle-orm";
 
 import { db } from "@/db";
-import { games, oddsSnapshots, players } from "@/db/schema";
+import { games, lineupPlayers, oddsSnapshots, players } from "@/db/schema";
 import { canonicalTeam } from "@/lib/afl/teams";
 import {
   fetchEventPlayerProps,
@@ -15,9 +15,11 @@ import { matchGameToEvent } from "@/lib/odds/matchGame";
 import { parseBookmakerProps } from "@/lib/odds/parseOutcomes";
 import { QuotaFloorError, type QuotaStatus } from "@/lib/odds/quota";
 import {
-  resolvePlayerId,
+  resolvePlayerForFixture,
+  type LineupHint,
   type PlayerCandidate,
 } from "@/lib/odds/resolvePlayer";
+import { resolveLineupPlayerIds } from "@/lib/ingest/lineupPlayerResolve";
 
 export type HarvestOptions = {
   apiKey: string;
@@ -112,6 +114,7 @@ export async function runOddsHarvest(
       id: players.id,
       name: players.name,
       team: players.team,
+      jumper: players.jumper,
     })
     .from(players);
 
@@ -164,8 +167,34 @@ export async function runOddsHarvest(
       game.oddsApiId = ev.id;
     }
 
-    const homeC = canonicalTeam(ev.home_team);
-    const awayC = canonicalTeam(ev.away_team);
+    const homeC = canonicalTeam(ev.home_team) ?? ev.home_team;
+    const awayC = canonicalTeam(ev.away_team) ?? ev.away_team;
+
+    let lineupHints: LineupHint[] = [];
+    if (game) {
+      const lpRows = await db
+        .select({
+          id: lineupPlayers.id,
+          playerName: lineupPlayers.playerName,
+          team: lineupPlayers.team,
+          jumper: lineupPlayers.jumper,
+          playerId: lineupPlayers.playerId,
+        })
+        .from(lineupPlayers)
+        .where(eq(lineupPlayers.gameId, game.id));
+      const idByLineup = await resolveLineupPlayerIds(
+        game.id,
+        canonicalTeam(game.home) ?? game.home,
+        canonicalTeam(game.away) ?? game.away,
+      );
+      lineupHints = lpRows.map((r) => ({
+        playerName: r.playerName,
+        team: canonicalTeam(r.team) ?? r.team,
+        jumper: r.jumper,
+        playerId: idByLineup.get(r.id) ?? r.playerId,
+      }));
+    }
+
     const parsed = parseBookmakerProps(
       data.bookmakers as Parameters<typeof parseBookmakerProps>[0],
       marketSet,
@@ -173,14 +202,13 @@ export async function runOddsHarvest(
 
     const rows = dedupeSnapshots(
       parsed.map((p) => {
-        let playerId =
-          resolvePlayerId(p.playerName, playerCandidates, homeC) ??
-          resolvePlayerId(p.playerName, playerCandidates, awayC);
-        if (playerId == null) {
-          // No team-less surname-only merge (resolvePlayer requires teamHint
-          // for surname-only). Full-name / nickname still works without hint.
-          playerId = resolvePlayerId(p.playerName, playerCandidates, null);
-        }
+        const playerId = resolvePlayerForFixture(
+          p.playerName,
+          playerCandidates,
+          lineupHints,
+          homeC,
+          awayC,
+        );
         if (playerId == null) {
           unresolved.set(
             p.playerName,

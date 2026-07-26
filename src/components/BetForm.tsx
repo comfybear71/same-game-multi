@@ -4,6 +4,8 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import type { StatType } from "@/db/schema";
+import { PaperBetToggle } from "@/components/PaperBetToggle";
+import { PAPER_BET_NOTE } from "@/lib/betTypes";
 
 const STATS: StatType[] = ["disposals", "marks", "tackles", "goals"];
 
@@ -57,6 +59,7 @@ export function BetForm({ games }: { games: GameOption[] }) {
   const [totalOdds, setTotalOdds] = useState("");
   const [totalStake, setTotalStake] = useState("");
   const [notes, setNotes] = useState("");
+  const [paperOnly, setPaperOnly] = useState(false);
   const [legs, setLegs] = useState<LegInput[]>([emptyLeg()]);
 
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -204,12 +207,17 @@ export function BetForm({ games }: { games: GameOption[] }) {
   }
 
   async function save() {
+    const slipNotes = paperOnly
+      ? notes.trim()
+        ? `${PAPER_BET_NOTE}. ${notes.trim()}`
+        : PAPER_BET_NOTE
+      : notes || undefined;
     await persist({
       round: round ? Number(round) : undefined,
       totalOdds: totalOdds ? Number(totalOdds) : undefined,
       totalStake: totalStake ? Number(totalStake) : undefined,
       status: "pending",
-      notes: notes || undefined,
+      notes: slipNotes,
       screenshotUrl: screenshotUrl || undefined,
       gameId: gameId ? Number(gameId) : undefined,
       legs: legs
@@ -296,6 +304,7 @@ export function BetForm({ games }: { games: GameOption[] }) {
           <span className="text-slate-400">Notes</span>
           <input className="input mt-1" value={notes} onChange={(e) => setNotes(e.target.value)} />
         </label>
+        <PaperBetToggle checked={paperOnly} onChange={setPaperOnly} />
       </section>
 
       {/* Legs */}

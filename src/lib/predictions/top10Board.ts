@@ -13,6 +13,7 @@ import { canonicalTeam } from "@/lib/afl/teams";
 import {
   bookmakerLines,
   games,
+  lineupPlayers,
   players,
   playerGameFeatures,
   predictions,
@@ -26,13 +27,23 @@ import {
 } from "@/lib/data/leaders";
 import { lineTarget } from "@/lib/format";
 import { getEmergencyMatcher } from "@/lib/ingest/lineup";
+import { resolveLineupPlayerIds } from "@/lib/ingest/lineupPlayerResolve";
+import { buildLineupCompletenessReport, type LineupCompletenessReport } from "@/lib/ingest/lineupCompleteness";
 import { getPlayerNews, type InjuryNews } from "@/lib/ingest/injuries";
-import { pickPrice, loadOddsSnapshotPrices, loadBookmakerLinePrices } from "@/lib/system/oddsPrices";
+import { normalisePlayerName } from "@/lib/playerName";
+import {
+  pickPrice,
+  loadOddsSnapshotPrices,
+  loadBookmakerLinePrices,
+  mergePriceMaps,
+  playerHasAnyOdds,
+} from "@/lib/system/oddsPrices";
 import { STAT_TYPES } from "./features";
 import { rungsFor } from "./modelLine";
 import { capGoalsLine } from "./suggest";
 
-export const TOP10_LIMIT = 10;
+/** @deprecated Full squad boards — no row cap. Kept for tests referencing the old limit. */
+export const TOP10_LIMIT = Number.POSITIVE_INFINITY;
 
 export type Top10Row = {
   rank: number;
@@ -40,6 +51,7 @@ export type Top10Row = {
   playerName: string;
   jumper: number | null;
   team: string;
+  position: string | null;
   statType: StatType;
   line: number;
   odds: number | null;
@@ -53,6 +65,10 @@ export type Top10Row = {
   availableRungs: number[];
   history: { hits: number; bets: number } | null;
   news: InjuryNews | null;
+  missingPrediction: boolean;
+  missingOdds: boolean;
+  missingPlayerLink: boolean;
+  missingPosition: boolean;
 };
 
 export type Top10TeamBoard = {
@@ -71,7 +87,8 @@ export type Top10BoardResponse = {
   home: string;
   away: string;
   markets: Top10MarketBoard[];
-  oddsSource: "snapshots" | "bookmaker_lines" | "none";
+  oddsSource: "snapshots" | "bookmaker_lines" | "mixed" | "none";
+  completeness: LineupCompletenessReport | null;
 };
 
 type RawPlayerStat = {
@@ -79,6 +96,7 @@ type RawPlayerStat = {
   playerName: string;
   jumper: number | null;
   team: string;
+  position: string | null;
   statType: StatType;
   prediction: number;
   seasonAvg: number | null;
@@ -88,6 +106,9 @@ type RawPlayerStat = {
   history: { hits: number; bets: number } | null;
   news: InjuryNews | null;
   rungs: number[];
+  missingPrediction: boolean;
+  missingPlayerLink: boolean;
+  missingPosition: boolean;
 };
 
 /**
@@ -186,6 +207,9 @@ export function buildTop10Reason(row: {
 }
 
 function sortTop10(a: RawPlayerStat, b: RawPlayerStat): number {
+  if (a.missingPrediction !== b.missingPrediction) {
+    return a.missingPrediction ? 1 : -1;
+  }
   const scoreDiff = rankTop10Score(b) - rankTop10Score(a);
   if (scoreDiff !== 0) return scoreDiff;
   return (
@@ -199,8 +223,18 @@ function toTop10Row(
   rank: number,
   prices: Map<string, number>,
 ): Top10Row {
-  const line = pickBoardLine(raw.rungs, raw.prediction, raw.statType, raw.seasonAvg)!;
-  const odds = pickPrice(prices, raw.playerId, raw.statType, line);
+  const line =
+    pickBoardLine(raw.rungs, raw.prediction, raw.statType, raw.seasonAvg) ??
+    rungsFor(raw.statType)[0] ??
+    0.5;
+  const odds =
+    raw.playerId > 0
+      ? pickPrice(prices, raw.playerId, raw.statType, line)
+      : null;
+  const missingOdds =
+    raw.playerId > 0 && !raw.missingPlayerLink
+      ? !playerHasAnyOdds(prices, raw.playerId, raw.statType)
+      : true;
   const lastGame = raw.recentForm[0] ?? null;
   return {
     rank,
@@ -208,6 +242,7 @@ function toTop10Row(
     playerName: raw.playerName,
     jumper: raw.jumper,
     team: raw.team,
+    position: raw.position,
     statType: raw.statType,
     line,
     odds: odds != null ? Math.round(odds * 100) / 100 : null,
@@ -217,19 +252,76 @@ function toTop10Row(
     recentForm: raw.recentForm,
     fantasyAvg: raw.fantasyAvg,
     benchmark: raw.benchmark,
-    reason: buildTop10Reason({
-      benchmark: raw.benchmark,
-      seasonAvg: raw.seasonAvg,
-      lastGame,
-      statType: raw.statType,
-      history: raw.history,
-    }),
+    reason: raw.missingPrediction
+      ? "No projection — generate predictions or fix player link"
+      : buildTop10Reason({
+          benchmark: raw.benchmark,
+          seasonAvg: raw.seasonAvg,
+          lastGame,
+          statType: raw.statType,
+          history: raw.history,
+        }),
     availableRungs:
       raw.rungs.length > 0
         ? [...new Set(raw.rungs)].sort((a, b) => a - b)
         : rungsFor(raw.statType),
     history: raw.history,
     news: raw.news,
+    missingPrediction: raw.missingPrediction,
+    missingOdds,
+    missingPlayerLink: raw.missingPlayerLink,
+    missingPosition: raw.missingPosition,
+  };
+}
+
+type SquadRow = {
+  id: number;
+  playerName: string;
+  team: string;
+  jumper: number | null;
+  position: string | null;
+  status: string;
+  playerId: number | null;
+};
+
+function sameBoardPerson(a: RawPlayerStat, b: RawPlayerStat): boolean {
+  if (a.statType !== b.statType) return false;
+  const teamA = canonicalTeam(a.team) ?? a.team;
+  const teamB = canonicalTeam(b.team) ?? b.team;
+  if (teamA !== teamB) return false;
+  if (a.playerId > 0 && b.playerId > 0 && a.playerId === b.playerId) return true;
+  return normalisePlayerName(a.playerName) === normalisePlayerName(b.playerName);
+}
+
+/** Keep projection row when duplicate stub exists (lineup player_id was null). */
+function preferBoardRow(existing: RawPlayerStat, incoming: RawPlayerStat): RawPlayerStat {
+  if (existing.missingPrediction && !incoming.missingPrediction) return incoming;
+  if (incoming.missingPrediction && !existing.missingPrediction) return existing;
+  if (existing.playerId <= 0 && incoming.playerId > 0) return incoming;
+  if (incoming.playerId <= 0 && existing.playerId > 0) return existing;
+  return existing;
+}
+
+function squadMeta(
+  squad: SquadRow[],
+  playerId: number,
+  name: string,
+  team: string,
+): { position: string | null; jumper: number | null; missingPosition: boolean } {
+  const teamC = canonicalTeam(team) ?? team;
+  const lp = squad.find(
+    (r) =>
+      (r.playerId != null && r.playerId === playerId && playerId > 0) ||
+      ((canonicalTeam(r.team) ?? r.team) === teamC &&
+        r.playerName.toLowerCase() === name.toLowerCase()),
+  );
+  if (!lp) {
+    return { position: null, jumper: null, missingPosition: false };
+  }
+  return {
+    position: lp.position,
+    jumper: lp.jumper,
+    missingPosition: lp.status === "named" && !lp.position?.trim(),
   };
 }
 
@@ -250,6 +342,7 @@ export async function buildTop10Board(
       away: "",
       markets: [],
       oddsSource: "none",
+      completeness: null,
     };
   }
 
@@ -259,6 +352,40 @@ export async function buildTop10Board(
   const emergencies = await getEmergencyMatcher(gameId);
   const historyByKey =
     userId != null ? (await getPlayerBettingRecord(userId)).byKey : {};
+
+  const lineupRows = await db
+    .select({
+      id: lineupPlayers.id,
+      playerName: lineupPlayers.playerName,
+      team: lineupPlayers.team,
+      jumper: lineupPlayers.jumper,
+      position: lineupPlayers.position,
+      status: lineupPlayers.status,
+      playerId: lineupPlayers.playerId,
+    })
+    .from(lineupPlayers)
+    .where(eq(lineupPlayers.gameId, gameId));
+
+  const idByLineup = await resolveLineupPlayerIds(gameId, homeC, awayC);
+
+  const squad: SquadRow[] = lineupRows
+    .filter((r) => r.status !== "emergency")
+    .map((r) => ({
+      ...r,
+      playerId: idByLineup.get(r.id) ?? r.playerId,
+    }));
+
+  function onSquad(playerId: number, name: string, team: string): boolean {
+    if (squad.length === 0) return true;
+    const teamC = canonicalTeam(team) ?? team;
+    const nn = normalisePlayerName(name);
+    return squad.some(
+      (lp) =>
+        (lp.playerId != null && lp.playerId === playerId && playerId > 0) ||
+        ((canonicalTeam(lp.team) ?? lp.team) === teamC &&
+          normalisePlayerName(lp.playerName) === nn),
+    );
+  }
 
   const preds = await db
     .select({
@@ -283,13 +410,18 @@ export async function buildTop10Board(
       }),
   );
 
+  const predByPlayerStat = new Map<string, (typeof activePreds)[number]>();
+  for (const p of activePreds) {
+    predByPlayerStat.set(`${p.playerId}:${p.statType}`, p);
+  }
+
   const roster = [
     ...new Map(
       activePreds.map((p) => [p.playerId, { id: p.playerId, name: p.name, team: p.team }]),
     ).values(),
   ];
 
-  const [lines, feats, newsByPlayer, { bands }, snapPrices, bookPrices] =
+  const [lines, feats, newsByPlayer, { bands }, snapPrices, bookPrices, completeness] =
     await Promise.all([
       db.select().from(bookmakerLines).where(eq(bookmakerLines.gameId, gameId)),
       db
@@ -300,11 +432,14 @@ export async function buildTop10Board(
       getGameBenchmarkBands(gameId),
       loadOddsSnapshotPrices(gameId).catch(() => new Map<string, number>()),
       loadBookmakerLinePrices(gameId).catch(() => new Map<string, number>()),
+      buildLineupCompletenessReport(gameId, homeC, awayC).catch(() => null),
     ]);
 
-  const oddsSource: Top10BoardResponse["oddsSource"] =
-    snapPrices.size > 0 ? "snapshots" : bookPrices.size > 0 ? "bookmaker_lines" : "none";
-  const prices = snapPrices.size > 0 ? snapPrices : bookPrices;
+  const prices = mergePriceMaps(bookPrices, snapPrices);
+  let oddsSource: Top10BoardResponse["oddsSource"] = "none";
+  if (snapPrices.size > 0 && bookPrices.size > 0) oddsSource = "mixed";
+  else if (snapPrices.size > 0) oddsSource = "snapshots";
+  else if (bookPrices.size > 0) oddsSource = "bookmaker_lines";
 
   const rungsByKey = new Map<string, number[]>();
   for (const l of lines) {
@@ -323,18 +458,35 @@ export async function buildTop10Board(
   }
 
   const rawByStatTeam = new Map<string, RawPlayerStat[]>();
+
+  function addRaw(raw: RawPlayerStat) {
+    const teamKey = `${raw.statType}:${raw.team}`;
+    const list = rawByStatTeam.get(teamKey) ?? [];
+    const dupIdx = list.findIndex((r) => sameBoardPerson(r, raw));
+    if (dupIdx >= 0) {
+      list[dupIdx] = preferBoardRow(list[dupIdx], raw);
+      rawByStatTeam.set(teamKey, list);
+      return;
+    }
+    list.push(raw);
+    rawByStatTeam.set(teamKey, list);
+  }
+
   for (const p of activePreds) {
     if (!STAT_TYPES.includes(p.statType)) continue;
+    if (!onSquad(p.playerId, p.name, p.team ?? "")) continue;
     const news = newsByPlayer.get(p.playerId) ?? null;
     if (news?.status === "out") continue;
 
     const key = `${p.playerId}:${p.statType}`;
     const team = canonicalTeam(p.team) ?? p.team;
-    const raw: RawPlayerStat = {
+    const meta = squadMeta(squad, p.playerId, p.name, team);
+    addRaw({
       playerId: p.playerId,
       playerName: p.name,
-      jumper: p.jumper,
+      jumper: meta.jumper ?? p.jumper,
       team,
+      position: meta.position,
       statType: p.statType,
       prediction: p.value,
       seasonAvg: seasonAvgByKey.get(key) ?? null,
@@ -344,12 +496,57 @@ export async function buildTop10Board(
       history: historyByKey[playerRecordKey(p.name, p.statType)] ?? null,
       news,
       rungs: rungsByKey.get(key) ?? [],
-    };
+      missingPrediction: false,
+      missingPlayerLink: false,
+      missingPosition: meta.missingPosition,
+    });
+  }
 
-    const teamKey = `${p.statType}:${team}`;
-    const list = rawByStatTeam.get(teamKey) ?? [];
-    list.push(raw);
-    rawByStatTeam.set(teamKey, list);
+  for (const lp of squad) {
+    const team = canonicalTeam(lp.team) ?? lp.team;
+    if (team !== homeC && team !== awayC) continue;
+    if (
+      emergencies.matches({
+        name: lp.playerName,
+        team: lp.team,
+        jumper: lp.jumper,
+      })
+    ) {
+      continue;
+    }
+    const pid = lp.playerId ?? 0;
+    for (const statType of STAT_TYPES) {
+      const pred = pid > 0 ? predByPlayerStat.get(`${pid}:${statType}`) : undefined;
+      if (pred) continue;
+      addRaw({
+        playerId: pid,
+        playerName: lp.playerName,
+        jumper: lp.jumper,
+        team,
+        position: lp.position,
+        statType,
+        prediction: 0,
+        seasonAvg: null,
+        recentForm: [],
+        fantasyAvg: null,
+        benchmark: "unknown",
+        history: historyByKey[playerRecordKey(lp.playerName, statType)] ?? null,
+        news: pid > 0 ? newsByPlayer.get(pid) ?? null : null,
+        rungs: pid > 0 ? rungsByKey.get(`${pid}:${statType}`) ?? [] : [],
+        missingPrediction: true,
+        missingPlayerLink: pid <= 0,
+        missingPosition: lp.status === "named" && !lp.position?.trim(),
+      });
+    }
+  }
+
+  for (const list of rawByStatTeam.values()) {
+    for (const raw of list) {
+      const meta = squadMeta(squad, raw.playerId, raw.playerName, raw.team);
+      if (raw.position == null && meta.position) raw.position = meta.position;
+      if (meta.jumper != null) raw.jumper = meta.jumper;
+      if (meta.missingPosition) raw.missingPosition = true;
+    }
   }
 
   const markets: Top10MarketBoard[] = STAT_TYPES.map((statType) => {
@@ -360,11 +557,11 @@ export async function buildTop10Board(
       statType,
       home: {
         team: homeC,
-        rows: homeRaw.slice(0, TOP10_LIMIT).map((r, i) => toTop10Row(r, i + 1, prices)),
+        rows: homeRaw.map((r, i) => toTop10Row(r, i + 1, prices)),
       },
       away: {
         team: awayC,
-        rows: awayRaw.slice(0, TOP10_LIMIT).map((r, i) => toTop10Row(r, i + 1, prices)),
+        rows: awayRaw.map((r, i) => toTop10Row(r, i + 1, prices)),
       },
     };
   });
@@ -375,10 +572,11 @@ export async function buildTop10Board(
     away: awayC,
     markets,
     oddsSource,
+    completeness,
   };
 }
 
-/** playerId:statType → Top 10 rank (1–10) within that club×market board. */
+/** playerId:statType → squad board rank within that club×market. */
 export async function top10RankMap(
   gameId: number,
 ): Promise<Map<string, { rank: number; team: string; line: number; seasonAvg: number | null }>> {
@@ -402,7 +600,7 @@ export async function top10RankMap(
   return map;
 }
 
-/** Set of playerId:statType keys on any Top 10 board for this game. */
+/** Set of playerId:statType keys on any squad board for this game. */
 export async function top10KeySet(gameId: number): Promise<Set<string>> {
   const map = await top10RankMap(gameId);
   return new Set(map.keys());

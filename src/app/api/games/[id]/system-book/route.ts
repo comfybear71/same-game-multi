@@ -6,6 +6,7 @@ import {
   buildSystemBookWithChooser,
   excludePlayerFromSystemBook,
   getSystemBookResponse,
+  LineupNotReadyForSystemError,
   previewSystemPortfolio,
   swapSystemTicketLeg,
   updateSystemTicketLegTarget,
@@ -133,6 +134,16 @@ export async function POST(
     const book = await getSystemBookResponse(gameId);
     return NextResponse.json({ ok: true, ...book });
   } catch (err) {
+    if (err instanceof LineupNotReadyForSystemError) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: err.message,
+          lineupGate: err.gate,
+        },
+        { status: 400 },
+      );
+    }
     return NextResponse.json(
       { ok: false, error: (err as Error).message },
       { status: 500 },

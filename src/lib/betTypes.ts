@@ -14,6 +14,13 @@ export function deriveSlipStatus(legs: { result: string }[]): BetSlipStatus {
   return "won";
 }
 
+/** Stored on `bets.notes` when logging a what-if slip (not placed on the book). */
+export const PAPER_BET_NOTE = "Paper — not placed on book";
+
+export function isPaperBet(notes: string | null | undefined): boolean {
+  return !!notes && /paper/i.test(notes);
+}
+
 /** One leg in the live "your bets in this game" panel. */
 export interface BetTrackerLeg {
   legId: number;

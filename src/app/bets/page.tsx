@@ -22,7 +22,7 @@ import {
   type EnrichedBetSlip,
 } from "@/lib/data/bets";
 import { getLinkableGames } from "@/lib/data/games";
-import { deriveSlipStatus } from "@/lib/betTypes";
+import { deriveSlipStatus, isPaperBet } from "@/lib/betTypes";
 import { rollUpSlips } from "@/lib/settle";
 import { marginVsTarget, signed, targetLabel } from "@/lib/format";
 
@@ -125,7 +125,7 @@ export default async function BetsPage({
       ) : null}
 
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat label="Slips" value={String(summary.total)} />
+        <Stat label="Real slips" value={String(summary.total)} />
         <Stat label="Pending" value={String(summary.pending)} />
         <Stat label="Strike rate" value={strikeRate(summary.won, summary.lost)} />
         <Stat
@@ -133,6 +133,10 @@ export default async function BetsPage({
           value={summary.roi == null ? "—" : `${(summary.roi * 100).toFixed(0)}%`}
         />
       </section>
+      <p className="-mt-1 text-[11px] text-slate-500">
+        Strike rate, ROI, and multis stats count real &amp; void Sportsbet slips only — paper
+        / what-if slips still appear below until you remove them.
+      </p>
 
       <CollapsibleSection
         title="Your multis"
@@ -287,6 +291,7 @@ function BetSlip({
   const misses = settledLegs.length - hits;
   const displayStatus = deriveSlipStatus(slip.legs);
   const needsLink = slip.round == null || slip.fixture == null;
+  const paper = isPaperBet(slip.notes);
 
   return (
     <div className="card">
@@ -300,11 +305,17 @@ function BetSlip({
           </Link>
         </div>
       ) : null}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <span className="text-sm text-slate-400">
           {slip.round ? `Round ${slip.round}` : "Multi"} · {slip.legs.length} legs
         </span>
-        <span className={`pill ${statusColor[displayStatus]}`}>{displayStatus}</span>
+        <div className="flex shrink-0 items-center gap-2">
+          <DeleteBetButton betId={slip.id} legCount={slip.legs.length} />
+          {paper ? (
+            <span className="pill bg-violet-500/15 text-violet-200">Paper</span>
+          ) : null}
+          <span className={`pill ${statusColor[displayStatus]}`}>{displayStatus}</span>
+        </div>
       </div>
       {needsLink ? <LinkBetGameButton betId={slip.id} games={linkGames} /> : null}
       <div className="mt-2 flex gap-4 text-sm text-slate-300">
@@ -431,11 +442,6 @@ function BetSlip({
           );
         })}
       </ul>
-      {displayStatus === "pending" ? (
-        <div className="mt-3 border-t border-surface-border pt-3">
-          <DeleteBetButton betId={slip.id} />
-        </div>
-      ) : null}
       <div className="mt-3 border-t border-surface-border pt-3">
         <UploadResultButton betId={slip.id} />
         <p className="mt-2 text-xs text-slate-500">
