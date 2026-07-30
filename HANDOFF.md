@@ -1,6 +1,6 @@
 # HANDOFF.md — Matty's got big balls multi tracker
 
-**Last updated:** July 2026 (Top 10 hub = DIY + Helm Suggest + System portfolio).
+**Last updated:** July 2026 (R21 queue: System book before lineup → then HELM).
 
 State of the build, what's done, what's next. Pair with **`CLAUDE.md`**
 (conventions/architecture) and **`README.md`** / **`docs/LOCAL-DEV.md`** (setup).
@@ -114,6 +114,31 @@ Flow:
 1. Upload lineup → **Generate predictions**.
 2. Suggestions built in `buildSuggestions()` → optional `explainMultis()`.
 3. After round: cron settles stats → legs → slips → `model_accuracy`.
+
+---
+
+## Round 21 — Collingwood v Geelong (maintainer queue)
+
+**When:** Round **21** starts **Thursday**; opener **Collingwood v Geelong** (cracker
+fixture). **Lineup:** upload expected **Wednesday**; confirm players before
+trusting System / HELM output.
+
+**Work order (do not swap):**
+
+1. **Before lineup uploaded & confirmed** — finish **System book** fixes from R20
+   testing (game-page System portfolio / `SystemBookPanel`, `lineupCompleteness.ts`
+   gate, portfolio fill, odds harvest links, debut / missing-pred handling). Keep
+   iterating until Stuart is happy with the machinery — **no HELM-focused pass yet**.
+2. **Wednesday** — upload lineup (column paste or screenshot), generate predictions,
+   confirm checklist (clubs, Top 10, odds, debuts).
+3. **After lineup confirmed** — **HELM system** session: Helm Suggest + System
+   portfolio on Coll v Geelong (Top 10 hub); tune for Thursday kickoff.
+
+**Personal bets:** paper / what-if for tests; **Delete whole slip** when done; log
+only real + void Sportsbet tickets for stats.
+
+**Next AI chat:** if Stuart mentions Round 21 or Coll v Geelong, read this section
+first — **System book before HELM**.
 
 ---
 

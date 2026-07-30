@@ -5,10 +5,20 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  mergePriceMaps,
   pickPrice,
   priceKey,
   selectLatestSnapshotPrices,
 } from "@/lib/system/oddsPrices";
+
+describe("mergePriceMaps", () => {
+  it("later maps override earlier keys", () => {
+    const a = new Map([[priceKey(1, "disposals", 19.5), 1.7]]);
+    const b = new Map([[priceKey(1, "disposals", 19.5), 1.9]]);
+    const m = mergePriceMaps(a, b);
+    assert.equal(m.get(priceKey(1, "disposals", 19.5)), 1.9);
+  });
+});
 
 describe("selectLatestSnapshotPrices", () => {
   it("keeps most recent snapshot per player+market+line", () => {

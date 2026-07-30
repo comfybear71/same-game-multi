@@ -1,0 +1,112 @@
+4
+Aidan Corr
+30
+Charlie Comben
+26
+Luke Parker
+Full Backs
+3
+Jack Silvagni
+44
+Callum Wilkie
+11
+Hunter Clark
+31
+Josh Goater
+5
+Caleb Daniel
+10
+Colby McKercher
+Half Backs
+8
+Bradley Hill
+14
+Liam Stocker
+13
+Ryan Byrnes
+8
+Bailey Scott
+9
+Luke Davies-Uniacke
+15
+Dylan Stephens
+Centres
+22
+Darcy Wilson
+2
+Marcus Windhager
+45
+Liam O'Connell
+13
+Charlie Spargo
+47
+Cooper Trembath
+12
+Jy Simpkin
+Half Forwards
+1
+Jack Higgins
+25
+Mattaes Phillipou
+40
+Max Hall
+44
+Cameron Zurhaar
+20
+Nick Larkey
+25
+Paul Curtis
+Full Forwards
+32
+Mason Wood
+12
+Max King
+10
+Mitch Owens
+38
+Tristan Xerri
+2
+Finn O'Sullivan
+3
+Harry Sheezel
+Followers
+19
+Rowan Marshall
+34
+Hugo Garcia
+7
+Nasiah Wanganeen-Milera
+19
+Griffin Logue
+27
+Jack Darling
+35
+Matt Whitlock
+37
+Cooper Harvey
+45
+Zac Banch
+Interchanges
+5
+Tobie Travaglia
+21
+Tom De Koning
+31
+Liam Ryan
+38
+Hugh Boxshall
+43
+Cooper Sharman
+17
+Riley Hardeman
+39
+Tom Blamires
+42
+Oliver Griffin
+Emergencies
+16
+Dan Butler
+24
+Angus Hastie
+47
+Anthony Caminiti

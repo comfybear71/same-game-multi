@@ -85,6 +85,58 @@ export function playerUrl(name: string, slugOverride?: string | null): string {
   return `${BASE}/stats/players/${initial}/${slug}.html`;
 }
 
+/** Name particles AFL Tables keeps lowercase in filenames (Jordan_de_Goey). */
+const SLUG_PARTICLES_LOWER = new Set(["de", "van", "von", "del", "da", "le", "la"]);
+
+function slugBasesFromParts(parts: string[]): string[] {
+  const bases = new Set<string>();
+  bases.add(parts.join("_"));
+  bases.add(
+    parts
+      .map((p) => (SLUG_PARTICLES_LOWER.has(p.toLowerCase()) ? p.toLowerCase() : p))
+      .join("_"),
+  );
+  return [...bases];
+}
+
+/** Distinct `_`-joined slug bases for a display name (apostrophe + particle variants). */
+export function slugBasesFromName(name: string): string[] {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return [];
+  const bases = new Set<string>();
+  for (const base of slugBasesFromParts(parts)) bases.add(base);
+  const noApos = parts.map((p) => p.replace(/'/g, ""));
+  for (const base of slugBasesFromParts(noApos)) bases.add(base);
+  return [...bases];
+}
+
+/** AFL Tables uses Tom_Lynch, Tom_Lynch0, … and Jordan_de_Goey (not De). */
+export function slugFileVariants(name: string): string[] {
+  const out: string[] = [];
+  for (const file of slugBasesFromName(name)) {
+    out.push(file);
+    for (let i = 0; i <= 3; i++) out.push(`${file}${i}`);
+  }
+  return [...new Set(out)];
+}
+
+export type PlayerHistoryHint = {
+  team?: string | null;
+  jumper?: number | null;
+};
+
+function scoreHistory(h: PlayerHistory, hint?: PlayerHistoryHint): number {
+  if (h.gameLog.length === 0) return -1;
+  let score = h.gameLog.length;
+  if (hint?.team && h.team) {
+    const want = canonicalTeam(hint.team) ?? hint.team;
+    const got = canonicalTeam(h.team) ?? h.team;
+    if (want === got) score += 10_000;
+  }
+  if (hint?.jumper != null && h.jumper === hint.jumper) score += 500;
+  return score;
+}
+
 function stripTags(html: string): string {
   return html.replace(/<[^>]+>/g, "").replace(/&nbsp;/g, "").trim();
 }
@@ -326,14 +378,29 @@ async function fetchHistoryAt(url: string): Promise<PlayerHistory | null> {
 export async function getPlayerHistory(
   name: string,
   slugOverride?: string | null,
+  hint?: PlayerHistoryHint,
 ): Promise<PlayerHistory> {
   if (slugOverride) {
     return (await fetchHistoryAt(playerUrl(name, slugOverride))) ?? emptyHistory();
   }
+
+  let best: PlayerHistory | null = null;
+  let bestScore = -1;
+
   for (const candidate of nameCandidates(name)) {
-    const history = await fetchHistoryAt(playerUrl(candidate));
-    if (history) return history;
+    for (const slug of slugFileVariants(candidate)) {
+      const history = await fetchHistoryAt(playerUrl(candidate, slug));
+      if (!history) continue;
+      const s = scoreHistory(history, hint);
+      if (s > bestScore) {
+        bestScore = s;
+        best = history;
+      }
+    }
   }
+
+  if (best) return best;
+
   console.warn(`[afltables] no history for ${name}`);
   return emptyHistory();
 }

@@ -86,12 +86,15 @@ export function SystemBookPanel({
   gameId: number;
   /** When wrapped in CollapsibleSection — drop outer card + title block. */
   embedded?: boolean;
-  /** Optional Top 10 boards for in-hub swap picker. */
+  /** Optional squad boards for in-hub swap picker. */
   top10Board?: Top10BoardResponse | null;
 }) {
   const [tickets, setTickets] = useState<SystemTicketView[]>([]);
   const [metrics, setMetrics] = useState<PortfolioMetrics | null>(null);
   const [chooser, setChooser] = useState<ChooserBook | null>(null);
+  const [lineupOddsWarning, setLineupOddsWarning] = useState<string | null>(
+    null,
+  );
   const [selections, setSelections] = useState<Record<string, CardStyle>>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -148,6 +151,7 @@ export function SystemBookPanel({
         metrics?: PortfolioMetrics;
         chooser?: ChooserBook;
         selections?: Record<string, CardStyle>;
+        lineupGate?: { oddsWarning?: string | null };
         error?: string;
       };
       if (!res.ok || !json.ok) throw new Error(json.error ?? `Failed (${res.status})`);
@@ -155,6 +159,7 @@ export function SystemBookPanel({
       setMetrics(json.metrics ?? null);
       setChooser(json.chooser ?? null);
       setSelections(json.selections ?? {});
+      setLineupOddsWarning(json.lineupGate?.oddsWarning ?? null);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -365,6 +370,9 @@ export function SystemBookPanel({
 
       {loading ? <p className="text-sm text-slate-400">Loading…</p> : null}
       {error ? <p className="text-sm text-accent-loss">{error}</p> : null}
+      {lineupOddsWarning ? (
+        <p className="text-sm text-amber-300/90">{lineupOddsWarning}</p>
+      ) : null}
 
       {!loading && tickets.length === 0 && !chooser && !error ? (
         <p className="text-sm text-slate-500">

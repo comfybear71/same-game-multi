@@ -13,7 +13,8 @@ import {
   type BetLeg,
 } from "@/db/schema";
 import type { BetTrackerLeg } from "@/lib/betTypes";
-import { deriveSlipStatus } from "@/lib/betTypes";
+import { playerRecordKey } from "@/lib/betTypes";
+import { deriveSlipStatus, isPaperBet } from "@/lib/betTypes";
 import { canonicalTeam } from "@/lib/afl/teams";
 import { normalisePlayerName } from "@/lib/playerName";
 
@@ -384,6 +385,7 @@ export async function getUserBetTracker(
     .select({
       legId: betLegs.id,
       betId: betLegs.betId,
+      betNotes: bets.notes,
       playerName: betLegs.playerName,
       gameId: betLegs.gameId,
       betRound: bets.round,
@@ -419,6 +421,7 @@ export async function getUserBetTracker(
     out.push({
       legId: leg.legId,
       betId: leg.betId,
+      paper: isPaperBet(leg.betNotes),
       playerName: leg.playerName,
       jumper: m?.jumper ?? null,
       team: m?.team ?? null,
@@ -462,9 +465,7 @@ export interface PlayerRecordIndex {
 }
 
 /** Lookup key for a player's record on a given stat. Mirror in any client. */
-export function playerRecordKey(name: string, stat: string): string {
-  return `${normaliseName(name)}:${stat}`;
-}
+export { playerRecordKey } from "@/lib/betTypes";
 
 /** All-stats strike rate for lineup badges (Review round roster, game lineup). */
 export interface PlayerHistorySummary {
@@ -614,6 +615,7 @@ export interface BetSummary {
 }
 
 export function summarise(slips: BetWithLegs[]): BetSummary {
+  slips = slips.filter((s) => !isPaperBet(s.notes));
   let staked = 0;
   let returned = 0;
   // ROI is computed over SETTLED bets only — pending stakes don't count as
@@ -694,6 +696,7 @@ function roiForSlips(slips: BetWithLegs[]): number | null {
 
 /** Group slips by leg count for review — 3-leg vs 25-leg performance. */
 export function analyseMultis(slips: BetWithLegs[]): MultiAnalytics {
+  slips = slips.filter((s) => !isPaperBet(s.notes));
   const byCount = new Map<number, BetWithLegs[]>();
   for (const s of slips) {
     const n = s.legs.length;

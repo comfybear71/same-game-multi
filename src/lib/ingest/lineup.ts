@@ -11,6 +11,10 @@ import {
 import { canonicalTeam } from "@/lib/afl/teams";
 import type { ExtractedLineup } from "@/lib/ai/readLineup";
 import { normalisePlayerName } from "@/lib/playerName";
+import { auditLineupRows } from "@/lib/ingest/lineupAudit";
+import { clearLineupApproval } from "@/lib/ingest/lineupReview";
+import { backfillLineupPlayerIds } from "@/lib/ingest/lineupPlayerResolve";
+import { normalizeLineupPosition } from "@/lib/ingest/lineupPosition";
 
 // Persist a screenshot-read team sheet as a game's lineup. The stored names are
 // the squad seed that prediction generation runs off (see generate.ts), so we
@@ -26,11 +30,146 @@ export interface SaveLineupResult {
   teams: string[];
   // Players whose club didn't match either side of the fixture (dropped).
   dropped: string[];
+  /** Incomplete read / suspicious squads — still stored, but do not bet yet. */
+  warnings: string[];
 }
 
 function surname(name: string): string {
   const parts = name.trim().split(/\s+/);
   return (parts[parts.length - 1] ?? "").toLowerCase();
+}
+
+/** Keep vision/paste name unless roster agrees on the same person (surname / full name). */
+function preferRosterName(
+  extractedName: string,
+  rowTeam: string,
+  jumper: number | null,
+  byTeamJumper: Map<string, string>,
+  byTeamSurname: Map<string, string>,
+): string {
+  const sn = surname(extractedName);
+  const fromJump =
+    jumper != null ? byTeamJumper.get(`${rowTeam}|${jumper}`) : undefined;
+  if (fromJump && surname(fromJump) === sn) return fromJump;
+
+  const fromSur = byTeamSurname.get(`${rowTeam}|${sn}`);
+  if (fromSur && surname(fromSur) === sn) {
+    if (normalisePlayerName(fromSur) === normalisePlayerName(extractedName)) {
+      return fromSur;
+    }
+    // Same club, same surname, different first name (e.g. Levi vs Will Ashcroft).
+    return extractedName;
+  }
+
+  return extractedName;
+}
+
+function jumperOwnerTeam(
+  jumper: number,
+  homeC: string,
+  awayC: string,
+  byTeamJumper: Map<string, string>,
+): string | null {
+  const homeKey = `${homeC}|${jumper}`;
+  const awayKey = `${awayC}|${jumper}`;
+  const homeHas = byTeamJumper.has(homeKey);
+  const awayHas = byTeamJumper.has(awayKey);
+  if (homeHas && !awayHas) return homeC;
+  if (awayHas && !homeHas) return awayC;
+  return null;
+}
+
+/** Prefer AFL Tables roster in DB; fall back to vision/paste team hint. */
+function resolveRowTeam(
+  playerName: string,
+  jumper: number | null,
+  hintTeam: string,
+  homeC: string,
+  awayC: string,
+  byTeamJumper: Map<string, string>,
+  byTeamSurname: Map<string, string>,
+): string {
+  const sn = surname(playerName);
+  if (jumper != null) {
+    const hk = `${homeC}|${jumper}`;
+    const ak = `${awayC}|${jumper}`;
+    const homeFull = byTeamJumper.get(hk);
+    const awayFull = byTeamJumper.get(ak);
+    if (homeFull && surname(homeFull) === sn) {
+      if (awayFull && surname(awayFull) === sn) return hintTeam;
+      return homeC;
+    }
+    if (awayFull && surname(awayFull) === sn) return awayC;
+    const owner = jumperOwnerTeam(jumper, homeC, awayC, byTeamJumper);
+    if (owner) {
+      const full = byTeamJumper.get(`${owner}|${jumper}`);
+      if (full && surname(full) === sn) return owner;
+    }
+  }
+  const homeSur = byTeamSurname.get(`${homeC}|${sn}`);
+  const awaySur = byTeamSurname.get(`${awayC}|${sn}`);
+  if (homeSur && !awaySur) return homeC;
+  if (awaySur && !homeSur) return awayC;
+  return hintTeam;
+}
+
+/** When AFL Tables roster has this surname on only one of the two clubs, trust that. */
+function uniqueClubFromRoster(
+  playerName: string,
+  jumper: number | null,
+  homeC: string,
+  awayC: string,
+  byTeamJumper: Map<string, string>,
+  byTeamSurname: Map<string, string>,
+): string | null {
+  const sn = surname(playerName);
+  const homeSur = byTeamSurname.get(`${homeC}|${sn}`);
+  const awaySur = byTeamSurname.get(`${awayC}|${sn}`);
+  if (homeSur && !awaySur) return homeC;
+  if (awaySur && !homeSur) return awayC;
+
+  if (jumper != null) {
+    const hk = `${homeC}|${jumper}`;
+    const ak = `${awayC}|${jumper}`;
+    const homeFull = byTeamJumper.get(hk);
+    const awayFull = byTeamJumper.get(ak);
+    const homeOk = homeFull && surname(homeFull) === sn;
+    const awayOk = awayFull && surname(awayFull) === sn;
+    if (homeOk && !awayOk) return homeC;
+    if (awayOk && !homeOk) return awayC;
+  }
+  return null;
+}
+
+/** Shared guernsey (#4 / #18 / #37) — disambiguate by surname; else keep paste side. */
+function resolvePasteTeam(
+  playerName: string,
+  jumper: number,
+  hintTeam: string,
+  homeC: string,
+  awayC: string,
+  byTeamJumper: Map<string, string>,
+  byTeamSurname: Map<string, string>,
+): string {
+  const sn = surname(playerName);
+  const hk = `${homeC}|${jumper}`;
+  const ak = `${awayC}|${jumper}`;
+  const homeFull = byTeamJumper.get(hk);
+  const awayFull = byTeamJumper.get(ak);
+  const homeHas = byTeamJumper.has(hk);
+  const awayHas = byTeamJumper.has(ak);
+  if (!homeHas || !awayHas) return hintTeam;
+
+  if (homeFull && surname(homeFull) === sn) {
+    if (awayFull && surname(awayFull) === sn) return hintTeam;
+    return homeC;
+  }
+  if (awayFull && surname(awayFull) === sn) return awayC;
+  const homeSur = byTeamSurname.get(`${homeC}|${sn}`);
+  const awaySur = byTeamSurname.get(`${awayC}|${sn}`);
+  if (homeSur && !awaySur) return homeC;
+  if (awaySur && !homeSur) return awayC;
+  return hintTeam;
 }
 
 export async function saveLineup(
@@ -52,12 +191,16 @@ export async function saveLineup(
   const knownRows = await db
     .select({ name: players.name, team: players.team, jumper: players.jumper })
     .from(players);
-  const known = knownRows.filter((r) => r.team === homeC || r.team === awayC);
+  const known = knownRows.filter((r) => {
+    const t = r.team ? canonicalTeam(r.team) ?? r.team : null;
+    return t === homeC || t === awayC;
+  });
   const byTeamJumper = new Map<string, string>();
   const byTeamSurname = new Map<string, string>();
   for (const r of known) {
-    if (r.jumper != null) byTeamJumper.set(`${r.team}|${r.jumper}`, r.name);
-    byTeamSurname.set(`${r.team}|${surname(r.name)}`, r.name);
+    const t = canonicalTeam(r.team!) ?? r.team!;
+    if (r.jumper != null) byTeamJumper.set(`${t}|${r.jumper}`, r.name);
+    byTeamSurname.set(`${t}|${surname(r.name)}`, r.name);
   }
 
   type Row = typeof lineupPlayers.$inferInsert;
@@ -75,24 +218,71 @@ export async function saveLineup(
     }
     teamsSeen.add(team);
     for (const p of t.players) {
-      const resolvedName =
-        (p.jumper != null ? byTeamJumper.get(`${team}|${p.jumper}`) : undefined) ??
-        byTeamSurname.get(`${team}|${surname(p.name)}`) ??
-        p.name;
-      const dedupeKey = `${team}|${resolvedName.toLowerCase()}`;
+      let rowTeam = team;
+      const fromPaste = sourceUrl?.startsWith("paste:") ?? false;
+      if (!fromPaste) {
+        rowTeam = resolveRowTeam(
+          p.name,
+          p.jumper,
+          rowTeam,
+          homeC,
+          awayC,
+          byTeamJumper,
+          byTeamSurname,
+        );
+      } else if (p.jumper != null) {
+        rowTeam = resolvePasteTeam(
+          p.name,
+          p.jumper,
+          rowTeam,
+          homeC,
+          awayC,
+          byTeamJumper,
+          byTeamSurname,
+        );
+      }
+      const rosterClub = uniqueClubFromRoster(
+        p.name,
+        p.jumper,
+        homeC,
+        awayC,
+        byTeamJumper,
+        byTeamSurname,
+      );
+      // Paste row-pairs already encode club; roster override mis-assigns when DB has stale duplicates.
+      if (rosterClub && !fromPaste) rowTeam = rosterClub;
+      const resolvedName = preferRosterName(
+        p.name,
+        rowTeam,
+        p.jumper,
+        byTeamJumper,
+        byTeamSurname,
+      );
+      const dedupeKey = `${rowTeam}|${resolvedName.toLowerCase()}`;
       if (seen.has(dedupeKey)) continue;
       seen.add(dedupeKey);
       rows.push({
         gameId,
-        team,
+        team: rowTeam,
         playerName: resolvedName,
         jumper: p.jumper,
-        position: p.position,
+        position: normalizeLineupPosition(p.position),
         status: p.status,
         sourceUrl,
       });
     }
   }
+
+  const warnings = auditLineupRows(
+    rows.map((r) => ({
+      team: r.team,
+      playerName: r.playerName,
+      jumper: r.jumper ?? null,
+      status: r.status as "named" | "interchange" | "emergency",
+    })),
+    homeC,
+    awayC,
+  );
 
   // Replace this game's lineup wholesale (idempotent re-upload).
   await db.delete(lineupPlayers).where(eq(lineupPlayers.gameId, gameId));
@@ -100,11 +290,16 @@ export async function saveLineup(
     await db.insert(lineupPlayers).values(rows);
   }
 
+  await backfillLineupPlayerIds(gameId, homeC, awayC);
+
+  await clearLineupApproval(gameId);
+
   return {
     gameId,
     stored: rows.length,
     teams: [...teamsSeen],
     dropped,
+    warnings,
   };
 }
 
@@ -113,27 +308,34 @@ export async function saveLineup(
  * Emergencies are excluded: they are not in the 22/23 and usually won't play.
  * Named + interchange are kept (interchange is part of the selected side).
  */
-export async function getLineupNames(
+export async function getLineupSquad(
   gameId: number,
-): Promise<{ name: string; team: string }[]> {
+): Promise<{ name: string; team: string; jumper: number | null }[]> {
   const rows = await db
     .select({
       name: lineupPlayers.playerName,
       team: lineupPlayers.team,
+      jumper: lineupPlayers.jumper,
       status: lineupPlayers.status,
     })
     .from(lineupPlayers)
     .where(eq(lineupPlayers.gameId, gameId));
   const seen = new Set<string>();
-  const out: { name: string; team: string }[] = [];
+  const out: { name: string; team: string; jumper: number | null }[] = [];
   for (const r of rows) {
     if (r.status === "emergency") continue;
     const key = `${r.name}|${r.team}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ name: r.name, team: r.team });
+    out.push({ name: r.name, team: r.team, jumper: r.jumper });
   }
   return out;
+}
+
+export async function getLineupNames(
+  gameId: number,
+): Promise<{ name: string; team: string }[]> {
+  return (await getLineupSquad(gameId)).map(({ name, team }) => ({ name, team }));
 }
 
 export type EmergencyMatcher = {

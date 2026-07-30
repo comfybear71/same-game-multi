@@ -10,6 +10,14 @@ export type PlayerCandidate = {
   id: number;
   name: string;
   team: string | null;
+  jumper?: number | null;
+};
+
+export type LineupHint = {
+  playerName: string;
+  team: string;
+  jumper: number | null;
+  playerId: number | null;
 };
 
 const FIRST_NAME_NICKNAMES: Record<string, string[]> = {
@@ -135,15 +143,24 @@ export function resolvePlayerId(
 
   const sn = surname(raw);
   if (sn.length < 2) return null;
+  const parts = normalisePlayerName(raw).split(/\s+/).filter(Boolean);
+  const hasFirstAndLast = parts.length >= 2;
   const initial = firstInitial(raw);
-  const hasFirst = firstToken(raw).length > 1; // "N Daicos" vs "Nick Daicos"
 
   const bySurname = search.filter((c) => surname(c.name) === sn);
   if (bySurname.length === 0) return null;
+
+  // Same club, same surname — require compatible first name (Levi vs Will Ashcroft).
+  if (hasFirstAndLast) {
+    const byFirst = bySurname.filter((c) => firstNamesCompatible(raw, c.name));
+    if (byFirst.length === 1) return byFirst[0]!.id;
+    if (byFirst.length > 1) return null;
+    return null;
+  }
+
   if (bySurname.length === 1) {
-    // Only accept sole surname match when we have a team hint (club+surname)
-    // or the raw name is a full first+last that already failed exact (rare).
-    if (teamHint) return bySurname[0]!.id;
+    const only = bySurname[0]!;
+    if (teamHint) return only.id;
     return null;
   }
 
@@ -154,15 +171,111 @@ export function resolvePlayerId(
   if (byInitial.length === 1) return byInitial[0]!.id;
 
   // Full first name among surname matches via nickname variants
-  if (hasFirst) {
-    const byFirst = bySurname.filter((c) => {
-      const cFirst = firstToken(c.name);
-      return (
-        variants.some((v) => firstToken(v) === cFirst) ||
-        nameVariants(c.name).some((v) => firstToken(v) === firstToken(raw))
-      );
-    });
+  if (hasFirstAndLast) {
+    const byFirst = bySurname.filter((c) => firstNamesCompatible(raw, c.name));
     if (byFirst.length === 1) return byFirst[0]!.id;
+  }
+
+  return null;
+}
+
+function firstNamesCompatible(raw: string, candidateName: string): boolean {
+  const rFirst = firstToken(raw);
+  const cFirst = firstToken(candidateName);
+  if (rFirst === cFirst) return true;
+  if (rFirst.length === 1 || cFirst.length === 1) {
+    return rFirst.charAt(0) === cFirst.charAt(0);
+  }
+  const rSet = new Set(nameVariants(raw).map((v) => firstToken(v)));
+  const cSet = new Set(nameVariants(candidateName).map((v) => firstToken(v)));
+  for (const t of rSet) {
+    if (cSet.has(t)) return true;
+  }
+  return false;
+}
+
+function lineupNameMatches(raw: string, lineupName: string): boolean {
+  const rawV = nameVariants(raw);
+  const lpV = nameVariants(lineupName);
+  if (rawV.some((v) => lpV.includes(v))) return true;
+  if (normalisePlayerName(raw) === normalisePlayerName(lineupName)) return true;
+  // Sportsbet / bookies sometimes emit "O'Brien O'Brien" for debuts.
+  const rawNorm = normalisePlayerName(raw);
+  const lpNorm = normalisePlayerName(lineupName);
+  const rawParts = rawNorm.split(/\s+/).filter(Boolean);
+  if (
+    rawParts.length >= 2 &&
+    rawParts.every((p) => p === rawParts[rawParts.length - 1]) &&
+    surname(raw) === surname(lineupName)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function candidateByTeamJumper(
+  candidates: PlayerCandidate[],
+  team: string,
+  jumper: number,
+): number | null {
+  const teamL = team.toLowerCase();
+  const hits = candidates.filter(
+    (c) =>
+      c.team != null &&
+      c.team.toLowerCase() === teamL &&
+      c.jumper === jumper,
+  );
+  return hits.length === 1 ? hits[0]!.id : null;
+}
+
+/**
+ * Resolve using bookie name, then this fixture's lineup (name, club, guernsey).
+ */
+export function resolvePlayerForFixture(
+  rawName: string,
+  candidates: PlayerCandidate[],
+  lineup: LineupHint[],
+  homeC: string,
+  awayC: string,
+): number | null {
+  if (lineup.length > 0) {
+    for (const lp of lineup) {
+      if (!lineupNameMatches(rawName, lp.playerName)) continue;
+      if (lp.playerId != null) return lp.playerId;
+      if (lp.jumper != null) {
+        const id = candidateByTeamJumper(candidates, lp.team, lp.jumper);
+        if (id != null) return id;
+      }
+    }
+
+    const sn = surname(rawName);
+    const initial = firstInitial(rawName);
+    const bySn = lineup.filter((lp) => surname(lp.playerName) === sn);
+    if (bySn.length === 1) {
+      const lp = bySn[0]!;
+      if (lp.playerId != null) return lp.playerId;
+      if (lp.jumper != null) {
+        const id = candidateByTeamJumper(candidates, lp.team, lp.jumper);
+        if (id != null) return id;
+      }
+    }
+
+    if (bySn.length > 1) {
+      const byInit = bySn.filter((lp) => firstInitial(lp.playerName) === initial);
+      const pick = byInit.length === 1 ? byInit[0]! : null;
+      if (pick) {
+        if (pick.playerId != null) return pick.playerId;
+        if (pick.jumper != null) {
+          const id = candidateByTeamJumper(candidates, pick.team, pick.jumper);
+          if (id != null) return id;
+        }
+      }
+    }
+  }
+
+  for (const team of [homeC, awayC, null] as const) {
+    const id = resolvePlayerId(rawName, candidates, team);
+    if (id != null) return id;
   }
 
   return null;

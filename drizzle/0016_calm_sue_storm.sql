@@ -1,0 +1,1 @@
+ALTER TABLE "player_live_stats" ADD COLUMN "tackles" integer DEFAULT 0 NOT NULL;

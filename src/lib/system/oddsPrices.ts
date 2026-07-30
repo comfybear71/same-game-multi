@@ -133,23 +133,40 @@ export async function loadBookmakerLinePrices(
   return out;
 }
 
-/**
- * Snapshots first; if empty for the fixture, fall back to bookmaker_lines.
- * Never throws — empty map = degrade to non-edge scoring.
- */
+/** Merge maps — later maps win on duplicate keys (snapshots over bookmaker_lines). */
+export function mergePriceMaps(
+  ...maps: Map<string, number>[]
+): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const m of maps) {
+    for (const [k, v] of m) out.set(k, v);
+  }
+  return out;
+}
+
+export function playerHasAnyOdds(
+  prices: Map<string, number>,
+  playerId: number,
+  statType: StatType,
+): boolean {
+  const prefix = `${playerId}:${statType}:`;
+  for (const [k, odds] of prices) {
+    if (k.startsWith(prefix) && odds > 1) return true;
+  }
+  return false;
+}
+
 export async function loadBookPricesForGame(
   gameId: number,
 ): Promise<Map<string, number>> {
   try {
-    const snaps = await loadOddsSnapshotPrices(gameId);
-    if (snaps.size > 0) return snaps;
+    const [snaps, book] = await Promise.all([
+      loadOddsSnapshotPrices(gameId).catch(() => new Map<string, number>()),
+      loadBookmakerLinePrices(gameId).catch(() => new Map<string, number>()),
+    ]);
+    return mergePriceMaps(book, snaps);
   } catch (err) {
-    console.warn("[oddsPrices] snapshots failed:", err);
-  }
-  try {
-    return await loadBookmakerLinePrices(gameId);
-  } catch (err) {
-    console.warn("[oddsPrices] bookmaker_lines failed:", err);
+    console.warn("[oddsPrices] load failed:", err);
     return new Map();
   }
 }

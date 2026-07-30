@@ -6,7 +6,7 @@
  *   npm run harvest:odds
  *
  * Requires ODDS_API_KEY + DATABASE_URL in .env.local.
- * Append-only snapshots — does not touch live trading / System book.
+ * Run harvest often before Odds API access ends — boards fall back to snapshots.
  */
 import { config } from "dotenv";
 config({ path: ".env.local" });

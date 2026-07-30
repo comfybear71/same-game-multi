@@ -4,6 +4,8 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import type { StatType } from "@/db/schema";
+import { PaperBetToggle } from "@/components/PaperBetToggle";
+import { PAPER_BET_NOTE } from "@/lib/betTypes";
 import { teamColors } from "@/lib/afl/teamColors";
 import { lineTarget, signed } from "@/lib/format";
 import { minLineTarget } from "@/lib/predictions/modelLine";
@@ -445,6 +447,7 @@ function SuggestionCard({
   const [totalStake, setTotalStake] = useState("10");
   const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [paperOnly, setPaperOnly] = useState(false);
 
   const existingKeys = new Set(legs.map((l) => legKey(l.playerId, l.statType)));
   const ticketChance = combinedChance(legs);
@@ -501,6 +504,7 @@ function SuggestionCard({
           round: round ?? undefined,
           totalOdds: totalOdds ? Number(totalOdds) : undefined,
           totalStake: totalStake ? Number(totalStake) : undefined,
+          notes: paperOnly ? PAPER_BET_NOTE : undefined,
           screenshotUrl: screenshotUrl ?? undefined,
           status: "pending",
           legs: legs.map((l) => ({
@@ -514,6 +518,7 @@ function SuggestionCard({
       if (!res.ok || !json.ok) throw new Error(json.error || "save failed");
       setTotalOdds("");
       setScreenshotUrl(null);
+      setPaperOnly(false);
       setLogSuccess(
         `Saved ${legs.length} legs. Build another multi here or open Bets to review.`,
       );
@@ -650,6 +655,7 @@ function SuggestionCard({
         ticketChance={ticketChance}
         logging={logging}
         uploading={uploading}
+        paperOnly={paperOnly}
         onLog={logMulti}
       />
 
@@ -724,10 +730,13 @@ function SuggestionCard({
           {logSuccess ? (
             <p className="text-sm text-accent-win">{logSuccess}</p>
           ) : null}
-          <p className="max-w-sm text-[11px] text-slate-500">
-            Only log once the ticket matches Sportsbet — tick players above, then
-            attach the slip screenshot for your records.
-          </p>
+          <PaperBetToggle checked={paperOnly} onChange={setPaperOnly} />
+          {!paperOnly ? (
+            <p className="max-w-sm text-[11px] text-slate-500">
+              Only log once the ticket matches Sportsbet — tick players above, then
+              attach the slip screenshot for your records.
+            </p>
+          ) : null}
         </div>
         <div className="text-right sm:hidden">
           <div className="text-xs text-slate-400">Modelled chance</div>
@@ -745,12 +754,14 @@ function LogActionBar({
   ticketChance,
   logging,
   uploading,
+  paperOnly,
   onLog,
 }: {
   legCount: number;
   ticketChance: number | null;
   logging: boolean;
   uploading: boolean;
+  paperOnly?: boolean;
   onLog: () => void;
 }) {
   const chancePct = ticketChance != null ? Math.round(ticketChance * 100) : null;
@@ -783,15 +794,19 @@ function LogActionBar({
         aria-live="polite"
         aria-label={
           legCount === 0
-            ? "Log this multi — add legs first"
-            : `Log this multi with ${legCount} legs`
+            ? paperOnly
+              ? "Save paper multi — add legs first"
+              : "Log this multi — add legs first"
+            : paperOnly
+              ? `Save paper multi with ${legCount} legs`
+              : `Log this multi with ${legCount} legs`
         }
       >
         {logging ? (
           "Logging…"
         ) : (
           <>
-            Log this multi
+            {paperOnly ? "Save paper multi" : "Log this multi"}
             <span
               className={`inline-flex min-w-[1.75rem] items-center justify-center rounded-full px-2 py-0.5 text-sm font-bold tabular-nums ${
                 legCount > 0

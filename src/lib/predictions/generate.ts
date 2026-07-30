@@ -17,7 +17,7 @@ import {
   recentFantasyAverage,
   type PlayerHistory,
 } from "@/lib/ingest/aflTables";
-import { getLineupNames } from "@/lib/ingest/lineup";
+import { getLineupSquad } from "@/lib/ingest/lineup";
 import { getTeamSeasonStats } from "@/lib/ingest/wheelo";
 import { calKey } from "./calibration";
 import { runAllModels } from "./engine";
@@ -72,23 +72,35 @@ export async function generatePredictions(gameId: number): Promise<GenerateResul
 
   // Squad seed: prefer the screenshot-read lineup (free, official team sheet);
   // fall back to the bookmaker's propped players if no lineup is uploaded.
-  const lineupNames = (await getLineupNames(gameId)).map((r) => r.name);
-  let names = [...new Set(lineupNames)];
-  if (names.length === 0) {
+  const lineupSquad = await getLineupSquad(gameId);
+  let seeds: { name: string; team: string | null; jumper: number | null }[] =
+    lineupSquad.map((r) => ({
+      name: r.name,
+      team: r.team,
+      jumper: r.jumper,
+    }));
+  if (seeds.length === 0) {
     const lineRows = await db
       .select({ name: bookmakerLines.playerName })
       .from(bookmakerLines)
       .where(eq(bookmakerLines.gameId, gameId));
-    names = [...new Set(lineRows.map((r) => r.name))];
+    seeds = [...new Set(lineRows.map((r) => r.name))].map((name) => ({
+      name,
+      team: null as string | null,
+      jumper: null as number | null,
+    }));
   }
-  if (names.length === 0) {
+  if (seeds.length === 0) {
     return { gameId, playersProcessed: 0, predictionsWritten: 0, unresolved: [] };
   }
 
   // Fetch all histories concurrently (bounded).
-  const fetched = await mapLimit(names, 5, async (name) => ({
-    name,
-    history: await getPlayerHistory(name),
+  const fetched = await mapLimit(seeds, 5, async (row) => ({
+    name: row.name,
+    history: await getPlayerHistory(row.name, undefined, {
+      team: row.team,
+      jumper: row.jumper,
+    }),
   }));
 
   const resolved = fetched.filter(
@@ -99,7 +111,18 @@ export async function generatePredictions(gameId: number): Promise<GenerateResul
     .filter((f) => f.history.gameLog.length === 0 || !f.history.team)
     .map((f) => f.name);
 
-  if (resolved.length === 0) {
+  // Same name can appear twice on a bad lineup read; history resolves to one identity.
+  const resolvedDeduped: typeof resolved = [];
+  const resolvedKeys = new Set<string>();
+  for (const row of resolved) {
+    const key = `${row.name}|${row.history.team}`;
+    if (resolvedKeys.has(key)) continue;
+    resolvedKeys.add(key);
+    resolvedDeduped.push(row);
+  }
+  const resolvedUnique = resolvedDeduped;
+
+  if (resolvedUnique.length === 0) {
     return { gameId, playersProcessed: 0, predictionsWritten: 0, unresolved };
   }
 
@@ -107,7 +130,7 @@ export async function generatePredictions(gameId: number): Promise<GenerateResul
   await db
     .insert(players)
     .values(
-      resolved.map((r) => ({
+      resolvedUnique.map((r) => ({
         name: r.name,
         team: r.history.team,
         jumper: r.history.jumper,
@@ -130,7 +153,7 @@ export async function generatePredictions(gameId: number): Promise<GenerateResul
   const playerRows = await db
     .select({ id: players.id, name: players.name, team: players.team })
     .from(players)
-    .where(inArray(players.name, resolved.map((r) => r.name)));
+    .where(inArray(players.name, resolvedUnique.map((r) => r.name)));
   const idByKey = new Map<string, number>();
   for (const row of playerRows) idByKey.set(`${row.name}|${row.team}`, row.id);
 
@@ -143,7 +166,7 @@ export async function generatePredictions(gameId: number): Promise<GenerateResul
   // Build prediction + feature rows, backfill bookmaker line player ids.
   const predRows: (typeof predictions.$inferInsert)[] = [];
   const featureRows: (typeof playerGameFeatures.$inferInsert)[] = [];
-  for (const { name, history } of resolved) {
+  for (const { name, history } of resolvedUnique) {
     const playerId = idByKey.get(`${name}|${history.team}`);
     if (!playerId) continue;
 
@@ -241,7 +264,7 @@ export async function generatePredictions(gameId: number): Promise<GenerateResul
 
   return {
     gameId,
-    playersProcessed: resolved.length,
+    playersProcessed: resolvedUnique.length,
     predictionsWritten: predRows.length,
     unresolved,
   };

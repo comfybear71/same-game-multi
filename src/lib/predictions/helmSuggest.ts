@@ -134,9 +134,9 @@ function pickHelmLegs(pool: SuggestedLeg[], n: number, focus: StatFocus): Sugges
 function buildLegWhy(row: Top10Row | undefined, leg: SuggestedLeg): string {
   const parts: string[] = [];
   if (row) {
-    parts.push(`Top10 #${row.rank} ${shortStat(row.statType)}`);
+    parts.push(`Squad #${row.rank} ${shortStat(row.statType)}`);
   } else {
-    parts.push("Outside Top 10 (fill)");
+    parts.push("Outside ranked squad (fill)");
   }
   if (leg.benchmark && leg.benchmark !== "unknown") {
     parts.push(
@@ -224,6 +224,7 @@ export async function buildHelmSuggestion(
       : allRows.filter((r) => r.statType === focus);
 
   let pool = focusedRows
+    .filter((r) => !r.missingPrediction && r.playerId > 0)
     .map(top10RowToSuggestedLeg)
     .filter((l) => l.confidence > 0);
 

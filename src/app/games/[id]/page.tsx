@@ -5,7 +5,7 @@ import { notFound } from "next/navigation";
 import { CollapsibleSection } from "@/components/CollapsibleSection";
 import { GeneratePredictionsButton } from "@/components/GeneratePredictionsButton";
 import { MatchBriefingCard } from "@/components/MatchBriefingCard";
-import { GameLineupPanel } from "@/components/RoundRosterPanel";
+import { GameLineupSection } from "@/components/GameLineupSection";
 import { LiveBetTracker } from "@/components/LiveBetTracker";
 import { LiveScoreboard } from "@/components/LiveScoreboard";
 import { StatBoardView } from "@/components/StatBoardView";
@@ -27,6 +27,8 @@ import { getGameById, getRecentTeamForm, type FormResult } from "@/lib/data/game
 import { getMatchBriefing } from "@/lib/data/matchBriefing";
 import { getStatBoard, type StatBoard } from "@/lib/data/statboard";
 import { getGameLineupRoster, type RoundLineupPlayer } from "@/lib/data/roundRoster";
+import { getGameLiveStatsPayload, legFeedValues } from "@/lib/data/liveStatsForGame";
+import { ensureAccurateGameSettlement } from "@/lib/settle";
 import { getTeamRankings } from "@/lib/data/teamStats";
 import { STAT_TYPES } from "@/lib/predictions/features";
 import {
@@ -70,6 +72,8 @@ export default async function GamePage({ params }: { params: { id: string } }) {
   if (!game) notFound();
 
   let myLegs: BetTrackerLeg[] = [];
+  let initialLegFeed: Record<string, number> = {};
+  let initialStatsUpdatedAt: string | null = null;
   let playerRecord: Record<string, PlayerBetRecord> = {};
   let playerHistory: Record<string, PlayerHistorySummary> = {};
   try {
@@ -78,7 +82,19 @@ export default async function GamePage({ params }: { params: { id: string } }) {
     if (email) {
       const userId = await userIdForEmail(email);
       if (userId) {
+        if (game.status === "complete" && game.round != null) {
+          await ensureAccurateGameSettlement(game.id).catch((err) => {
+            console.warn(`[game-page] settle sync game ${game.id}:`, err);
+          });
+        }
         myLegs = await getUserBetTracker(userId, game.id, game.round);
+        if (myLegs.length > 0) {
+          const livePayload = await getGameLiveStatsPayload(game.id, userId, {
+            legs: myLegs,
+          });
+          initialLegFeed = legFeedValues(livePayload.legFeed);
+          initialStatsUpdatedAt = livePayload.statsUpdatedAt;
+        }
         const recordIndex = await getPlayerBettingRecord(userId);
         playerRecord = recordIndex.byKey;
         playerHistory = indexPlayerHistoryByName(recordIndex.list);
@@ -141,7 +157,7 @@ export default async function GamePage({ params }: { params: { id: string } }) {
       : `Lineup (${lineupNamed} selected${lineupEmg > 0 ? ` · ${lineupEmg} emg` : ""})`;
   const lineupDescription =
     lineupPlayers.length === 0
-      ? "Upload the team sheet on Fixtures before generating predictions."
+      ? "Upload or paste the AFL team sheet, then generate predictions."
       : `Named squad · ${lineupPhase}${game.round != null ? ` · Round ${game.round}` : ""}`;
 
   let initialLive: LiveGameState | null = null;
@@ -248,7 +264,7 @@ export default async function GamePage({ params }: { params: { id: string } }) {
       />
 
       <CollapsibleSection title={lineupTitle} description={lineupDescription}>
-        <GameLineupPanel
+        <GameLineupSection
           gameId={game.id}
           home={game.home}
           away={game.away}
@@ -256,7 +272,7 @@ export default async function GamePage({ params }: { params: { id: string } }) {
           players={lineupPlayers}
           round={game.round}
           playerHistory={playerHistory}
-          embedded
+          lineupCount={lineupPlayers.length}
         />
       </CollapsibleSection>
 
@@ -266,7 +282,15 @@ export default async function GamePage({ params }: { params: { id: string } }) {
           description="Live +/− tracking and Game over settle."
           defaultOpen
         >
-          <LiveBetTracker legs={myLegs} gameId={game.id} embedded />
+          <LiveBetTracker
+            legs={myLegs}
+            gameId={game.id}
+            commenceTimeIso={game.commenceTime.toISOString()}
+            gameComplete={game.status === "complete"}
+            initialLegFeed={initialLegFeed}
+            initialStatsUpdatedAt={initialStatsUpdatedAt}
+            embedded
+          />
         </CollapsibleSection>
       ) : null}
 
@@ -277,10 +301,10 @@ export default async function GamePage({ params }: { params: { id: string } }) {
         <GeneratePredictionsButton gameId={game.id} autoRun={needsPredictions} />
       </div>
 
-      {/* One hub: DIY Top 10 + Helm Suggest + System portfolio */}
+      {/* One hub: squad boards + Helm Suggest + System portfolio */}
       <CollapsibleSection
-        title="Top 10 hub"
-        description="DIY boards, Helm Suggest (with thinking), and System portfolio — question and edit before you log or lock."
+        title="Squad board hub"
+        description="Full lineup boards, Helm Suggest (with thinking), and System portfolio — question and edit before you log or lock."
         defaultOpen
       >
         <Top10BoardPanel
@@ -313,14 +337,18 @@ export default async function GamePage({ params }: { params: { id: string } }) {
                     page (AFL team sheet screenshot).
                   </li>
                 ) : (
-                  <li>Lineup uploaded ({lineupPlayers.length} players).</li>
+                  <li>
+                    Lineup uploaded ({lineupPlayers.length} players) — review and{" "}
+                    <span className="font-medium text-slate-200">Approve lineup</span>{" "}
+                    in the section above.
+                  </li>
                 )}
                 <li>
                   Tap{" "}
                   <span className="font-medium text-slate-200">
                     &ldquo;Generate predictions&rdquo;
                   </span>{" "}
-                  above — unlocks Top 10 boards and Helm Suggest. System stakes in the
+                  above — unlocks squad boards and Helm Suggest. System stakes in the
                   hub stay put either way.
                 </li>
               </ol>

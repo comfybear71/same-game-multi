@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { LiveRefreshCountdown } from "@/components/LiveRefreshCountdown";
 import { formatScoreLine, hasRealScores } from "@/lib/scoreDisplay";
 
 export interface LiveScoreState {
@@ -48,12 +49,15 @@ export function LiveScoreboard({
     }
     return initialLive ?? null;
   });
+  const [pollChecking, setPollChecking] = useState(false);
+  const [pollUpdatedAt, setPollUpdatedAt] = useState<Date | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     async function tick() {
+      setPollChecking(true);
       try {
         const res = await fetch(`/api/games/${gameId}/live`);
         const json = await res.json();
@@ -70,11 +74,14 @@ export function LiveScoreboard({
           }
           return s;
         });
+        setPollUpdatedAt(new Date());
         const active = s ?? undefined;
         if (active?.status === "live") timer = setTimeout(tick, LIVE_POLL_MS);
         else if (active?.status !== "final") timer = setTimeout(tick, LIVE_POLL_MS);
       } catch {
         /* retry on next tick */
+      } finally {
+        if (!cancelled) setPollChecking(false);
       }
     }
     tick();
@@ -112,7 +119,21 @@ export function LiveScoreboard({
                 : "bg-accent/15 text-accent"
           }`}
         >
-          {live ? "● LIVE" : final ? "Final" : "Starting"}
+          {live ? (
+            <>
+              ● LIVE
+              <LiveRefreshCountdown
+                checking={pollChecking}
+                lastUpdatedAt={pollUpdatedAt}
+                intervalMs={LIVE_POLL_MS}
+                className="text-accent-loss/70"
+              />
+            </>
+          ) : final ? (
+            "Final"
+          ) : (
+            "Starting"
+          )}
         </span>
         {state?.timestr ? (
           <span className="text-sm font-medium text-slate-300">{state.timestr}</span>

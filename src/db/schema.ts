@@ -126,6 +126,8 @@ export const games = pgTable(
     // Optional per-game preview / narrative (Sportsbet, AFL.com, etc.) —
     // pasted by the group so each fixture has its own story on the briefing.
     matchNotes: text("match_notes"),
+    /** Set when maintainer confirms the uploaded squad grid; cleared on re-upload. */
+    lineupApprovedAt: timestamp("lineup_approved_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -210,6 +212,41 @@ export const playerGameStats = pgTable(
     playerGameUnique: unique("player_game_unique").on(t.playerId, t.gameId),
     gameIdx: index("pgs_game_idx").on(t.gameId),
     playerIdx: index("pgs_player_idx").on(t.playerId),
+  }),
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Live match-centre stats (Path 3 — polled during in-progress games)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** One row per player per live fixture. Upserted by `/api/cron/refresh-live-stats`. */
+export const playerLiveStats = pgTable(
+  "player_live_stats",
+  {
+    id: serial("id").primaryKey(),
+    /** Squiggle game id or other fixture key as text (e.g. `"18456"`). */
+    matchId: text("match_id").notNull(),
+    /** Provider player id from match-centre JSON (not our `players.id`). */
+    playerId: text("player_id").notNull(),
+    playerName: text("player_name").notNull(),
+    team: text("team").notNull(),
+    goals: integer("goals").notNull().default(0),
+    kicks: integer("kicks").notNull().default(0),
+    handballs: integer("handballs").notNull().default(0),
+    disposals: integer("disposals").notNull().default(0),
+    marks: integer("marks").notNull().default(0),
+    tackles: integer("tackles").notNull().default(0),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (t) => ({
+    matchPlayerUnique: unique("player_live_stats_match_player_unique").on(
+      t.matchId,
+      t.playerId,
+    ),
+    matchIdx: index("player_live_stats_match_idx").on(t.matchId),
   }),
 );
 
@@ -861,6 +898,7 @@ export type Game = typeof games.$inferSelect;
 export type NewGame = typeof games.$inferInsert;
 export type Player = typeof players.$inferSelect;
 export type PlayerGameStat = typeof playerGameStats.$inferSelect;
+export type PlayerLiveStat = typeof playerLiveStats.$inferSelect;
 export type Prediction = typeof predictions.$inferSelect;
 export type PlayerGameFeature = typeof playerGameFeatures.$inferSelect;
 export type BookmakerLine = typeof bookmakerLines.$inferSelect;

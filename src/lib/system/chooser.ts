@@ -11,6 +11,7 @@ import {
   assembleSoftScore,
   bandSoftBonus,
   edgePackageFillOptions,
+  exposureKey,
 } from "@/lib/system/portfolioFill";
 import type {
   FillCandidate,
@@ -117,7 +118,14 @@ export function reweightPoolForStyle(
     let packagePts = 0;
     let confScale = 1;
     if (style === "edge") {
-      packagePts = edgePts * 1.8 + cushionPts * 1.2 + trendPts * 0.5 + leaderPts * 0.4;
+      packagePts =
+        edgePts * 1.8 + cushionPts * 1.2 + trendPts * 0.5 + leaderPts * 0.4;
+      if (c.edge != null && c.edge < -0.02) {
+        packagePts += c.edge * 140;
+      }
+      if (c.edge != null && c.edge < -0.06) {
+        packagePts -= 80;
+      }
     } else if (style === "hot") {
       packagePts = leaderPts * 4 + trendPts * 2.5 + cushionPts * 0.5 + edgePts * 0.3;
       confScale = 0.85;
@@ -142,7 +150,7 @@ function fillOptsForStyle(style: CardStyle) {
     return edgePackageFillOptions({ lambda: 14, hardWall: 3 });
   }
   if (style === "hot") {
-    return edgePackageFillOptions({ lambda: 3, hardWall: 3 });
+    return edgePackageFillOptions({ lambda: 5, hardWall: 3 });
   }
   return edgePackageFillOptions({ lambda: 4, hardWall: 3 });
 }
@@ -190,6 +198,63 @@ function computeShared(
   return out;
 }
 
+const CLONE_PENALTY = 420;
+
+function legExposureKeys(legs: FillCandidate[]): Set<string> {
+  return new Set(legs.map((l) => exposureKey(l.playerId, l.statFamily)));
+}
+
+function overlapCount(a: FillCandidate[], b: FillCandidate[]): number {
+  const keysB = legExposureKeys(b);
+  return a.filter((l) => keysB.has(exposureKey(l.playerId, l.statFamily))).length;
+}
+
+/** When spread/hot clone edge on a slot, re-fill that slot with edge legs penalised. */
+function antiCloneRefill(
+  slots: {
+    id: string;
+    strategyKey: string;
+    focus: string;
+    legCount: number;
+    isFun?: boolean;
+  }[],
+  pool: FillCandidate[],
+  books: Record<CardStyle, FillResult>,
+  strategyKey: string,
+  style: CardStyle,
+): void {
+  const edgeTicket = ticketByKey(books.edge, strategyKey);
+  const styleTicket = ticketByKey(books[style], strategyKey);
+  if (!edgeTicket?.legs.length || !styleTicket?.legs.length) return;
+
+  const slot = slots.find((s) => s.strategyKey === strategyKey);
+  if (!slot || slot.legCount <= 1) return;
+
+  const overlap = overlapCount(edgeTicket.legs, styleTicket.legs);
+  if (overlap < slot.legCount - 1) return;
+
+  const banned = legExposureKeys(edgeTicket.legs);
+  const penalised = pool.map((c) =>
+    banned.has(exposureKey(c.playerId, c.statFamily))
+      ? { ...c, softScore: c.softScore - CLONE_PENALTY }
+      : c,
+  );
+  const weighted = reweightPoolForStyle(penalised, style);
+  const oneSlot = slots.filter((s) => s.strategyKey === strategyKey);
+  const refilled = runPortfolioFillExplicit(
+    oneSlot,
+    weighted,
+    "draft",
+    fillOptsForStyle(style),
+  );
+  const replacement = refilled.tickets[0];
+  if (!replacement?.legs.length) return;
+
+  books[style].tickets = books[style].tickets.map((t) =>
+    t.strategyKey === strategyKey ? replacement : t,
+  );
+}
+
 /**
  * Build three full portfolio fills from the same slots + edge-enriched pool.
  */
@@ -216,6 +281,11 @@ export function buildChooserBook(
       "draft",
       fillOptsForStyle(style),
     );
+  }
+
+  for (const strategyKey of slots.map((s) => s.strategyKey)) {
+    antiCloneRefill(slots, pool, books, strategyKey, "spread");
+    antiCloneRefill(slots, pool, books, strategyKey, "hot");
   }
 
   // Preserve slot order
