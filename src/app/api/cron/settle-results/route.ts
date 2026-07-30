@@ -5,8 +5,8 @@ import { runSettlementPipeline } from "@/lib/settle";
 
 // Runs daily, morning-after AWST (see vercel.json):
 //   1. Refresh results from Squiggle (flips games to complete + scores).
-//   2. Append AFL Tables actuals for latest round (not full-season re-scrape).
-//   3. Grade System book + settle personal bet legs/slips.
+//   2. Final MC sync → grade every leg (Match Centre = afl.com.au).
+//   3. Grade System book + roll up personal slips.
 //   4. Recompute model accuracy for affected rounds.
 //   5. When new stats land: catch up Strategy lab + bankroll (Lab page).
 // Leaders / Review / System read settled tables immediately after steps 2–4.

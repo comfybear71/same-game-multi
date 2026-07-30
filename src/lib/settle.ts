@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import {
@@ -6,13 +6,18 @@ import {
   bets,
   games,
   playerGameStats,
+  playerLiveStats,
+  players,
   systemTickets,
   type LegResult,
 } from "@/db/schema";
 import { currentSeason } from "@/lib/cron";
 import { gamePlayerNameSet, legInGameScope, slipBetIdsForGame, type LegGameScope } from "@/lib/data/bets";
-import { settleGamePlayerStats } from "@/lib/ingest/playerStats";
+import { statValueFromRow, settlementStatValue, MC_AUTHORITATIVE_MIN_PLAYERS } from "@/lib/data/liveStatsForGame";
+import { resolveAflMatchIdForGame } from "@/lib/ingest/aflMatchForGame";
+import { settleGamePlayerStats, applyMatchCentreToPlayerGameStats } from "@/lib/ingest/playerStats";
 import { refreshGameFromSquiggle, syncFixtures } from "@/lib/ingest/sync";
+import { normalisePlayerName } from "@/lib/playerName";
 import { computeRoundAccuracy } from "@/lib/predictions/accuracy";
 import { gradeSystemBookForGame } from "@/lib/system/grade";
 
@@ -20,8 +25,8 @@ import { gradeSystemBookForGame } from "@/lib/system/grade";
 // Settlement: once a game is complete and player stats are recorded, mark each
 // bet leg hit/miss, then roll up each slip to won/lost.
 //
-// Legs linked to a game (or matched by round + player name on the live panel)
-// settle from tap counts on "Game over", or from AFL Tables when published.
+// Legs settle automatically from Match Centre (official AFL feed) after full
+// time — each player × stat graded against the line; no manual stat checking.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface SettleResult {
@@ -68,6 +73,51 @@ async function pendingLegsForGame(gameId: number): Promise<BetLegRow[]> {
       ),
     )
     .map(({ leg }) => leg);
+}
+
+/** Pending + settled legs in game scope — re-hydrate when MC/AFL Tables corrects actuals. */
+async function legsForGameSettlement(gameId: number): Promise<BetLegRow[]> {
+  const pending = await pendingLegsForGame(gameId);
+  const game = (
+    await db.select({ round: games.round }).from(games).where(eq(games.id, gameId)).limit(1)
+  )[0];
+  if (!game) return pending;
+
+  const gameNames = await gamePlayerNameSet(gameId);
+  const rows = await db
+    .select({ leg: betLegs, betRound: bets.round, betId: bets.id })
+    .from(betLegs)
+    .innerJoin(bets, eq(betLegs.betId, bets.id))
+    .where(inArray(betLegs.result, ["miss", "hit"]));
+
+  const scopeLegs: LegGameScope[] = rows.map(({ leg, betRound, betId }) => ({
+    betId,
+    gameId: leg.gameId,
+    playerName: leg.playerName,
+    betRound,
+  }));
+  const slipBetIds = slipBetIdsForGame(scopeLegs, gameId, game.round, gameNames);
+
+  const settled = rows
+    .filter(({ leg, betRound, betId }) =>
+      legInGameScope(
+        { betId, gameId: leg.gameId, playerName: leg.playerName, betRound },
+        gameId,
+        game.round,
+        gameNames,
+        slipBetIds,
+      ),
+    )
+    .map(({ leg }) => leg);
+
+  const seen = new Set<number>();
+  const out: BetLegRow[] = [];
+  for (const leg of [...pending, ...settled]) {
+    if (seen.has(leg.id)) continue;
+    seen.add(leg.id);
+    out.push(leg);
+  }
+  return out;
 }
 
 /** Settle all pending legs whose game is complete and has player stats. */
@@ -279,11 +329,25 @@ export async function backfillSettledActuals(): Promise<number> {
       leg.statType
     ];
     if (actualValue == null || actualValue === leg.actualValue) continue;
+
+    const wasWrongZero =
+      leg.result === "miss" &&
+      (leg.actualValue === 0 || leg.actualValue == null);
+    const result: LegResult =
+      wasWrongZero && actualValue != null
+        ? actualValue > leg.line
+          ? "hit"
+          : "miss"
+        : leg.result;
+
     await db
       .update(betLegs)
-      .set({ actualValue })
+      .set({ actualValue, result })
       .where(eq(betLegs.id, leg.id));
     filled++;
+    if (result !== leg.result) {
+      await rollUpSlips([leg.betId]);
+    }
   }
   return filled;
 }
@@ -342,7 +406,133 @@ export async function settlePendingBetsForGame(gameId: number): Promise<SettleRe
   return { legsSettled, slipsSettled };
 }
 
-/** Finalise pending legs from in-game tap counts (actualValue already stored). */
+/** Fill actualValue from Match Centre (authoritative) with AFL Tables fallback only when MC incomplete. */
+export async function hydrateGameLegActuals(gameId: number): Promise<number> {
+  const legs = await legsForGameSettlement(gameId);
+  if (legs.length === 0) return 0;
+
+  const game = (
+    await db.select().from(games).where(eq(games.id, gameId)).limit(1)
+  )[0];
+  if (!game) return 0;
+
+  const officialRows = await db
+    .select({
+      stat: playerGameStats,
+      name: players.name,
+    })
+    .from(playerGameStats)
+    .innerJoin(players, eq(players.id, playerGameStats.playerId))
+    .where(
+      and(eq(playerGameStats.gameId, gameId), eq(playerGameStats.settled, true)),
+    );
+
+  const officialByPlayerId = new Map(
+    officialRows.map((r) => [r.stat.playerId, r.stat]),
+  );
+  const officialByName = new Map<string, (typeof officialRows)[0]["stat"]>();
+  for (const row of officialRows) {
+    officialByName.set(normalisePlayerName(row.name), row.stat);
+  }
+
+  const mcByName = new Map<
+    string,
+    { disposals: number; marks: number; goals: number; tackles: number }
+  >();
+  let mcRowCount = 0;
+  const aflMatchId = await resolveAflMatchIdForGame(game);
+  if (aflMatchId) {
+    const liveRows = await db
+      .select()
+      .from(playerLiveStats)
+      .where(eq(playerLiveStats.matchId, aflMatchId));
+    mcRowCount = liveRows.length;
+    for (const row of liveRows) {
+      mcByName.set(normalisePlayerName(row.playerName), {
+        disposals: row.disposals,
+        marks: row.marks,
+        goals: row.goals,
+        tackles: row.tackles,
+      });
+    }
+  }
+  const mcAuthoritative = mcRowCount >= MC_AUTHORITATIVE_MIN_PLAYERS;
+
+  let hydrated = 0;
+  const touchedBetIds = new Set<number>();
+  const pgsMcFix = new Map<
+    number,
+    { disposals?: number; marks?: number; goals?: number; tackles?: number }
+  >();
+
+  for (const leg of legs) {
+    let officialVal: number | null = null;
+
+    if (leg.playerId != null) {
+      const stat = officialByPlayerId.get(leg.playerId);
+      if (stat) officialVal = statValueFromRow(leg.statType, stat);
+    }
+
+    if (officialVal == null && leg.playerName) {
+      const stat = officialByName.get(normalisePlayerName(leg.playerName));
+      if (stat) officialVal = statValueFromRow(leg.statType, stat);
+    }
+
+    let mcVal: number | null = null;
+    if (leg.playerName) {
+      const mc = mcByName.get(normalisePlayerName(leg.playerName));
+      if (mc) mcVal = statValueFromRow(leg.statType, mc);
+    }
+
+    const value = settlementStatValue(mcVal, officialVal, { mcAuthoritative });
+    if (value == null) continue;
+
+    if (leg.playerId != null && mcVal != null && officialVal != null && mcVal !== officialVal) {
+      const fix = pgsMcFix.get(leg.playerId) ?? {};
+      if (leg.statType === "disposals") fix.disposals = mcVal;
+      if (leg.statType === "marks") fix.marks = mcVal;
+      if (leg.statType === "goals") fix.goals = mcVal;
+      if (leg.statType === "tackles") fix.tackles = mcVal;
+      pgsMcFix.set(leg.playerId, fix);
+    }
+
+    const result: LegResult = value > leg.line ? "hit" : "miss";
+    const unchanged =
+      leg.actualValue === value && leg.result === result;
+    if (unchanged) continue;
+
+    await db
+      .update(betLegs)
+      .set({
+        actualValue: value,
+        result,
+        ...(leg.gameId == null ? { gameId } : {}),
+      })
+      .where(eq(betLegs.id, leg.id));
+    hydrated++;
+    touchedBetIds.add(leg.betId);
+  }
+
+  for (const [playerId, patch] of pgsMcFix) {
+    await db
+      .update(playerGameStats)
+      .set(patch)
+      .where(
+        and(
+          eq(playerGameStats.gameId, gameId),
+          eq(playerGameStats.playerId, playerId),
+        ),
+      );
+  }
+
+  if (touchedBetIds.size > 0) {
+    await rollUpSlips([...touchedBetIds]);
+  }
+
+  return hydrated;
+}
+
+/** Finalise pending legs from stored actualValue (after hydrate). */
 export async function settleLegsFromLiveCounts(gameId: number): Promise<SettleResult> {
   const pendingLegs = await pendingLegsForGame(gameId);
 
@@ -372,27 +562,35 @@ export async function settleLegsFromLiveCounts(gameId: number): Promise<SettleRe
 export interface GameOverSettlement {
   gameStatus: string | null;
   statsRecorded: number;
+  hydrated: number;
   fromStats: SettleResult;
   fromLive: SettleResult;
   systemBook: { ticketsGraded: number; legsUpdated: number };
 }
 
-/** Post-game: finalise tap counts first, then try AFL Tables for any left. */
+/** Post-game: Squiggle → MC sync → MC → PGS → hydrate legs → grade. */
 export async function runGameOverSettlement(gameId: number): Promise<GameOverSettlement> {
   const game = (
     await db.select().from(games).where(eq(games.id, gameId)).limit(1)
   )[0];
   if (!game) throw new Error("game not found");
 
-  // Live counts first — fast and matches how you watch the game.
-  const fromLive = await settleLegsFromLiveCounts(gameId);
-
-  // Just this fixture from Squiggle (not the whole season — avoids timeouts).
   await refreshGameFromSquiggle(gameId).catch((err) => {
     console.warn(`[game-over] Squiggle refresh for game ${gameId}:`, err);
   });
 
+  const { syncLiveStatsForGame } = await import("@/lib/ingest/liveStatsSync");
+  await syncLiveStatsForGame(gameId, { final: true }).catch((err) => {
+    console.warn(`[game-over] final MC sync for game ${gameId}:`, err);
+  });
+
+  await applyMatchCentreToPlayerGameStats(gameId).catch((err) => {
+    console.warn(`[game-over] MC → PGS for game ${gameId}:`, err);
+  });
+
   const statsResult = await settleGamePlayerStats(gameId);
+  const hydrated = await hydrateGameLegActuals(gameId);
+  const fromLive = await settleLegsFromLiveCounts(gameId);
   const fromStats = await settlePendingBetsForGame(gameId);
   const systemBook = await gradeSystemBookForGame(gameId).catch((err) => {
     console.warn(`[game-over] system book grade for game ${gameId}:`, err);
@@ -406,15 +604,65 @@ export async function runGameOverSettlement(gameId: number): Promise<GameOverSet
   return {
     gameStatus: updated?.status ?? null,
     statsRecorded: statsResult.recorded,
+    hydrated,
     fromStats,
     fromLive,
     systemBook,
   };
 }
 
+/**
+ * Re-sync Match Centre and re-grade all legs for a complete game.
+ * Safe to call on every page load — idempotent when DB already matches MC.
+ */
+export async function ensureAccurateGameSettlement(gameId: number): Promise<number> {
+  const game = (
+    await db.select({ status: games.status }).from(games).where(eq(games.id, gameId)).limit(1)
+  )[0];
+  if (!game || game.status !== "complete") return 0;
+
+  const { syncLiveStatsForGame } = await import("@/lib/ingest/liveStatsSync");
+  await syncLiveStatsForGame(gameId, { final: true }).catch((err) => {
+    console.warn(`[settle] MC sync for game ${gameId}:`, err);
+  });
+  await applyMatchCentreToPlayerGameStats(gameId).catch((err) => {
+    console.warn(`[settle] MC → PGS for game ${gameId}:`, err);
+  });
+  return hydrateGameLegActuals(gameId);
+}
+
+const POST_GAME_AUTO_SETTLE_MS = 12 * 60 * 60 * 1000;
+
+/**
+ * After siren: auto-sync MC and grade every leg for recently complete fixtures.
+ * Called by the live-stats cron (every 2 min) so mates never manually check stats.
+ */
+export async function autoSettleRecentCompleteGames(
+  season: number,
+): Promise<{ gamesChecked: number; legsHydrated: number }> {
+  const windowStart = new Date(Date.now() - POST_GAME_AUTO_SETTLE_MS);
+  const recentComplete = await db
+    .select({ id: games.id })
+    .from(games)
+    .where(
+      and(
+        eq(games.season, season),
+        eq(games.status, "complete"),
+        gte(games.commenceTime, windowStart),
+      ),
+    );
+
+  let legsHydrated = 0;
+  for (const { id } of recentComplete) {
+    legsHydrated += await ensureAccurateGameSettlement(id);
+  }
+  return { gamesChecked: recentComplete.length, legsHydrated };
+}
+
 export interface SettlementPipelineResult {
   sync: Awaited<ReturnType<typeof syncFixtures>>;
   statsRecorded: number;
+  legsHydrated: number;
   settle: SettleResult;
   actualsBackfilled: number;
   accuracyRows: number;
@@ -519,13 +767,22 @@ export async function runSettlementPipeline(
 
   let statsRecorded = 0;
   let systemTicketsGraded = 0;
+  let legsHydrated = 0;
   const rounds = new Set<number>();
+  const { syncLiveStatsForGame } = await import("@/lib/ingest/liveStatsSync");
   for (const g of completed) {
+    await syncLiveStatsForGame(g.id, { final: true }).catch((err) => {
+      console.warn(`[settle] MC sync for game ${g.id}:`, err);
+    });
+    await applyMatchCentreToPlayerGameStats(g.id).catch((err) => {
+      console.warn(`[settle] MC → PGS for game ${g.id}:`, err);
+    });
     const res = await settleGamePlayerStats(g.id);
     statsRecorded += res.recorded;
     if (g.round != null && (res.recorded > 0 || res.skipped > 0)) {
       rounds.add(g.round);
     }
+    legsHydrated += await hydrateGameLegActuals(g.id);
     const graded = await gradeSystemBookForGame(g.id).catch(() => ({
       ticketsGraded: 0,
       legsUpdated: 0,
@@ -579,6 +836,7 @@ export async function runSettlementPipeline(
   return {
     sync,
     statsRecorded,
+    legsHydrated,
     settle,
     actualsBackfilled,
     accuracyRows,

@@ -85,11 +85,38 @@ export function playerUrl(name: string, slugOverride?: string | null): string {
   return `${BASE}/stats/players/${initial}/${slug}.html`;
 }
 
-/** AFL Tables uses Tom_Lynch, Tom_Lynch0, Tom_Lynch1, … for same-spelling players. */
+/** Name particles AFL Tables keeps lowercase in filenames (Jordan_de_Goey). */
+const SLUG_PARTICLES_LOWER = new Set(["de", "van", "von", "del", "da", "le", "la"]);
+
+function slugBasesFromParts(parts: string[]): string[] {
+  const bases = new Set<string>();
+  bases.add(parts.join("_"));
+  bases.add(
+    parts
+      .map((p) => (SLUG_PARTICLES_LOWER.has(p.toLowerCase()) ? p.toLowerCase() : p))
+      .join("_"),
+  );
+  return [...bases];
+}
+
+/** Distinct `_`-joined slug bases for a display name (apostrophe + particle variants). */
+export function slugBasesFromName(name: string): string[] {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return [];
+  const bases = new Set<string>();
+  for (const base of slugBasesFromParts(parts)) bases.add(base);
+  const noApos = parts.map((p) => p.replace(/'/g, ""));
+  for (const base of slugBasesFromParts(noApos)) bases.add(base);
+  return [...bases];
+}
+
+/** AFL Tables uses Tom_Lynch, Tom_Lynch0, … and Jordan_de_Goey (not De). */
 export function slugFileVariants(name: string): string[] {
-  const file = name.trim().split(/\s+/).join("_");
-  const out = [file];
-  for (let i = 0; i <= 3; i++) out.push(`${file}${i}`);
+  const out: string[] = [];
+  for (const file of slugBasesFromName(name)) {
+    out.push(file);
+    for (let i = 0; i <= 3; i++) out.push(`${file}${i}`);
+  }
   return [...new Set(out)];
 }
 

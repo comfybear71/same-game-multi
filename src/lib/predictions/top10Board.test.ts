@@ -95,7 +95,7 @@ describe("rankTop10Score", () => {
 });
 
 describe("buildTop10Reason", () => {
-  it("includes band, avg, last game, and personal tape", () => {
+  it("includes avg, last game, and personal tape", () => {
     const reason = buildTop10Reason({
       benchmark: "elite",
       seasonAvg: 28.4,
@@ -103,7 +103,7 @@ describe("buildTop10Reason", () => {
       statType: "disposals",
       history: { hits: 3, bets: 4 },
     });
-    assert.match(reason, /Elite/);
+    assert.doesNotMatch(reason, /Elite/);
     assert.match(reason, /avg 28\.4/);
     assert.match(reason, /last 31/);
     assert.match(reason, /you 3\/4/);

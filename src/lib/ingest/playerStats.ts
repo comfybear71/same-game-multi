@@ -6,9 +6,13 @@ import {
   lineupPlayers,
   players,
   playerGameStats,
+  playerLiveStats,
   predictions,
 } from "@/db/schema";
 import { canonicalTeam } from "@/lib/afl/teams";
+import { MC_AUTHORITATIVE_MIN_PLAYERS } from "@/lib/data/liveStatsForGame";
+import { resolveAflMatchIdForGame } from "@/lib/ingest/aflMatchForGame";
+import { normalisePlayerName } from "@/lib/playerName";
 import { actualForGame } from "@/lib/predictions/features";
 import { getPlayerHistory } from "./aflTables";
 
@@ -68,6 +72,74 @@ async function playersForGame(
   return [...byId.values()];
 }
 
+/** Overwrite player_game_stats from Match Centre (official AFL feed) when available. */
+export async function applyMatchCentreToPlayerGameStats(
+  gameId: number,
+): Promise<number> {
+  const game = (
+    await db.select().from(games).where(eq(games.id, gameId)).limit(1)
+  )[0];
+  if (!game || game.status !== "complete") return 0;
+
+  const aflMatchId = await resolveAflMatchIdForGame(game);
+  if (!aflMatchId) return 0;
+
+  const liveRows = await db
+    .select()
+    .from(playerLiveStats)
+    .where(eq(playerLiveStats.matchId, aflMatchId));
+  if (liveRows.length === 0) return 0;
+
+  const involved = await playersForGame(gameId);
+  const byNorm = new Map<
+    string,
+    { id: number; name: string; team: string; aflTablesSlug: string | null }[]
+  >();
+  for (const p of involved) {
+    const key = normalisePlayerName(p.name);
+    const list = byNorm.get(key) ?? [];
+    list.push(p);
+    byNorm.set(key, list);
+  }
+
+  let updated = 0;
+  for (const row of liveRows) {
+    const team = canonicalTeam(row.team) ?? row.team;
+    const hits = byNorm.get(normalisePlayerName(row.playerName)) ?? [];
+    const player =
+      hits.length === 1
+        ? hits[0]
+        : hits.find((p) => (canonicalTeam(p.team) ?? p.team) === team);
+    if (!player) continue;
+
+    await db
+      .insert(playerGameStats)
+      .values({
+        playerId: player.id,
+        gameId,
+        disposals: row.disposals,
+        marks: row.marks,
+        tackles: row.tackles,
+        goals: row.goals,
+        didPlay: true,
+        settled: true,
+      })
+      .onConflictDoUpdate({
+        target: [playerGameStats.playerId, playerGameStats.gameId],
+        set: {
+          disposals: row.disposals,
+          marks: row.marks,
+          tackles: row.tackles,
+          goals: row.goals,
+          didPlay: true,
+          settled: true,
+        },
+      });
+    updated++;
+  }
+  return updated;
+}
+
 /** Settle actual player stats for one completed game (append / upsert only). */
 export async function settleGamePlayerStats(
   gameId: number,
@@ -86,6 +158,22 @@ export async function settleGamePlayerStats(
   const involved = await playersForGame(gameId);
   if (involved.length === 0) {
     return { gameId, recorded: 0, pending: 0, skipped: 0 };
+  }
+
+  const aflMatchId = await resolveAflMatchIdForGame(game);
+  if (aflMatchId) {
+    const mcRows = await db
+      .select({ id: playerLiveStats.id })
+      .from(playerLiveStats)
+      .where(eq(playerLiveStats.matchId, aflMatchId));
+    if (mcRows.length >= MC_AUTHORITATIVE_MIN_PLAYERS) {
+      return {
+        gameId,
+        recorded: 0,
+        pending: 0,
+        skipped: involved.length,
+      };
+    }
   }
 
   // Already settled — don't re-scrape AFL Tables.

@@ -165,6 +165,7 @@ async function main() {
         },
         gamesTargeted: completeIds.length,
         statsRecorded: result.statsRecorded,
+        legsHydrated: result.legsHydrated,
         settle: result.settle,
         actualsBackfilled: result.actualsBackfilled,
         accuracyRows: result.accuracyRows,

@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { BenchmarkBandBadge } from "@/components/BenchmarkBandBadge";
 import { LineupCompletenessPanel } from "@/components/LineupCompletenessPanel";
 import { PaperBetToggle } from "@/components/PaperBetToggle";
 import { PAPER_BET_NOTE } from "@/lib/betTypes";
@@ -754,12 +755,13 @@ function TeamBoard({
         {side.team} · {label} · full squad
       </div>
       <div
-        className="grid grid-cols-[1.5rem_1.75rem_1fr] gap-x-2 px-3 py-1.5 text-[10px] font-medium uppercase tracking-wide text-slate-500"
+        className="grid grid-cols-[1.5rem_1.75rem_1fr_2.5rem] gap-x-2 px-3 py-1.5 text-[10px] font-medium uppercase tracking-wide text-slate-500"
         style={{ borderBottom: `1px solid ${c.bg}44` }}
       >
         <span>Rk</span>
         <span>#</span>
         <span>Player · line · odds</span>
+        <span className="text-right">Band</span>
       </div>
       {side.rows.length === 0 ? (
         <p className="p-3 text-sm text-slate-500">No {statType} projections yet.</p>
@@ -777,7 +779,7 @@ function TeamBoard({
                   type="button"
                   disabled={disabled}
                   onClick={() => onToggle(row)}
-                  className={`grid w-full grid-cols-[1.5rem_1.75rem_1fr] items-start gap-x-2 px-3 py-2.5 text-left transition ${
+                  className={`grid w-full grid-cols-[1.5rem_1.75rem_1fr_2.5rem] items-start gap-x-2 px-3 py-2.5 text-left transition ${
                     selected
                       ? "bg-accent/10 ring-1 ring-inset ring-accent/40"
                       : disabled
@@ -841,6 +843,13 @@ function TeamBoard({
                         {row.news.status}
                       </span>
                     ) : null}
+                  </div>
+                  <div className="flex justify-end pt-0.5">
+                    <BenchmarkBandBadge
+                      band={
+                        row.missingPrediction ? "unknown" : row.benchmark
+                      }
+                    />
                   </div>
                 </button>
               </li>

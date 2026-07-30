@@ -180,14 +180,7 @@ export function rankTop10Score(row: {
   return avg * 2 + formMean * 0.5 + fantasy * 0.02 + bandPts;
 }
 
-const BAND_LABEL: Record<BenchmarkBand, string> = {
-  elite: "Elite",
-  above: "Above avg",
-  average: "Average",
-  below: "Below avg",
-};
-
-/** Plain-English one-liner for the punter board row. */
+/** Plain-English one-liner for the punter board row (band shown as pill in UI). */
 export function buildTop10Reason(row: {
   benchmark: BenchmarkBand | "unknown";
   seasonAvg: number | null;
@@ -196,7 +189,6 @@ export function buildTop10Reason(row: {
   history: { hits: number; bets: number } | null;
 }): string {
   const parts: string[] = [];
-  if (row.benchmark !== "unknown") parts.push(BAND_LABEL[row.benchmark]);
   if (row.seasonAvg != null) parts.push(`avg ${Math.round(row.seasonAvg * 10) / 10}`);
   if (row.lastGame != null) parts.push(`last ${row.lastGame}`);
   if (row.history && row.history.bets > 0) {

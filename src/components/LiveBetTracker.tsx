@@ -4,19 +4,37 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { LegMarketEditor, type LegMarketPatch } from "@/components/EditLegMarket";
+import { LiveRefreshCountdown } from "@/components/LiveRefreshCountdown";
 import { teamColors } from "@/lib/afl/teamColors";
 import type { BetTrackerLeg } from "@/lib/betTypes";
+import { playerRecordKey } from "@/lib/betTypes";
 import { lineTarget, marginVsTarget, signed, targetLabel } from "@/lib/format";
+import { isTrackerStat, STAT_THEME, statThemeFor, type TrackerStat } from "@/lib/statTheme";
 
 type LegState = BetTrackerLeg & { saving?: boolean; error?: string };
 
-function legCleared(leg: BetTrackerLeg): boolean {
+function legCleared(
+  leg: BetTrackerLeg,
+  effectiveValue?: number,
+  gameComplete?: boolean,
+): boolean {
+  if (gameComplete && effectiveValue != null) {
+    return effectiveValue > leg.line;
+  }
   if (leg.result === "hit") return true;
   if (leg.result === "miss" || leg.result === "void") return false;
-  return leg.actualValue != null && leg.actualValue > leg.line;
+  const v = effectiveValue ?? leg.actualValue;
+  return v != null && v > leg.line;
 }
 
-function legFailed(leg: BetTrackerLeg): boolean {
+function legFailed(
+  leg: BetTrackerLeg,
+  effectiveValue?: number,
+  gameComplete?: boolean,
+): boolean {
+  if (gameComplete && effectiveValue != null) {
+    return effectiveValue <= leg.line;
+  }
   return leg.result === "miss";
 }
 
@@ -38,8 +56,49 @@ const BAR_STATE_ORDER: Record<BarState, number> = {
   empty: 4,
 };
 
-function legCount(leg: BetTrackerLeg): number {
-  return leg.actualValue ?? 0;
+function legCount(
+  leg: BetTrackerLeg,
+  feedByKey?: Record<string, number>,
+  gameComplete?: boolean,
+): number {
+  const key = playerRecordKey(leg.playerName ?? "", leg.statType);
+  const feed = feedByKey?.[key];
+
+  // Complete games: MC feed matches afl.com.au — wins over stale DB actuals.
+  if (gameComplete && feed != null) {
+    if (leg.result === "pending" || leg.actualValue == null) return feed;
+    if (feed !== leg.actualValue) return feed;
+  }
+
+  if (
+    (leg.result === "hit" || leg.result === "miss") &&
+    leg.actualValue != null
+  ) {
+    return leg.actualValue;
+  }
+  const hasManual =
+    leg.actualValue != null && (leg.actualValue > 0 || feed == null);
+  if (hasManual) return leg.actualValue ?? 0;
+  return feed ?? leg.actualValue ?? 0;
+}
+
+function progressRatio(
+  leg: BetTrackerLeg,
+  feedByKey?: Record<string, number>,
+  gameComplete?: boolean,
+): number {
+  const target = lineTarget(leg.line);
+  if (target <= 0) return 0;
+  return legCount(leg, feedByKey, gameComplete) / target;
+}
+
+function compareProgressDesc(
+  a: BetTrackerLeg,
+  b: BetTrackerLeg,
+  feedByKey?: Record<string, number>,
+  gameComplete?: boolean,
+): number {
+  return progressRatio(b, feedByKey, gameComplete) - progressRatio(a, feedByKey, gameComplete);
 }
 
 function isAlmostThere(
@@ -71,37 +130,67 @@ function barStateFromCounts(
   return "blue";
 }
 
-function legBarState(leg: BetTrackerLeg): BarState {
+function legBarState(
+  leg: BetTrackerLeg,
+  feedByKey?: Record<string, number>,
+  gameComplete?: boolean,
+): BarState {
+  const count = legCount(leg, feedByKey, gameComplete);
   return barStateFromCounts(
-    legCount(leg),
+    count,
     lineTarget(leg.line),
     leg.statType,
-    legCleared(leg),
-    legFailed(leg),
+    legCleared(leg, count, gameComplete),
+    legFailed(leg, count, gameComplete),
   );
 }
 
-type SortMode = "need" | "number" | "color" | "tackles" | "goals" | "disposals" | "marks";
+type SortMode =
+  | "need"
+  | "number"
+  | "color"
+  | "sportsbet"
+  | "paper"
+  | "tackles"
+  | "goals"
+  | "disposals"
+  | "marks";
 
 const SORT_OPTIONS: { key: SortMode; label: string }[] = [
   { key: "need", label: "Need" },
   { key: "number", label: "#" },
   { key: "color", label: "Color" },
-  { key: "tackles", label: "Tackles" },
-  { key: "goals", label: "Goals" },
-  { key: "disposals", label: "Disposals" },
-  { key: "marks", label: "Marks" },
+  { key: "sportsbet", label: "🔒 $$" },
+  { key: "paper", label: "Paper" },
+  { key: "tackles", label: STAT_THEME.tackles.label },
+  { key: "goals", label: STAT_THEME.goals.label },
+  { key: "disposals", label: STAT_THEME.disposals.label },
+  { key: "marks", label: STAT_THEME.marks.label },
 ];
 
-function legSortGroup(leg: BetTrackerLeg): number {
-  if (leg.result === "miss") return 2;
+const STAT_FILTER_MODES: SortMode[] = ["tackles", "goals", "disposals", "marks"];
+
+const TRACKER_POLL_MS = 30_000;
+
+function legSortGroup(
+  leg: BetTrackerLeg,
+  feedByKey?: Record<string, number>,
+  gameComplete?: boolean,
+): number {
+  const count = legCount(leg, feedByKey, gameComplete);
+  if (legFailed(leg, count, gameComplete)) return 2;
   if (leg.result === "void") return 3;
-  if (leg.result === "hit" || legCleared(leg)) return 1;
+  if (legCleared(leg, count, gameComplete)) return 1;
   return 0; // still chasing
 }
 
-function compareNeed(a: BetTrackerLeg, b: BetTrackerLeg): number {
-  return legSortGroup(a) - legSortGroup(b);
+function compareNeed(
+  a: BetTrackerLeg,
+  b: BetTrackerLeg,
+  feedByKey?: Record<string, number>,
+  gameComplete?: boolean,
+): number {
+  return legSortGroup(a, feedByKey, gameComplete) - legSortGroup(b, feedByKey, gameComplete);
 }
 
 function compareNumber(a: BetTrackerLeg, b: BetTrackerLeg): number {
@@ -115,47 +204,65 @@ function compareStat(a: BetTrackerLeg, b: BetTrackerLeg): number {
   return (a.playerName ?? "").localeCompare(b.playerName ?? "");
 }
 
-function statPriority(statType: string, focus: SortMode): number {
-  if (focus === "tackles" || focus === "goals" || focus === "disposals" || focus === "marks") {
-    return statType === focus ? 0 : 1;
+function sortTabClass(key: SortMode, active: boolean): string {
+  if (isTrackerStat(key)) {
+    const theme = STAT_THEME[key];
+    return active ? theme.tabActive : theme.tabIdle;
   }
-  return 0;
+  if (key === "sportsbet") {
+    return active
+      ? "bg-slate-200 text-surface"
+      : "border border-slate-400/50 text-slate-300 hover:bg-slate-500/10";
+  }
+  if (key === "paper") {
+    return active
+      ? "bg-violet-500 text-white"
+      : "border border-violet-500/45 text-violet-300 hover:bg-violet-500/10";
+  }
+  return active
+    ? "bg-slate-200 text-surface"
+    : "border border-surface-border text-slate-400 hover:text-slate-300";
 }
 
 function sortTrackerLegs(
   legs: BetTrackerLeg[],
   mode: SortMode,
   colorAsc = true,
+  feedByKey?: Record<string, number>,
+  gameComplete?: boolean,
 ): BetTrackerLeg[] {
   return [...legs].sort((a, b) => {
     let cmp = 0;
     switch (mode) {
       case "need":
-        cmp = compareNeed(a, b);
+        cmp = compareNeed(a, b, feedByKey, gameComplete);
         break;
       case "number":
         cmp = compareNumber(a, b);
         break;
       case "color": {
-        cmp = BAR_STATE_ORDER[legBarState(a)] - BAR_STATE_ORDER[legBarState(b)];
+        cmp =
+          BAR_STATE_ORDER[legBarState(a, feedByKey, gameComplete)] -
+          BAR_STATE_ORDER[legBarState(b, feedByKey, gameComplete)];
         if (!colorAsc) cmp = -cmp;
         break;
       }
       case "tackles":
       case "goals":
       case "disposals":
-      case "marks": {
-        const pa = statPriority(a.statType, mode);
-        const pb = statPriority(b.statType, mode);
-        if (pa !== pb) cmp = pa - pb;
-        else cmp = compareStat(a, b);
+      case "marks":
+      case "sportsbet":
+      case "paper": {
+        cmp = compareNeed(a, b, feedByKey, gameComplete);
+        if (cmp === 0) cmp = compareProgressDesc(a, b, feedByKey, gameComplete);
+        if (cmp === 0) cmp = compareNumber(a, b);
         break;
       }
     }
     if (cmp !== 0) return cmp;
 
     // Tie-breakers: need → number → stat
-    cmp = compareNeed(a, b);
+    cmp = compareNeed(a, b, feedByKey, gameComplete);
     if (cmp !== 0) return cmp;
     cmp = compareNumber(a, b);
     if (cmp !== 0) return cmp;
@@ -178,10 +285,12 @@ function LegProgressBar({
   failed: boolean;
   voided?: boolean;
 }) {
+  const theme = statThemeFor(statType);
   const state = voided
     ? "empty"
     : barStateFromCounts(current, target, statType, cleared, failed);
   const pct = cleared ? 100 : target > 0 ? Math.min(100, (current / target) * 100) : 0;
+  const widthPct = state === "empty" ? 0 : Math.min(100, pct);
   const barColor = voided
     ? "bg-slate-500"
     : state === "red"
@@ -191,7 +300,7 @@ function LegProgressBar({
         : state === "orange"
           ? "bg-accent-pending"
           : state === "blue"
-            ? "bg-accent"
+            ? theme?.bar ?? "bg-accent"
             : "bg-surface";
   const markerColor = voided
     ? "bg-slate-400"
@@ -201,18 +310,22 @@ function LegProgressBar({
         ? "bg-accent-win"
         : state === "orange"
           ? "bg-accent-pending"
-          : "bg-accent";
+          : theme?.marker ?? "bg-accent";
+  const barFillStyle =
+    state === "blue" && theme ? { backgroundColor: theme.barHex } : undefined;
+  const markerFillStyle =
+    state === "blue" && theme ? { backgroundColor: theme.markerHex } : undefined;
 
   return (
     <div className="relative h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-surface">
       <div
         className={`absolute inset-y-0 left-0 rounded-full transition-all ${barColor}`}
-        style={{ width: `${state === "empty" ? 0 : Math.min(100, pct)}%` }}
+        style={{ width: `${widthPct}%`, ...barFillStyle }}
       />
       {current > 0 && (state === "blue" || state === "orange") ? (
         <div
           className={`absolute top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white ${markerColor}`}
-          style={{ left: `${Math.min(100, pct)}%` }}
+          style={{ left: `${Math.min(100, pct)}%`, ...markerFillStyle }}
         />
       ) : null}
     </div>
@@ -221,6 +334,9 @@ function LegProgressBar({
 
 function LegRow({
   leg: initial,
+  feedValue,
+  feedActive,
+  gameComplete = false,
   onUpdate,
   onMarketChange,
   onRemove,
@@ -228,6 +344,10 @@ function LegRow({
   onUnvoid,
 }: {
   leg: LegState;
+  /** Match Centre count when lineup approved and leg not manually tracked. */
+  feedValue?: number | null;
+  feedActive?: boolean;
+  gameComplete?: boolean;
   onUpdate: (legId: number, actualValue: number) => Promise<void>;
   onMarketChange: (legId: number, patch: LegMarketPatch) => void;
   onRemove: (legId: number) => void;
@@ -249,9 +369,19 @@ function LegRow({
   }, [initial.actualValue, initial.statType, initial.line]);
 
   const target = lineTarget(initial.line);
+  const feedMap =
+    feedValue != null
+      ? { [playerRecordKey(initial.playerName ?? "", initial.statType)]: feedValue }
+      : undefined;
+  const displayCount = legCount(initial, feedMap, gameComplete);
+  const showingFeed =
+    Boolean(feedActive) &&
+    initial.result === "pending" &&
+    feedValue != null &&
+    (initial.actualValue == null || initial.actualValue === 0);
   const isVoid = initial.result === "void";
-  const cleared = !isVoid && legCleared({ ...initial, actualValue: count });
-  const failed = legFailed(initial);
+  const cleared = !isVoid && legCleared(initial, displayCount, gameComplete);
+  const failed = legFailed(initial, displayCount, gameComplete);
   const resultFinal =
     initial.result === "hit" || initial.result === "miss" || initial.result === "void";
 
@@ -275,7 +405,7 @@ function LegRow({
 
   function bump(delta: number) {
     if (initial.result === "hit" || initial.result === "miss") return;
-    void persist(count + delta);
+    void persist(displayCount + delta);
   }
 
   function commitDraft() {
@@ -322,11 +452,11 @@ function LegRow({
       const res = await fetch(`/api/bets/legs/${initial.legId}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ result: "void", actualValue: count }),
+        body: JSON.stringify({ result: "void", actualValue: displayCount }),
       });
       const json = await res.json();
       if (!res.ok || !json.ok) throw new Error(json.error || "void failed");
-      onVoid(initial.legId, count);
+      onVoid(initial.legId, displayCount);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -349,11 +479,11 @@ function LegRow({
       const res = await fetch(`/api/bets/legs/${initial.legId}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ result: "pending", actualValue: count }),
+        body: JSON.stringify({ result: "pending", actualValue: displayCount }),
       });
       const json = await res.json();
       if (!res.ok || !json.ok) throw new Error(json.error || "undo void failed");
-      onUnvoid(initial.legId, count);
+      onUnvoid(initial.legId, displayCount);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -362,7 +492,16 @@ function LegRow({
   }
 
   const c = teamColors(initial.team ?? "");
-  const margin = count > 0 || initial.actualValue != null ? marginVsTarget(count, initial.line) : null;
+  const margin =
+    displayCount > 0 || initial.actualValue != null
+      ? marginVsTarget(displayCount, initial.line)
+      : null;
+  const marketTheme = statThemeFor(initial.statType);
+  const marketLabel = `${initial.statType} ${targetLabel(initial.line)}`;
+  const marketClass = marketTheme
+    ? `shrink-0 rounded px-1 py-px text-[10px] capitalize ${marketTheme.pill}`
+    : "shrink-0 text-[10px] capitalize text-slate-500";
+  const locked = !initial.paper;
 
   const statusIcon =
     initial.result === "hit" || cleared ? (
@@ -377,10 +516,15 @@ function LegRow({
 
   return (
     <li
-      className={`flex flex-col rounded-md border border-surface-border/50 bg-surface/30${
-        isVoid ? " opacity-90" : ""
-      }${error ? " ring-1 ring-accent-loss" : ""}`}
-      title={error ?? undefined}
+      className={`flex flex-col rounded-md border bg-surface/30${
+        initial.paper
+          ? " border-violet-500/25"
+          : " border-surface-border/50"
+      }${isVoid ? " opacity-90" : ""}${error ? " ring-1 ring-accent-loss" : ""}`}
+      title={
+        error ??
+        (locked ? "Sportsbet slip — +/- tracks live; can't edit market or remove" : undefined)
+      }
     >
       <div className="flex items-center gap-2 px-2 py-1.5">
         <span
@@ -395,19 +539,30 @@ function LegRow({
             <span className="truncate text-xs font-medium text-white">
               {initial.playerName ?? "Player"}
             </span>
-            {!resultFinal && !fixMarket ? (
+            {locked ? (
+              <span
+                className="shrink-0 text-[11px] text-slate-400"
+                title="Sportsbet slip — use +/- while watching; MC auto-fills when live"
+                aria-label="Sportsbet slip"
+              >
+                🔒
+              </span>
+            ) : (
+              <span className="shrink-0 rounded bg-violet-500/15 px-1 py-px text-[9px] font-medium uppercase tracking-wide text-violet-200">
+                Paper
+              </span>
+            )}
+            {!resultFinal && !fixMarket && !locked ? (
               <button
                 type="button"
                 onClick={() => setFixMarket(true)}
-                className="shrink-0 text-[10px] capitalize text-slate-500 underline decoration-dotted underline-offset-2 hover:text-accent"
+                className={`${marketClass} underline decoration-dotted underline-offset-2 hover:opacity-90`}
                 title="Fix wrong stat or line"
               >
-                {initial.statType} {targetLabel(initial.line)}
+                {marketLabel}
               </button>
             ) : (
-              <span className="shrink-0 text-[10px] capitalize text-slate-500">
-                {initial.statType} {targetLabel(initial.line)}
-              </span>
+              <span className={marketClass}>{marketLabel}</span>
             )}
             {statusIcon}
             {margin != null && (initial.result === "hit" || initial.result === "miss") ? (
@@ -421,7 +576,7 @@ function LegRow({
                 · {count} before injury
               </span>
             ) : null}
-            {initial.result === "pending" && !fixMarket ? (
+            {initial.result === "pending" && !fixMarket && !locked ? (
               <>
                 <button
                   type="button"
@@ -443,7 +598,7 @@ function LegRow({
                 </button>
               </>
             ) : null}
-            {isVoid ? (
+            {isVoid && !locked ? (
               <button
                 type="button"
                 onClick={unvoidThisLeg}
@@ -482,21 +637,32 @@ function LegRow({
                   type="button"
                   className="flex h-7 w-7 items-center justify-center rounded border border-surface-border text-sm text-slate-300 hover:border-accent hover:text-accent disabled:opacity-40"
                   onClick={() => bump(-1)}
-                  disabled={saving || count <= 0}
+                  disabled={saving || displayCount <= 0}
                   aria-label={`Remove one ${initial.statType}`}
                 >
                   −
                 </button>
                 <button
                   type="button"
-                  className="min-w-[1.25rem] text-center text-sm font-bold tabular-nums text-white hover:text-accent"
+                  className={`min-w-[1.25rem] text-center text-sm font-bold tabular-nums hover:text-accent ${
+                    showingFeed ? "text-accent" : "text-white"
+                  }`}
                   onClick={() => {
-                    setDraft(String(count));
+                    setDraft(String(displayCount));
                     setEditing(true);
                   }}
                   disabled={saving}
+                  title={
+                    locked
+                      ? showingFeed
+                        ? "Match Centre count — tap to override"
+                        : "Tap to type count"
+                      : showingFeed
+                        ? "Match Centre count"
+                        : undefined
+                  }
                 >
-                  {count}
+                  {displayCount}
                 </button>
                 <button
                   type="button"
@@ -515,19 +681,37 @@ function LegRow({
 
       <div className="flex items-center gap-1.5 px-2 pb-1.5 pl-8">
         <LegProgressBar
-          current={count}
+          current={displayCount}
           target={target}
           statType={initial.statType}
           cleared={cleared}
           failed={failed}
           voided={isVoid}
         />
-        <span className="shrink-0 text-[10px] tabular-nums text-slate-500">
-          {isVoid ? `${count} tracked` : `${count}/${target}+`}
+        <span
+          className={`shrink-0 text-[10px] tabular-nums ${marketTheme ? "text-slate-400" : "text-slate-500"}`}
+        >
+          {isVoid ? (
+            `${displayCount} tracked`
+          ) : (
+            <>
+              <span className={marketTheme ? "text-slate-300" : undefined}>
+                {displayCount}/{target}+
+              </span>
+              {showingFeed ? (
+                <span
+                  className={`ml-1 ${marketTheme?.accent ?? "text-accent"}`}
+                  title="From Match Centre feed"
+                >
+                  MC
+                </span>
+              ) : null}
+            </>
+          )}
         </span>
       </div>
 
-      {fixMarket && initial.result === "pending" ? (
+      {fixMarket && initial.result === "pending" && !locked ? (
         <LegMarketEditor
           legId={initial.legId}
           statType={initial.statType}
@@ -576,39 +760,17 @@ function GameOverSection({
   const [slips, setSlips] = useState<SlipOutcome[] | null>(null);
 
   async function gameOver() {
-    const pendingLegs = trackerLegs.filter((l) => l.result === "pending");
-    const missingCounts = pendingLegs.filter((l) => l.actualValue == null);
-    if (missingCounts.length > 0 && live) {
-      setMsg(
-        `Enter final stats for ${missingCounts.length} leg${missingCounts.length === 1 ? "" : "s"} using + above, then tap Game over again.`,
-      );
-      return;
-    }
-
     setBusy(true);
     setMsg(null);
     setSlips(null);
     try {
-      if (missingCounts.length > 0 && !live) {
-        for (const leg of missingCounts) {
-          const res = await fetch(`/api/bets/legs/${leg.legId}`, {
-            method: "PATCH",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ actualValue: 0 }),
-          });
-          const json = await res.json();
-          if (!res.ok || !json.ok) {
-            throw new Error(json.error || "could not save 0 for unset leg");
-          }
-        }
-      }
-
       const res = await fetch(`/api/games/${gameId}/game-over`, { method: "POST" });
       const text = await res.text();
       let json: {
         ok?: boolean;
         error?: string;
         settlement?: {
+          hydrated?: number;
           fromStats?: { legsSettled?: number };
           fromLive?: { legsSettled?: number };
         };
@@ -637,6 +799,7 @@ function GameOverSection({
       setSlips(slipOutcomes);
 
       const totalSettled =
+        (json.settlement?.hydrated ?? 0) +
         (json.settlement?.fromStats?.legsSettled ?? 0) +
         (json.settlement?.fromLive?.legsSettled ?? 0);
 
@@ -747,16 +910,37 @@ function GameOverSection({
 export function LiveBetTracker({
   legs: initialLegs,
   gameId,
+  commenceTimeIso,
+  gameComplete = false,
+  initialLegFeed = {},
+  initialStatsUpdatedAt = null,
   embedded = false,
 }: {
   legs: BetTrackerLeg[];
   gameId: number;
+  /** AWST kickoff — poll MC from bounce even if Squiggle lags. */
+  commenceTimeIso?: string;
+  /** Full time — skip live Squiggle poll; bars render from SSR feed + settled actuals. */
+  gameComplete?: boolean;
+  /** Match Centre counts from server render — instant progress bars on hard refresh. */
+  initialLegFeed?: Record<string, number>;
+  initialStatsUpdatedAt?: string | null;
   /** When wrapped in CollapsibleSection — drop outer card chrome. */
   embedded?: boolean;
 }) {
   const router = useRouter();
   const [legs, setLegs] = useState(initialLegs);
   const [live, setLive] = useState(false);
+  const [feedByKey, setFeedByKey] = useState<Record<string, number>>(initialLegFeed);
+  const [feedMessage, setFeedMessage] = useState<string | null>(null);
+  const [statsUpdatedAt, setStatsUpdatedAt] = useState<string | null>(initialStatsUpdatedAt);
+  const [pollChecking, setPollChecking] = useState(false);
+  const [pollUpdatedAt, setPollUpdatedAt] = useState<Date | null>(null);
+  const [gameTimestr, setGameTimestr] = useState<string | null>(null);
+  const [preflightReady, setPreflightReady] = useState<boolean | null>(null);
+  const [preflightHints, setPreflightHints] = useState<string[]>([]);
+  const [kickedOff, setKickedOff] = useState(false);
+  const [syncingMc, setSyncingMc] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>("need");
   const [colorSortAsc, setColorSortAsc] = useState(true);
 
@@ -765,25 +949,113 @@ export function LiveBetTracker({
   }, [initialLegs]);
 
   useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let cancelled = false;
-    async function tick() {
-      try {
-        const res = await fetch(`/api/games/${gameId}/live`);
-        const json = await res.json();
-        if (cancelled) return;
-        setLive(json.state?.status === "live");
-        if (json.state?.status === "live") timer = setTimeout(tick, 20_000);
-      } catch {
-        /* best-effort */
+    setFeedByKey(initialLegFeed);
+    setStatsUpdatedAt(initialStatsUpdatedAt);
+  }, [initialLegFeed, initialStatsUpdatedAt]);
+
+  const kickoffMs = commenceTimeIso ? new Date(commenceTimeIso).getTime() : null;
+
+  const applyStatsJson = useCallback((statsJson: Record<string, unknown>) => {
+    if (statsJson.ok !== true) return;
+    setFeedMessage((statsJson.message as string | null) ?? null);
+    setStatsUpdatedAt((statsJson.statsUpdatedAt as string | null) ?? null);
+    const preflight = statsJson.preflight as { ready?: boolean; hints?: string[] } | undefined;
+    if (preflight) {
+      setPreflightReady(preflight.ready === true);
+      setPreflightHints(Array.isArray(preflight.hints) ? preflight.hints : []);
+    }
+    const next: Record<string, number> = {};
+    const legFeed = statsJson.legFeed as Record<string, { value?: number | null }> | undefined;
+    if (legFeed) {
+      for (const [k, v] of Object.entries(legFeed)) {
+        if (v?.value != null) next[k] = v.value;
       }
     }
+    setFeedByKey(next);
+  }, []);
+
+  const refreshMcNow = useCallback(async () => {
+    setSyncingMc(true);
+    setPollChecking(true);
+    try {
+      const res = await fetch(`/api/games/${gameId}/live-stats/sync`, { method: "POST" });
+      const json = await res.json();
+      if (res.ok && json.ok) {
+        applyStatsJson(json);
+        setPollUpdatedAt(new Date());
+      }
+    } catch {
+      /* best-effort */
+    } finally {
+      setSyncingMc(false);
+      setPollChecking(false);
+    }
+  }, [applyStatsJson, gameId]);
+
+  useEffect(() => {
+    if (gameComplete) {
+      const seeded = Object.keys(initialLegFeed).length > 0;
+      if (seeded) return;
+      let cancelled = false;
+      void (async () => {
+        try {
+          const statsRes = await fetch(`/api/games/${gameId}/live-stats`);
+          const statsJson = await statsRes.json();
+          if (!cancelled && statsJson.ok) applyStatsJson(statsJson);
+        } catch {
+          /* best-effort */
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let cancelled = false;
+
+    async function tick() {
+      setPollChecking(true);
+      try {
+        const [liveRes, statsRes] = await Promise.all([
+          fetch(`/api/games/${gameId}/live`),
+          fetch(`/api/games/${gameId}/live-stats`),
+        ]);
+        const liveJson = await liveRes.json();
+        const statsJson = await statsRes.json();
+        if (cancelled) return;
+
+        const kickedOffNow = kickoffMs != null && Date.now() >= kickoffMs;
+        setKickedOff(kickedOffNow);
+        const isLive =
+          liveJson.state?.status === "live" || statsJson.gameLive === true;
+        setLive(isLive);
+        if (typeof liveJson.state?.timestr === "string" && liveJson.state.timestr) {
+          setGameTimestr(liveJson.state.timestr);
+        }
+
+        if (statsJson.ok) {
+          applyStatsJson(statsJson);
+        }
+
+        setPollUpdatedAt(new Date());
+
+        if (isLive || statsJson.gameLive || kickedOffNow) {
+          timer = setTimeout(tick, TRACKER_POLL_MS);
+        }
+      } catch {
+        /* best-effort */
+      } finally {
+        if (!cancelled) setPollChecking(false);
+      }
+    }
+
     void tick();
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [gameId]);
+  }, [gameId, kickoffMs, applyStatsJson, gameComplete, initialLegFeed]);
 
   const updateCount = useCallback(async (legId: number, actualValue: number) => {
     const res = await fetch(`/api/bets/legs/${legId}`, {
@@ -831,19 +1103,80 @@ export function LiveBetTracker({
     );
   }, []);
 
+  const mcActive = live || kickedOff;
+
   const voids = legs.filter((l) => l.result === "void").length;
   const voidsMissingStats = legs.filter(
     (l) => l.result === "void" && l.actualValue == null,
   ).length;
   const activeLegs = legs.filter((l) => l.result !== "void");
-  const cleared = activeLegs.filter(legCleared).length;
+  const paperLegCount = activeLegs.filter((l) => l.paper).length;
+  const lockedLegCount = activeLegs.filter((l) => !l.paper).length;
+  const cleared = activeLegs.filter((leg) =>
+    legCleared(leg, legCount(leg, feedByKey, gameComplete), gameComplete),
+  ).length;
   const pending = legs.filter((l) => l.result === "pending").length;
   const hits = legs.filter((l) => l.result === "hit").length;
   const misses = legs.filter((l) => l.result === "miss").length;
   const allSettled = legs.length > 0 && pending === 0;
+  const statProgress = useMemo(() => {
+    const totals: Record<TrackerStat, number> = {
+      tackles: 0,
+      goals: 0,
+      disposals: 0,
+      marks: 0,
+    };
+    const clearedByStat: Record<TrackerStat, number> = {
+      tackles: 0,
+      goals: 0,
+      disposals: 0,
+      marks: 0,
+    };
+    for (const leg of legs) {
+      if (!isTrackerStat(leg.statType) || leg.result === "void") continue;
+      totals[leg.statType]++;
+      if (legCleared(leg, legCount(leg, feedByKey, gameComplete), gameComplete)) {
+        clearedByStat[leg.statType]++;
+      }
+    }
+    return { totals, cleared: clearedByStat };
+  }, [legs, feedByKey, gameComplete]);
+
+  const slipProgress = useMemo(() => {
+    let lockedTotal = 0;
+    let lockedCleared = 0;
+    let paperTotal = 0;
+    let paperCleared = 0;
+    for (const leg of legs) {
+      if (leg.result === "void") continue;
+      const hit = legCleared(leg, legCount(leg, feedByKey, gameComplete), gameComplete);
+      if (leg.paper) {
+        paperTotal++;
+        if (hit) paperCleared++;
+      } else {
+        lockedTotal++;
+        if (hit) lockedCleared++;
+      }
+    }
+    return { lockedTotal, lockedCleared, paperTotal, paperCleared };
+  }, [legs, feedByKey, gameComplete]);
+
+  const filteredLegs = useMemo(() => {
+    if (sortMode === "sportsbet") {
+      return legs.filter((l) => !l.paper);
+    }
+    if (sortMode === "paper") {
+      return legs.filter((l) => l.paper);
+    }
+    if (STAT_FILTER_MODES.includes(sortMode)) {
+      return legs.filter((l) => l.statType === sortMode);
+    }
+    return legs;
+  }, [legs, sortMode]);
+
   const sortedLegs = useMemo(
-    () => sortTrackerLegs(legs, sortMode, colorSortAsc),
-    [legs, sortMode, colorSortAsc],
+    () => sortTrackerLegs(filteredLegs, sortMode, colorSortAsc, feedByKey, gameComplete),
+    [filteredLegs, sortMode, colorSortAsc, feedByKey, gameComplete],
   );
 
   function handleSortClick(key: SortMode) {
@@ -855,66 +1188,163 @@ export function LiveBetTracker({
     }
   }
 
+  const showLiveBar = live || (kickedOff && (gameTimestr != null || pollUpdatedAt != null));
+  const pollTitle = statsUpdatedAt
+    ? `Match Centre synced ${new Date(statsUpdatedAt).toLocaleTimeString("en-AU", { hour: "numeric", minute: "2-digit" })} · polls every ${TRACKER_POLL_MS / 1000}s`
+    : `Polls every ${TRACKER_POLL_MS / 1000}s`;
+
   return (
     <section
       className={
         embedded
           ? live
-            ? "rounded-lg border border-accent/40 p-0"
+            ? "rounded-lg border border-accent/40 p-2 sm:p-3"
             : ""
           : `card ${live ? "border-accent/40" : "border-accent/20"}`
       }
     >
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          {embedded ? null : (
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-accent">
-              Your bets in this game
-            </h2>
-          )}
-          {live ? (
-            <p className={`${embedded ? "" : "mt-0.5 "}text-xs font-medium text-accent-loss`}>
-              ● Live
-            </p>
-          ) : (
+      {showLiveBar ? (
+        <div className="mb-3 flex flex-col gap-3 border-b border-surface-border/40 pb-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1">
+            {live ? (
+              <span className="whitespace-nowrap text-xs font-medium text-accent-loss">
+                ● Live
+                <LiveRefreshCountdown
+                  checking={pollChecking || syncingMc}
+                  lastUpdatedAt={pollUpdatedAt}
+                  intervalMs={TRACKER_POLL_MS}
+                  title={pollTitle}
+                  className="text-accent-loss/70"
+                />
+              </span>
+            ) : (
+              <span className="text-xs font-medium text-slate-400">In progress</span>
+            )}
+            {gameTimestr ? (
+              <span className="text-sm font-semibold tabular-nums text-white">{gameTimestr}</span>
+            ) : null}
+          </div>
+          <div className="flex shrink-0 items-center gap-4 sm:gap-5">
+            {live ? (
+              <button
+                type="button"
+                onClick={() => void refreshMcNow()}
+                disabled={syncingMc}
+                className="rounded border border-surface-border px-3 py-1 text-xs font-medium text-slate-300 hover:bg-surface-border/40 disabled:opacity-50"
+              >
+                {syncingMc ? "Syncing…" : "Refresh MC"}
+              </button>
+            ) : null}
+            <div className="text-right">
+              <div className="text-lg font-bold leading-tight text-white">
+                {cleared}
+                <span className="text-slate-500"> / </span>
+                {activeLegs.length}
+              </div>
+              <div className="text-[11px] text-slate-400">
+                {voids > 0 ? `${voids} void · ` : ""}
+                legs cleared
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            {embedded ? null : (
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-accent">
+                Your bets in this game
+              </h2>
+            )}
             <p className="mt-0.5 text-xs text-slate-500">
               {voids > 0
                 ? "Void legs still accept +/− — record stats before injury."
-                : "Tap + to track as you watch"}
+                : preflightReady === false
+                  ? "Fix pre-bounce checklist below before bounce — MC after first play."
+                  : "Tap +/− on any leg while watching · 🔒 = Sportsbet slip · MC auto after bounce."}
             </p>
-          )}
-        </div>
-        <div className="text-right">
-          <div className="text-lg font-bold text-white">
-            {cleared}
-            <span className="text-slate-500"> / </span>
-            {activeLegs.length}
           </div>
-          <div className="text-[11px] text-slate-400">
-            {voids > 0 ? `${voids} void · ` : ""}
-            legs cleared
+          <div className="text-right">
+            <div className="text-lg font-bold text-white">
+              {cleared}
+              <span className="text-slate-500"> / </span>
+              {activeLegs.length}
+            </div>
+            <div className="text-[11px] text-slate-400">
+              {voids > 0 ? `${voids} void · ` : ""}
+              legs cleared
+            </div>
           </div>
         </div>
-      </div>
+      )}
+
+      {!showLiveBar && !live && preflightReady === false && preflightHints.length > 0 ? (
+        <div className="mb-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-2 text-xs text-amber-100">
+          <p className="font-medium text-amber-50">Before bounce — live stats checklist</p>
+          <ul className="mt-1 list-inside list-disc space-y-0.5 text-amber-100/90">
+            {preflightHints.map((h) => (
+              <li key={h}>{h}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {!showLiveBar && !live && preflightReady === true && preflightHints.length > 0 ? (
+        <p className="mb-2 text-xs text-emerald-200/90">{preflightHints[0]}</p>
+      ) : null}
+
+      {activeLegs.length > 0 && paperLegCount > 0 && lockedLegCount > 0 ? (
+        <p className="text-[10px] text-slate-500">
+          Tap <span className="text-slate-300">🔒 $$</span> or{" "}
+          <span className="text-violet-300">Paper</span> to filter by slip type
+        </p>
+      ) : null}
 
       <div className="mt-2 flex gap-1.5 overflow-x-auto pb-1">
-        {SORT_OPTIONS.map((opt) => (
-          <button
-            key={opt.key}
-            type="button"
-            onClick={() => handleSortClick(opt.key)}
-            className={`whitespace-nowrap rounded-full px-2.5 py-0.5 text-[11px] font-medium ${
-              sortMode === opt.key
-                ? "bg-slate-200 text-surface"
-                : "border border-surface-border text-slate-400"
-            }`}
-          >
-            {opt.key === "color" && sortMode === "color"
-              ? `Color ${colorSortAsc ? "↓" : "↑"}`
-              : opt.label}
-          </button>
-        ))}
+        {SORT_OPTIONS.map((opt) => {
+          const total = isTrackerStat(opt.key) ? statProgress.totals[opt.key] : 0;
+          const statCleared = isTrackerStat(opt.key) ? statProgress.cleared[opt.key] : 0;
+          let label = opt.label;
+          if (opt.key === "color" && sortMode === "color") {
+            label = `Color ${colorSortAsc ? "↓" : "↑"}`;
+          } else if (total > 0 && isTrackerStat(opt.key)) {
+            label = `${opt.label} ${statCleared}/${total}`;
+          } else if (opt.key === "sportsbet" && slipProgress.lockedTotal > 0) {
+            label = `🔒 $$ ${slipProgress.lockedCleared}/${slipProgress.lockedTotal}`;
+          } else if (opt.key === "paper" && slipProgress.paperTotal > 0) {
+            label = `Paper ${slipProgress.paperCleared}/${slipProgress.paperTotal}`;
+          }
+          return (
+            <button
+              key={opt.key}
+              type="button"
+              onClick={() => handleSortClick(opt.key)}
+              className={`whitespace-nowrap rounded-full px-2.5 py-0.5 text-[11px] font-medium ${sortTabClass(opt.key, sortMode === opt.key)}`}
+            >
+              {label}
+            </button>
+          );
+        })}
       </div>
+      {isTrackerStat(sortMode) ? (
+        <p className="text-[10px] text-slate-500">
+          {statProgress.cleared[sortMode]}/{statProgress.totals[sortMode]}{" "}
+          {STAT_THEME[sortMode].label.toLowerCase()} legs cleared · sorted by need then closest
+          to the line
+        </p>
+      ) : null}
+      {sortMode === "sportsbet" ? (
+        <p className="text-[10px] text-slate-500">
+          {slipProgress.lockedCleared}/{slipProgress.lockedTotal} Sportsbet legs cleared · locked
+          on the book · sorted by need then closest to the line
+        </p>
+      ) : null}
+      {sortMode === "paper" ? (
+        <p className="text-[10px] text-slate-500">
+          {slipProgress.paperCleared}/{slipProgress.paperTotal} paper legs cleared · editable ·
+          sorted by need then closest to the line
+        </p>
+      ) : null}
       {sortMode === "color" ? (
         <p className="text-[10px] text-slate-500">
           {colorSortAsc
@@ -923,11 +1353,32 @@ export function LiveBetTracker({
         </p>
       ) : null}
 
+      {feedMessage && live ? (
+        <div className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-100">
+          <p>{feedMessage}</p>
+          {!statsUpdatedAt ? (
+            <button
+              type="button"
+              onClick={() => void refreshMcNow()}
+              disabled={syncingMc}
+              className="mt-1.5 rounded bg-amber-500/20 px-2 py-0.5 text-[11px] font-medium text-amber-50 hover:bg-amber-500/30 disabled:opacity-50"
+            >
+              {syncingMc ? "Pulling Match Centre…" : "Pull Match Centre now"}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
       <ul className="mt-2 max-h-[75vh] space-y-1 overflow-y-auto">
         {sortedLegs.map((leg) => (
           <LegRow
             key={leg.legId}
             leg={leg}
+            gameComplete={gameComplete}
+            feedValue={
+              feedByKey[playerRecordKey(leg.playerName ?? "", leg.statType)] ?? null
+            }
+            feedActive={mcActive}
             onUpdate={updateCount}
             onMarketChange={updateMarket}
             onRemove={removeLeg}

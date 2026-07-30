@@ -27,6 +27,8 @@ import { getGameById, getRecentTeamForm, type FormResult } from "@/lib/data/game
 import { getMatchBriefing } from "@/lib/data/matchBriefing";
 import { getStatBoard, type StatBoard } from "@/lib/data/statboard";
 import { getGameLineupRoster, type RoundLineupPlayer } from "@/lib/data/roundRoster";
+import { getGameLiveStatsPayload, legFeedValues } from "@/lib/data/liveStatsForGame";
+import { ensureAccurateGameSettlement } from "@/lib/settle";
 import { getTeamRankings } from "@/lib/data/teamStats";
 import { STAT_TYPES } from "@/lib/predictions/features";
 import {
@@ -70,6 +72,8 @@ export default async function GamePage({ params }: { params: { id: string } }) {
   if (!game) notFound();
 
   let myLegs: BetTrackerLeg[] = [];
+  let initialLegFeed: Record<string, number> = {};
+  let initialStatsUpdatedAt: string | null = null;
   let playerRecord: Record<string, PlayerBetRecord> = {};
   let playerHistory: Record<string, PlayerHistorySummary> = {};
   try {
@@ -78,7 +82,19 @@ export default async function GamePage({ params }: { params: { id: string } }) {
     if (email) {
       const userId = await userIdForEmail(email);
       if (userId) {
+        if (game.status === "complete" && game.round != null) {
+          await ensureAccurateGameSettlement(game.id).catch((err) => {
+            console.warn(`[game-page] settle sync game ${game.id}:`, err);
+          });
+        }
         myLegs = await getUserBetTracker(userId, game.id, game.round);
+        if (myLegs.length > 0) {
+          const livePayload = await getGameLiveStatsPayload(game.id, userId, {
+            legs: myLegs,
+          });
+          initialLegFeed = legFeedValues(livePayload.legFeed);
+          initialStatsUpdatedAt = livePayload.statsUpdatedAt;
+        }
         const recordIndex = await getPlayerBettingRecord(userId);
         playerRecord = recordIndex.byKey;
         playerHistory = indexPlayerHistoryByName(recordIndex.list);
@@ -266,7 +282,15 @@ export default async function GamePage({ params }: { params: { id: string } }) {
           description="Live +/− tracking and Game over settle."
           defaultOpen
         >
-          <LiveBetTracker legs={myLegs} gameId={game.id} embedded />
+          <LiveBetTracker
+            legs={myLegs}
+            gameId={game.id}
+            commenceTimeIso={game.commenceTime.toISOString()}
+            gameComplete={game.status === "complete"}
+            initialLegFeed={initialLegFeed}
+            initialStatsUpdatedAt={initialStatsUpdatedAt}
+            embedded
+          />
         </CollapsibleSection>
       ) : null}
 

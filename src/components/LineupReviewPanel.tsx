@@ -3,26 +3,11 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { teamColors } from "@/lib/afl/teamColors";
+import { BenchmarkBandBadge } from "@/components/BenchmarkBandBadge";
 import type {
   LineupReviewPayload,
   LineupReviewPlayer,
 } from "@/lib/ingest/lineupReview";
-
-const BAND_STAMP: Record<string, string> = {
-  elite: "border-sky-500/45 bg-sky-500/20 text-sky-200",
-  above: "border-emerald-500/40 bg-emerald-500/12 text-emerald-200",
-  average: "border-amber-500/35 bg-amber-500/10 text-amber-100",
-  below: "border-rose-500/35 bg-rose-500/10 text-rose-200",
-  unknown: "border-surface-border text-slate-500",
-};
-
-const BAND_SHORT: Record<string, string> = {
-  elite: "Elite",
-  above: "Above",
-  average: "Avg",
-  below: "Below",
-  unknown: "—",
-};
 
 const FIELD_ROWS = ["FB", "HB", "C", "HF", "FF", "FOL"] as const;
 const ROW_LABEL: Record<string, string> = {
@@ -55,8 +40,6 @@ function lastGameHighlight(
 
 function PlayerCard({ player }: { player: LineupReviewPlayer }) {
   const c = teamColors(player.team);
-  const band = player.band ?? "unknown";
-  const bandCls = BAND_STAMP[band] ?? BAND_STAMP.unknown;
   const dim = player.status === "emergency" ? "opacity-55" : "";
   const lastHot = lastGameHighlight(player.seasonDispAvg, player.lastGameDisp);
   const pickPct =
@@ -99,12 +82,7 @@ function PlayerCard({ player }: { player: LineupReviewPlayer }) {
             ) : null}
           </p>
         </div>
-        <span
-          className={`shrink-0 rounded border px-1 py-px text-[8px] font-semibold uppercase leading-none ${bandCls}`}
-          title={BAND_SHORT[band]}
-        >
-          {BAND_SHORT[band]}
-        </span>
+        <BenchmarkBandBadge band={player.band} />
         {pickPct != null ? (
           <span
             className={`shrink-0 text-[9px] font-semibold tabular-nums ${
