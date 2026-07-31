@@ -1,9 +1,13 @@
 // Club colours for jumper badges / accents. Keyed by canonical team name.
-// Approximate primary + contrasting text colour — enough to tell clubs apart.
+// Approximate primary guernsey colours — enough to tell clubs apart at a glance.
+
+import { canonicalTeam } from "@/lib/afl/teams";
 
 export interface TeamColor {
   bg: string;
   fg: string;
+  /** Optional accent stripe (e.g. St Kilda red on black guernsey). */
+  stripe?: string;
 }
 
 export const TEAM_COLORS: Record<string, TeamColor> = {
@@ -21,12 +25,24 @@ export const TEAM_COLORS: Record<string, TeamColor> = {
   "North Melbourne": { bg: "#1746A2", fg: "#FFFFFF" },
   "Port Adelaide": { bg: "#008AAB", fg: "#FFFFFF" },
   Richmond: { bg: "#111111", fg: "#FFD200" },
-  "St Kilda": { bg: "#ED1B2E", fg: "#FFFFFF" },
+  "St Kilda": { bg: "#000000", fg: "#FFFFFF", stripe: "#ED1B2E" },
   Sydney: { bg: "#ED1C24", fg: "#FFFFFF" },
   "West Coast": { bg: "#003087", fg: "#F2A900" },
   "Western Bulldogs": { bg: "#014896", fg: "#FFFFFF" },
 };
 
 export function teamColors(team: string): TeamColor {
-  return TEAM_COLORS[team] ?? { bg: "#334155", fg: "#FFFFFF" };
+  const key = canonicalTeam(team) ?? team;
+  return TEAM_COLORS[key] ?? { bg: "#334155", fg: "#FFFFFF" };
+}
+
+/** Inline styles for a guernsey number badge. */
+export function jumperBadgeStyle(
+  c: TeamColor,
+): { background: string; color: string; boxShadow?: string } {
+  return {
+    background: c.bg,
+    color: c.fg,
+    ...(c.stripe ? { boxShadow: `inset 0 -3px 0 ${c.stripe}` } : {}),
+  };
 }
