@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
-import { teamColors } from "@/lib/afl/teamColors";
+import { teamColors, jumperBadgeStyle } from "@/lib/afl/teamColors";
 import type { PlayerHistorySummary } from "@/lib/data/bets";
 import { normalisePlayerName } from "@/lib/playerName";
 import type {
@@ -260,7 +260,7 @@ function PlayerRow({
     >
       <span
         className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-[9px] font-bold"
-        style={{ background: c.bg, color: c.fg }}
+        style={jumperBadgeStyle(c)}
       >
         {player.jumper ?? "–"}
       </span>

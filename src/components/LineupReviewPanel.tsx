@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { teamColors } from "@/lib/afl/teamColors";
+import { teamColors, jumperBadgeStyle } from "@/lib/afl/teamColors";
 import { BenchmarkBandBadge } from "@/components/BenchmarkBandBadge";
 import type {
   LineupReviewPayload,
@@ -54,7 +54,7 @@ function PlayerCard({ player }: { player: LineupReviewPlayer }) {
       <div className="flex min-w-0 items-center gap-1.5">
         <span
           className="flex h-6 min-w-[1.5rem] shrink-0 items-center justify-center rounded px-0.5 text-[10px] font-bold tabular-nums"
-          style={{ background: c.bg, color: c.fg }}
+          style={jumperBadgeStyle(c)}
         >
           {player.jumper ?? "—"}
         </span>

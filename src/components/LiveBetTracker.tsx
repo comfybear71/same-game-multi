@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { LegMarketEditor, type LegMarketPatch } from "@/components/EditLegMarket";
 import { LiveRefreshCountdown } from "@/components/LiveRefreshCountdown";
-import { teamColors } from "@/lib/afl/teamColors";
+import { teamColors, jumperBadgeStyle } from "@/lib/afl/teamColors";
 import type { BetTrackerLeg } from "@/lib/betTypes";
 import { playerRecordKey } from "@/lib/betTypes";
 import { lineTarget, marginVsTarget, signed, targetLabel } from "@/lib/format";
@@ -529,7 +529,7 @@ function LegRow({
       <div className="flex items-center gap-2 px-2 py-1.5">
         <span
           className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-[10px] font-bold"
-          style={{ background: c.bg, color: c.fg }}
+          style={jumperBadgeStyle(c)}
         >
           {initial.jumper ?? "–"}
         </span>
