@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import { teamColors, jumperBadgeStyle } from "@/lib/afl/teamColors";
@@ -203,6 +204,7 @@ export function LineupReviewPanel({
   refreshKey?: number;
   canApprove?: boolean;
 }) {
+  const router = useRouter();
   const [review, setReview] = useState<LineupReviewPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -252,6 +254,7 @@ export function LineupReviewPanel({
         throw new Error(json.error ?? `Failed (${res.status})`);
       }
       if (json.review) setReview(json.review);
+      router.refresh();
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -304,7 +307,7 @@ export function LineupReviewPanel({
             ✓ Squad locked in
           </span>
         ) : !canApprove ? (
-          <span className="text-xs text-slate-500">Approval closed (game started)</span>
+          <span className="text-xs text-slate-500">Approval closed (game complete)</span>
         ) : null}
       </div>
 
