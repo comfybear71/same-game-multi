@@ -95,7 +95,7 @@ export async function generatePredictions(gameId: number): Promise<GenerateResul
   }
 
   // Fetch all histories concurrently (bounded).
-  const fetched = await mapLimit(seeds, 5, async (row) => ({
+  const fetched = await mapLimit(seeds, 8, async (row) => ({
     name: row.name,
     history: await getPlayerHistory(row.name, undefined, {
       team: row.team,

@@ -1,5 +1,13 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "src/app/api/games/[id]/predict/route.ts": {
+      "maxDuration": 120
+    },
+    "src/app/api/games/[id]/top10/route.ts": {
+      "maxDuration": 60
+    }
+  },
   "crons": [
     {
       "path": "/api/cron/refresh-fixtures",

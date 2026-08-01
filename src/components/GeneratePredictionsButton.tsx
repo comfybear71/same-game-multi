@@ -4,7 +4,6 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { dispatchPredictionsGenerated } from "@/components/predictionsGenerated";
-import type { Top10BoardResponse } from "@/lib/predictions/top10Board";
 
 export function GeneratePredictionsButton({
   gameId,
@@ -27,15 +26,23 @@ export function GeneratePredictionsButton({
         method: "POST",
         cache: "no-store",
       });
+      const ct = res.headers.get("content-type") ?? "";
+      if (!ct.includes("application/json")) {
+        const text = (await res.text()).slice(0, 120);
+        throw new Error(
+          res.status === 504 || text.toLowerCase().includes("timeout")
+            ? "Timed out — AFL Tables is slow. Wait a moment and try again."
+            : text || `Server error (HTTP ${res.status})`,
+        );
+      }
       const json = (await res.json()) as {
         ok?: boolean;
         error?: string;
         gen?: { playersProcessed: number; predictionsWritten: number };
-        top10?: Top10BoardResponse;
       };
       if (!res.ok || !json.ok || !json.gen) throw new Error(json.error || "Failed");
       setMsg(`${json.gen.playersProcessed} players, ${json.gen.predictionsWritten} predictions`);
-      dispatchPredictionsGenerated({ gameId, top10: json.top10 });
+      dispatchPredictionsGenerated({ gameId });
       router.refresh();
     } catch (err) {
       setMsg((err as Error).message);
