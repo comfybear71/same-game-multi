@@ -29,6 +29,8 @@ export function GameLineupSection({
 }) {
   const [reviewKey, setReviewKey] = useState(0);
   const canReplace = phase === "upcoming";
+  /** Approve unlocks MC stat matching — allow during live if you forgot pre-bounce. */
+  const canApprove = phase !== "played";
 
   return (
     <div className="space-y-4">
@@ -42,14 +44,15 @@ export function GameLineupSection({
         </div>
       ) : (
         <p className="text-xs text-slate-500">
-          Game in progress or complete — lineup re-upload is disabled. Squad review
-          below is read-only.
+          {canApprove
+            ? "Game live — re-upload disabled, but you can still Approve lineup below to unlock Match Centre stats on your bets."
+            : "Game complete — lineup re-upload and approval are closed."}
         </p>
       )}
       <LineupReviewPanel
         gameId={gameId}
         refreshKey={reviewKey}
-        canApprove={canReplace}
+        canApprove={canApprove}
       />
       <GameLineupPanel
         gameId={gameId}
