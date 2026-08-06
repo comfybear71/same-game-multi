@@ -358,6 +358,7 @@ function LegRow({
   feedValue,
   feedActive,
   gameComplete = false,
+  quickMultiPick = false,
   onUpdate,
   onMarketChange,
   onRemove,
@@ -369,6 +370,8 @@ function LegRow({
   feedValue?: number | null;
   feedActive?: boolean;
   gameComplete?: boolean;
+  /** Part of the current Quick 🔒 random pick preview. */
+  quickMultiPick?: boolean;
   onUpdate: (legId: number, actualValue: number) => Promise<void>;
   onMarketChange: (legId: number, patch: LegMarketPatch) => void;
   onRemove: (legId: number) => void;
@@ -538,13 +541,19 @@ function LegRow({
   return (
     <li
       className={`flex flex-col rounded-md border bg-surface/30${
-        initial.paper
-          ? " border-violet-500/25"
-          : " border-surface-border/50"
+        quickMultiPick
+          ? " border-amber-400/70 ring-1 ring-amber-400/40 bg-amber-500/[0.06]"
+          : initial.paper
+            ? " border-violet-500/25"
+            : " border-surface-border/50"
       }${isVoid ? " opacity-90" : ""}${error ? " ring-1 ring-accent-loss" : ""}`}
       title={
         error ??
-        (locked ? "Sportsbet slip — +/- tracks live; can't edit market or remove" : undefined)
+        (quickMultiPick
+          ? "In your Quick 🔒 ticket preview — log from Squad board when ready"
+          : locked
+            ? "Sportsbet slip — +/- tracks live; can't edit market or remove"
+            : undefined)
       }
     >
       <div className="flex items-center gap-2 px-2 py-1.5">
@@ -978,6 +987,10 @@ export function LiveBetTracker({
   const celebratedSlips = useRef(new Set<number>());
   const [quickMultiBusy, setQuickMultiBusy] = useState(false);
   const [quickMultiMsg, setQuickMultiMsg] = useState<string | null>(null);
+  const [quickMultiHighlight, setQuickMultiHighlight] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [quickMultiSize, setQuickMultiSize] = useState<5 | 7 | 10 | null>(null);
 
   useEffect(() => {
     setLegs(initialLegs);
@@ -1161,7 +1174,11 @@ export function LiveBetTracker({
     (l) => l.result === "void" && l.actualValue == null,
   ).length;
   const activeLegs = legs.filter((l) => l.result !== "void");
-  const quickMultiPool = useMemo(() => uniqueTrackerLegs(activeLegs), [activeLegs]);
+  /** Paper legs only — locked rows are already on the book. */
+  const quickMultiPool = useMemo(
+    () => uniqueTrackerLegs(activeLegs.filter((l) => l.paper)),
+    [activeLegs],
+  );
   const paperLegCount = activeLegs.filter((l) => l.paper).length;
   const lockedLegCount = activeLegs.filter((l) => !l.paper).length;
   const cleared = activeLegs.filter((leg) =>
@@ -1240,11 +1257,13 @@ export function LiveBetTracker({
     }
   }
 
-  async function buildQuickMulti(n: number) {
+  function buildQuickMulti(n: 5 | 7 | 10) {
     const pool = quickMultiPool;
     if (pool.length < n) {
       setQuickMultiMsg(
-        `Only ${pool.length} unique player×stat leg${pool.length === 1 ? "" : "s"} in tracker — need ${n} for a ${n}-leg multi.`,
+        paperLegCount === 0
+          ? `Need ${n} paper legs in tracker — log paper multis first, or use Paper filter.`
+          : `Only ${pool.length} unique paper player×stat leg${pool.length === 1 ? "" : "s"} — need ${n} for a ${n}-leg multi.`,
       );
       return;
     }
@@ -1252,28 +1271,16 @@ export function LiveBetTracker({
     setQuickMultiMsg(null);
     try {
       const picked = sampleLegs(pool, n);
-      const res = await fetch("/api/bets", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          gameId,
-          round: round ?? undefined,
-          status: "pending",
-          legs: picked.map((l) => ({
-            playerName: l.playerName,
-            statType: l.statType,
-            line: l.line,
-            odds: l.odds ?? undefined,
-          })),
-        }),
-      });
-      const json = (await res.json()) as { ok?: boolean; error?: string; betId?: number };
-      if (!res.ok || !json.ok) throw new Error(json.error || "save failed");
+      const highlightKeys = picked.map((l) =>
+        playerRecordKey(l.playerName ?? "", l.statType),
+      );
+      setQuickMultiHighlight(new Set(highlightKeys));
+      setQuickMultiSize(n);
 
       dispatchQuickMultiFilled({
         gameId,
         legCount: picked.length,
-        betId: json.betId,
+        highlightKeys,
         legs: picked.map((l) => ({
           playerName: l.playerName ?? "",
           statType: l.statType as StatType,
@@ -1286,11 +1293,8 @@ export function LiveBetTracker({
       });
 
       setQuickMultiMsg(
-        `Saved random ${picked.length}-leg 🔒 multi — see Squad board hub ticket (other stat tabs for non-disposal legs).`,
+        `Random ${picked.length}-leg 🔒 preview — highlighted here & on Your ticket below. Tap ${n} again for another mix, then Log this multi.`,
       );
-      router.refresh();
-    } catch (err) {
-      setQuickMultiMsg((err as Error).message);
     } finally {
       setQuickMultiBusy(false);
     }
@@ -1433,7 +1437,7 @@ export function LiveBetTracker({
             </button>
           );
         })}
-        {activeLegs.length > 0 ? (
+        {paperLegCount > 0 ? (
           <div className="ml-auto flex shrink-0 items-center gap-1 border-l border-surface-border/60 pl-2">
             <span className="hidden text-[10px] text-slate-500 sm:inline">Quick 🔒</span>
             {([5, 7, 10] as const).map((n) => (
@@ -1442,12 +1446,16 @@ export function LiveBetTracker({
                 type="button"
                 title={
                   quickMultiPool.length < n
-                    ? `Need ${n} unique player×stat legs (have ${quickMultiPool.length})`
-                    : `Random ${n}-leg Sportsbet multi from unique legs in this list`
+                    ? `Need ${n} unique paper player×stat legs (have ${quickMultiPool.length})`
+                    : `Random ${n}-leg Sportsbet preview — fills Your ticket; tap again to re-roll`
                 }
                 disabled={quickMultiPool.length < n || quickMultiBusy}
-                onClick={() => void buildQuickMulti(n)}
-                className="min-w-[1.75rem] rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-amber-100 hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                onClick={() => buildQuickMulti(n)}
+                className={`min-w-[1.75rem] rounded-full border px-2 py-0.5 text-[11px] font-semibold tabular-nums disabled:cursor-not-allowed disabled:opacity-40 ${
+                  quickMultiSize === n
+                    ? "border-amber-300 bg-amber-500/25 text-amber-50 ring-1 ring-amber-400/50"
+                    : "border-amber-500/40 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20"
+                }`}
               >
                 {n}
               </button>
@@ -1458,7 +1466,7 @@ export function LiveBetTracker({
       {quickMultiMsg ? (
         <p
           className={`text-[11px] ${
-            quickMultiMsg.includes("Saved") ? "text-accent-win" : "text-accent-loss"
+            quickMultiMsg.includes("preview") ? "text-accent-win" : "text-accent-loss"
           }`}
         >
           {quickMultiMsg}
@@ -1508,22 +1516,24 @@ export function LiveBetTracker({
       ) : null}
 
       <ul className="mt-2 max-h-[75vh] space-y-1 overflow-y-auto">
-        {sortedLegs.map((leg) => (
-          <LegRow
-            key={leg.legId}
-            leg={leg}
-            gameComplete={gameComplete}
-            feedValue={
-              feedByKey[playerRecordKey(leg.playerName ?? "", leg.statType)] ?? null
-            }
-            feedActive={mcActive}
-            onUpdate={updateCount}
-            onMarketChange={updateMarket}
-            onRemove={removeLeg}
-            onVoid={voidLeg}
-            onUnvoid={unvoidLeg}
-          />
-        ))}
+        {sortedLegs.map((leg) => {
+          const legKey = playerRecordKey(leg.playerName ?? "", leg.statType);
+          return (
+            <LegRow
+              key={leg.legId}
+              leg={leg}
+              gameComplete={gameComplete}
+              quickMultiPick={quickMultiHighlight.has(legKey)}
+              feedValue={feedByKey[legKey] ?? null}
+              feedActive={mcActive}
+              onUpdate={updateCount}
+              onMarketChange={updateMarket}
+              onRemove={removeLeg}
+              onVoid={voidLeg}
+              onUnvoid={unvoidLeg}
+            />
+          );
+        })}
       </ul>
 
       {voidsMissingStats > 0 ? (
