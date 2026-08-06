@@ -285,6 +285,7 @@ export default async function GamePage({ params }: { params: { id: string } }) {
           <LiveBetTracker
             legs={myLegs}
             gameId={game.id}
+            round={game.round}
             commenceTimeIso={game.commenceTime.toISOString()}
             gameComplete={game.status === "complete"}
             initialLegFeed={initialLegFeed}

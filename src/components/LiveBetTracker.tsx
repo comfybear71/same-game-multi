@@ -1,7 +1,15 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
+
+import { celebrateMultiLand } from "@/lib/confetti";
+import {
+  dispatchQuickMultiFilled,
+  sampleLegs,
+  uniqueTrackerLegs,
+} from "@/components/trackerQuickMulti";
+import type { StatType } from "@/db/schema";
 
 import { LegMarketEditor, type LegMarketPatch } from "@/components/EditLegMarket";
 import { LiveRefreshCountdown } from "@/components/LiveRefreshCountdown";
@@ -36,6 +44,19 @@ function legFailed(
     return effectiveValue <= leg.line;
   }
   return leg.result === "miss";
+}
+
+/** Every non-void leg on the slip cleared (multi landed). */
+function slipLanded(
+  slipLegs: BetTrackerLeg[],
+  feedByKey?: Record<string, number>,
+  gameComplete?: boolean,
+): boolean {
+  const active = slipLegs.filter((l) => l.result !== "void");
+  if (active.length === 0) return false;
+  return active.every((leg) =>
+    legCleared(leg, legCount(leg, feedByKey, gameComplete), gameComplete),
+  );
 }
 
 /** Stat groups in scan order while watching. */
@@ -747,12 +768,14 @@ function GameOverSection({
   live,
   onRefresh,
   trackerLegs,
+  celebratedSlips,
 }: {
   gameId: number;
   pending: number;
   live: boolean;
   onRefresh: () => void;
   trackerLegs: BetTrackerLeg[];
+  celebratedSlips: MutableRefObject<Set<number>>;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -811,6 +834,13 @@ function GameOverSection({
           setMsg("Void leg(s) — stake returned. Check the Bets tab.");
         } else if (won) {
           setMsg("Multi won — every leg cleared.");
+          const freshWin = slipOutcomes.some(
+            (s) => s.status === "won" && !celebratedSlips.current.has(s.betId),
+          );
+          for (const s of slipOutcomes) {
+            if (s.status === "won") celebratedSlips.current.add(s.betId);
+          }
+          if (freshWin) void celebrateMultiLand();
         } else if (lost) {
           const missSlips = slipOutcomes.filter((s) => s.status === "lost");
           const closest = missSlips[0];
@@ -910,6 +940,7 @@ function GameOverSection({
 export function LiveBetTracker({
   legs: initialLegs,
   gameId,
+  round = null,
   commenceTimeIso,
   gameComplete = false,
   initialLegFeed = {},
@@ -918,6 +949,7 @@ export function LiveBetTracker({
 }: {
   legs: BetTrackerLeg[];
   gameId: number;
+  round?: number | null;
   /** AWST kickoff — poll MC from bounce even if Squiggle lags. */
   commenceTimeIso?: string;
   /** Full time — skip live Squiggle poll; bars render from SSR feed + settled actuals. */
@@ -943,10 +975,29 @@ export function LiveBetTracker({
   const [syncingMc, setSyncingMc] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>("need");
   const [colorSortAsc, setColorSortAsc] = useState(true);
+  const celebratedSlips = useRef(new Set<number>());
+  const [quickMultiBusy, setQuickMultiBusy] = useState(false);
+  const [quickMultiMsg, setQuickMultiMsg] = useState<string | null>(null);
 
   useEffect(() => {
     setLegs(initialLegs);
   }, [initialLegs]);
+
+  useEffect(() => {
+    const byBet = new Map<number, BetTrackerLeg[]>();
+    for (const leg of legs) {
+      const list = byBet.get(leg.betId) ?? [];
+      list.push(leg);
+      byBet.set(leg.betId, list);
+    }
+    for (const [betId, slipLegs] of byBet) {
+      if (celebratedSlips.current.has(betId)) continue;
+      if (slipLanded(slipLegs, feedByKey, gameComplete)) {
+        celebratedSlips.current.add(betId);
+        void celebrateMultiLand();
+      }
+    }
+  }, [legs, feedByKey, gameComplete]);
 
   useEffect(() => {
     setFeedByKey(initialLegFeed);
@@ -1110,6 +1161,7 @@ export function LiveBetTracker({
     (l) => l.result === "void" && l.actualValue == null,
   ).length;
   const activeLegs = legs.filter((l) => l.result !== "void");
+  const quickMultiPool = useMemo(() => uniqueTrackerLegs(activeLegs), [activeLegs]);
   const paperLegCount = activeLegs.filter((l) => l.paper).length;
   const lockedLegCount = activeLegs.filter((l) => !l.paper).length;
   const cleared = activeLegs.filter((leg) =>
@@ -1185,6 +1237,62 @@ export function LiveBetTracker({
     } else {
       setSortMode(key);
       if (key === "color") setColorSortAsc(true);
+    }
+  }
+
+  async function buildQuickMulti(n: number) {
+    const pool = quickMultiPool;
+    if (pool.length < n) {
+      setQuickMultiMsg(
+        `Only ${pool.length} unique player×stat leg${pool.length === 1 ? "" : "s"} in tracker — need ${n} for a ${n}-leg multi.`,
+      );
+      return;
+    }
+    setQuickMultiBusy(true);
+    setQuickMultiMsg(null);
+    try {
+      const picked = sampleLegs(pool, n);
+      const res = await fetch("/api/bets", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          gameId,
+          round: round ?? undefined,
+          status: "pending",
+          legs: picked.map((l) => ({
+            playerName: l.playerName,
+            statType: l.statType,
+            line: l.line,
+            odds: l.odds ?? undefined,
+          })),
+        }),
+      });
+      const json = (await res.json()) as { ok?: boolean; error?: string; betId?: number };
+      if (!res.ok || !json.ok) throw new Error(json.error || "save failed");
+
+      dispatchQuickMultiFilled({
+        gameId,
+        legCount: picked.length,
+        betId: json.betId,
+        legs: picked.map((l) => ({
+          playerName: l.playerName ?? "",
+          statType: l.statType as StatType,
+          line: l.line,
+          odds: l.odds,
+          prediction: l.prediction,
+          team: l.team,
+          jumper: l.jumper,
+        })),
+      });
+
+      setQuickMultiMsg(
+        `Saved random ${picked.length}-leg 🔒 multi — see Squad board hub ticket (other stat tabs for non-disposal legs).`,
+      );
+      router.refresh();
+    } catch (err) {
+      setQuickMultiMsg((err as Error).message);
+    } finally {
+      setQuickMultiBusy(false);
     }
   }
 
@@ -1300,7 +1408,7 @@ export function LiveBetTracker({
         </p>
       ) : null}
 
-      <div className="mt-2 flex gap-1.5 overflow-x-auto pb-1">
+      <div className="mt-2 flex items-center gap-1.5 overflow-x-auto pb-1">
         {SORT_OPTIONS.map((opt) => {
           const total = isTrackerStat(opt.key) ? statProgress.totals[opt.key] : 0;
           const statCleared = isTrackerStat(opt.key) ? statProgress.cleared[opt.key] : 0;
@@ -1325,7 +1433,37 @@ export function LiveBetTracker({
             </button>
           );
         })}
+        {activeLegs.length > 0 ? (
+          <div className="ml-auto flex shrink-0 items-center gap-1 border-l border-surface-border/60 pl-2">
+            <span className="hidden text-[10px] text-slate-500 sm:inline">Quick 🔒</span>
+            {([5, 7, 10] as const).map((n) => (
+              <button
+                key={n}
+                type="button"
+                title={
+                  quickMultiPool.length < n
+                    ? `Need ${n} unique player×stat legs (have ${quickMultiPool.length})`
+                    : `Random ${n}-leg Sportsbet multi from unique legs in this list`
+                }
+                disabled={quickMultiPool.length < n || quickMultiBusy}
+                onClick={() => void buildQuickMulti(n)}
+                className="min-w-[1.75rem] rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-amber-100 hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {n}
+              </button>
+            ))}
+          </div>
+        ) : null}
       </div>
+      {quickMultiMsg ? (
+        <p
+          className={`text-[11px] ${
+            quickMultiMsg.includes("Saved") ? "text-accent-win" : "text-accent-loss"
+          }`}
+        >
+          {quickMultiMsg}
+        </p>
+      ) : null}
       {isTrackerStat(sortMode) ? (
         <p className="text-[10px] text-slate-500">
           {statProgress.cleared[sortMode]}/{statProgress.totals[sortMode]}{" "}
@@ -1429,6 +1567,7 @@ export function LiveBetTracker({
           live={live}
           onRefresh={() => router.refresh()}
           trackerLegs={legs}
+          celebratedSlips={celebratedSlips}
         />
       ) : null}
     </section>
