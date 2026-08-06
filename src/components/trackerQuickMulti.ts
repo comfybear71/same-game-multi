@@ -19,7 +19,8 @@ export type QuickMultiFilledDetail = {
   gameId: number;
   legCount: number;
   legs: QuickMultiLeg[];
-  betId?: number;
+  /** player:stat keys — highlight matching rows in the live tracker. */
+  highlightKeys: string[];
 };
 
 export function dispatchQuickMultiFilled(detail: QuickMultiFilledDetail) {

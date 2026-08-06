@@ -248,10 +248,10 @@ export function Top10BoardPanel({
       if (detail?.gameId !== gameId) return;
       setTicket(detail.legs.map((l) => quickMultiToTicketLeg(l, boardRef.current)));
       setPaperOnly(false);
-      setTicketAlreadySaved(true);
+      setTicketAlreadySaved(false);
       setLogError(null);
       setLogSuccess(
-        `Saved ${detail.legCount}-leg 🔒 multi from tracker — add odds/stake above if you like.`,
+        `${detail.legCount}-leg 🔒 preview from tracker — add odds/stake, then Log this multi when ready. Tap Quick 🔒 again to re-roll.`,
       );
     }
     window.addEventListener(QUICK_MULTI_FILLED, onQuickMulti);
@@ -600,7 +600,8 @@ export function Top10BoardPanel({
 
         {ticket.length === 0 ? (
           <p className="text-sm text-slate-400">
-            Tap boards above, run Helm Suggest, or + Add player.
+            Tap boards above, run Helm Suggest, Quick 🔒 5/7/10 in Your bets, or + Add
+            player.
           </p>
         ) : (
           <ul className="space-y-2">
