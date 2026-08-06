@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { BenchmarkBandBadge } from "@/components/BenchmarkBandBadge";
 import { LineupCompletenessPanel } from "@/components/LineupCompletenessPanel";
@@ -25,6 +25,12 @@ import {
   PREDICTIONS_GENERATED,
   type PredictionsGeneratedDetail,
 } from "@/components/predictionsGenerated";
+import {
+  QUICK_MULTI_FILLED,
+  type QuickMultiFilledDetail,
+  type QuickMultiLeg,
+} from "@/components/trackerQuickMulti";
+import { normalisePlayerName } from "@/lib/playerName";
 
 const MARKETS: { key: StatType; label: string; short: string }[] = [
   { key: "disposals", label: "Disposals", short: "Disp" },
@@ -103,6 +109,57 @@ function suggestedToTicketLeg(
   };
 }
 
+function quickMultiToTicketLeg(
+  leg: QuickMultiLeg,
+  board: Top10BoardResponse | null,
+): TicketLeg {
+  const norm = normalisePlayerName(leg.playerName);
+  const row = board
+    ? board.markets
+        .flatMap((m) => [...m.home.rows, ...m.away.rows])
+        .find(
+          (r) =>
+            normalisePlayerName(r.playerName) === norm && r.statType === leg.statType,
+        )
+    : undefined;
+  if (row) {
+    return {
+      ...toTicketLeg(row),
+      line: leg.line,
+      target: lineTarget(leg.line),
+      odds: leg.odds ?? row.odds,
+      helmWhy: "Quick pick from your bets",
+    };
+  }
+  return {
+    rank: 99,
+    playerId: 0,
+    playerName: leg.playerName,
+    jumper: leg.jumper,
+    team: leg.team ?? "",
+    statType: leg.statType,
+    line: leg.line,
+    odds: leg.odds,
+    prediction: leg.prediction ?? 0,
+    seasonAvg: null,
+    lastGame: null,
+    recentForm: [],
+    fantasyAvg: null,
+    benchmark: "unknown",
+    reason: "Quick pick from your bets",
+    availableRungs: [],
+    history: null,
+    news: null,
+    position: null,
+    missingPrediction: leg.prediction == null,
+    missingOdds: leg.odds == null,
+    missingPlayerLink: true,
+    missingPosition: false,
+    target: lineTarget(leg.line),
+    helmWhy: "Quick pick from your bets",
+  };
+}
+
 export function Top10BoardPanel({
   gameId,
   round = null,
@@ -127,6 +184,9 @@ export function Top10BoardPanel({
   const [totalOdds, setTotalOdds] = useState("");
   const [totalStake, setTotalStake] = useState("");
   const [paperOnly, setPaperOnly] = useState(false);
+  const [ticketAlreadySaved, setTicketAlreadySaved] = useState(false);
+  const boardRef = useRef<Top10BoardResponse | null>(null);
+  boardRef.current = board;
 
   // Helm Suggest
   const [helmFocus, setHelmFocus] = useState<StatType | "any">("any");
@@ -182,6 +242,22 @@ export function Top10BoardPanel({
     return () => window.removeEventListener(PREDICTIONS_GENERATED, onPredictionsGenerated);
   }, [gameId, load]);
 
+  useEffect(() => {
+    function onQuickMulti(e: Event) {
+      const detail = (e as CustomEvent<QuickMultiFilledDetail>).detail;
+      if (detail?.gameId !== gameId) return;
+      setTicket(detail.legs.map((l) => quickMultiToTicketLeg(l, boardRef.current)));
+      setPaperOnly(false);
+      setTicketAlreadySaved(true);
+      setLogError(null);
+      setLogSuccess(
+        `Saved ${detail.legCount}-leg 🔒 multi from tracker — add odds/stake above if you like.`,
+      );
+    }
+    window.addEventListener(QUICK_MULTI_FILLED, onQuickMulti);
+    return () => window.removeEventListener(QUICK_MULTI_FILLED, onQuickMulti);
+  }, [gameId]);
+
   const marketBoard = useMemo(
     () => board?.markets.find((m) => m.statType === market) ?? null,
     [board, market],
@@ -195,6 +271,7 @@ export function Top10BoardPanel({
   const ticketChance = combinedChance(ticket);
 
   function toggleRow(row: Top10Row) {
+    setTicketAlreadySaved(false);
     const key = legKey(row.playerId, row.statType);
     if (ticketKeys.has(key)) {
       setTicket((prev) => prev.filter((l) => legKey(l.playerId, l.statType) !== key));
@@ -314,6 +391,7 @@ export function Top10BoardPanel({
       setTicket([]);
       setTotalOdds("");
       setPaperOnly(false);
+      setTicketAlreadySaved(false);
       setThinking(null);
       setLogSuccess(`Saved ${json.legs ?? ticket.length} legs — build another or open Bets.`);
       router.refresh();
@@ -526,11 +604,12 @@ export function Top10BoardPanel({
           </p>
         ) : (
           <ul className="space-y-2">
-            {ticket.map((l) => {
+            {ticket.map((l, i) => {
               const c = teamColors(l.team);
               const key = legKey(l.playerId, l.statType);
+              const rowKey = `${key}:${l.line}:${i}`;
               return (
-                <li key={key} className="rounded-lg border border-surface-border/60 p-2">
+                <li key={rowKey} className="rounded-lg border border-surface-border/60 p-2">
                   <div className="flex items-center gap-3">
                     <span
                       className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-xs font-bold"
@@ -645,9 +724,20 @@ export function Top10BoardPanel({
             type="button"
             className="btn shrink-0"
             onClick={() => void logMulti()}
-            disabled={logging || ticket.length === 0}
+            disabled={logging || ticket.length === 0 || ticketAlreadySaved}
+            title={
+              ticketAlreadySaved
+                ? "This ticket was already saved from Quick 🔒 — edit legs to log a new multi"
+                : undefined
+            }
           >
-            {logging ? "Logging…" : paperOnly ? "Save paper multi" : "Log this multi"}
+            {ticketAlreadySaved
+              ? "Already saved 🔒"
+              : logging
+                ? "Logging…"
+                : paperOnly
+                  ? "Save paper multi"
+                  : "Log this multi"}
           </button>
         </div>
       </div>
