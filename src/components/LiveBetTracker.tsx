@@ -1174,11 +1174,17 @@ export function LiveBetTracker({
     (l) => l.result === "void" && l.actualValue == null,
   ).length;
   const activeLegs = legs.filter((l) => l.result !== "void");
-  /** Paper legs only — locked rows are already on the book. */
-  const quickMultiPool = useMemo(
-    () => uniqueTrackerLegs(activeLegs.filter((l) => l.paper)),
-    [activeLegs],
-  );
+  const quickMultiStatFilter = STAT_FILTER_MODES.includes(sortMode)
+    ? (sortMode as TrackerStat)
+    : null;
+  /** Paper legs only — locked rows are already on the book. Stat tab narrows the pool. */
+  const quickMultiPool = useMemo(() => {
+    let pool = activeLegs.filter((l) => l.paper);
+    if (quickMultiStatFilter) {
+      pool = pool.filter((l) => l.statType === quickMultiStatFilter);
+    }
+    return uniqueTrackerLegs(pool);
+  }, [activeLegs, quickMultiStatFilter]);
   const paperLegCount = activeLegs.filter((l) => l.paper).length;
   const lockedLegCount = activeLegs.filter((l) => !l.paper).length;
   const cleared = activeLegs.filter((leg) =>
@@ -1259,11 +1265,16 @@ export function LiveBetTracker({
 
   function buildQuickMulti(n: 5 | 7 | 10) {
     const pool = quickMultiPool;
+    const statLabel = quickMultiStatFilter
+      ? STAT_THEME[quickMultiStatFilter].label.toLowerCase()
+      : null;
     if (pool.length < n) {
       setQuickMultiMsg(
         paperLegCount === 0
           ? `Need ${n} paper legs in tracker — log paper multis first, or use Paper filter.`
-          : `Only ${pool.length} unique paper player×stat leg${pool.length === 1 ? "" : "s"} — need ${n} for a ${n}-leg multi.`,
+          : statLabel
+            ? `Only ${pool.length} unique paper ${statLabel} leg${pool.length === 1 ? "" : "s"} — need ${n} for a ${n}-leg ${statLabel} multi.`
+            : `Only ${pool.length} unique paper player×stat leg${pool.length === 1 ? "" : "s"} — need ${n} for a ${n}-leg multi.`,
       );
       return;
     }
@@ -1293,7 +1304,9 @@ export function LiveBetTracker({
       });
 
       setQuickMultiMsg(
-        `Random ${picked.length}-leg 🔒 preview — highlighted here & on Your ticket below. Tap ${n} again for another mix, then Log this multi.`,
+        statLabel
+          ? `Random ${picked.length}-leg 🔒 ${statLabel} preview — highlighted here & on Your ticket. Tap ${n} again for another mix, then Log this multi.`
+          : `Random ${picked.length}-leg 🔒 preview — highlighted here & on Your ticket below. Tap ${n} again for another mix, then Log this multi.`,
       );
     } finally {
       setQuickMultiBusy(false);
@@ -1446,8 +1459,12 @@ export function LiveBetTracker({
                 type="button"
                 title={
                   quickMultiPool.length < n
-                    ? `Need ${n} unique paper player×stat legs (have ${quickMultiPool.length})`
-                    : `Random ${n}-leg Sportsbet preview — fills Your ticket; tap again to re-roll`
+                    ? quickMultiStatFilter
+                      ? `Need ${n} unique paper ${STAT_THEME[quickMultiStatFilter].label.toLowerCase()} legs (have ${quickMultiPool.length})`
+                      : `Need ${n} unique paper player×stat legs (have ${quickMultiPool.length})`
+                    : quickMultiStatFilter
+                      ? `Random ${n}-leg ${STAT_THEME[quickMultiStatFilter].label.toLowerCase()} preview — tap again to re-roll`
+                      : `Random ${n}-leg Sportsbet preview from any stat — tap again to re-roll`
                 }
                 disabled={quickMultiPool.length < n || quickMultiBusy}
                 onClick={() => buildQuickMulti(n)}
